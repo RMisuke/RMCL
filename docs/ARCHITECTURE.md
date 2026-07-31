@@ -1,0 +1,1649 @@
+# RMCCC Architecture Design
+
+> Rust Minecraft Core Client — 纯 Rust 启动核心 + Tauri 2.x + SolidJS Web UI
+
+---
+
+## 1. Technology Stack
+
+| Layer | Technology | Rationale |
+|-------|-----------|-----------|
+| Native Shell | Tauri 2.x | System WebView, ~4-5MB stripped, 原生跨平台 |
+| Core Engine | Rust (stable) | 零成本抽象, 内存安全, 跨平台编译 |
+| Frontend | SolidJS + Vite | ~8KB gzipped, 高性能响应式, 编译时优化 |
+| Styling | Tailwind CSS v4 | Utility-first, tree-shaking, 零运行时开销 |
+| IPC | Tauri invoke + events | 类型安全, async 支持 |
+| Logging | tracing + tracing-appender | Structured logging, per-span tracing |
+| Type Bridge | ts-rs | Rust → TypeScript 类型自动生成 |
+
+## 2. Workspace Structure
+
+```
+RMCL/
+├── Cargo.toml                    # Workspace root
+├── docs/                         # Architecture & planning docs
+│   ├── ARCHITECTURE.md
+│   ├── ARCHITECTURE_IMPROVEMENT_PLAN.md
+│   ├── AI_EDITING_RULES.md
+│   └── DEVELOPMENT_PLAN.md
+├── crates/                       # Rust business logic crates
+│   ├── rmccc-error/              # Unified error types (leaf)
+│   │   └── src/lib.rs
+│   ├── rmccc-config/             # Configuration, paths, logging (leaf)
+│   │   └── src/
+│   │       ├── lib.rs            # AppConfig + Schema versioning
+│   │       ├── paths.rs          # Platform-specific paths
+│   │       └── logging.rs        # tracing init + span strategy
+│   ├── rmccc-auth/               # Authentication
+│   │   └── src/
+│   │       ├── lib.rs
+│   │       ├── microsoft.rs      # Microsoft OAuth2 device flow
+│   │       ├── offline.rs        # Offline auth (UUID v5)
+│   │       ├── types.rs          # AuthSession, AuthProvider trait
+│   │       └── vault.rs          # AES-256-GCM token encryption
+│   ├── rmccc-download/           # Download engine
+│   │   └── src/lib.rs            # ConcurrentDownloadManager + retry
+│   ├── rmccc-version/            # Version & asset management
+│   │   └── src/
+│   │       ├── lib.rs
+│   │       ├── manifest.rs       # MojangVersionProvider
+│   │       ├── assets.rs         # AssetIndex resolution
+│   │       ├── libraries.rs      # Library resolution + classpath
+│   │       ├── types.rs          # GameVersion, Library, etc.
+│   │       └── cache.rs          # Offline version list cache
+│   ├── rmccc-launch/             # Game launcher
+│   │   └── src/
+│   │       ├── lib.rs
+│   │       ├── java.rs           # JVM detection + version mapping
+│   │       └── process.rs        # Response file + process spawning
+│   ├── rmccc-modloader/          # Mod loader installation (stubs)
+│   │   └── src/
+│   │       ├── lib.rs            # ModLoaderProvider trait
+│   │       ├── forge.rs
+│   │       ├── fabric.rs
+│   │       └── neoforge.rs
+│   ├── rmccc-mods/               # Mod management (types only)
+│   │   └── src/lib.rs            # ModSource trait + data types
+│   ├── rmccc-profile/            # Profile/instance management
+│   │   └── src/lib.rs            # ProfileStore JSON CRUD
+│   └── rmccc-core/               # Core orchestrator + DI container
+│       └── src/lib.rs            # CoreContext, re-exports
+├── src-cli/                      # CLI binary crate
+│   ├── Cargo.toml
+│   └── src/
+│       ├── main.rs               # Clap CLI definition (5 subcommands)
+│       ├── context.rs            # CliContext — backend API facade
+│       └── commands/
+│           ├── mod.rs
+│           ├── auth.rs           # `rmcli auth login/logout/refresh/status`
+│           ├── instance.rs       # `rmcli instance create/list/delete`
+│           ├── resource.rs       # `rmcli resource check/download/verify`
+│           ├── launch.rs         # `rmcli launch run`
+│           └── config.rs         # `rmcli config get/set`
+├── src-tauri/                    # Tauri application layer
+│   ├── Cargo.toml
+│   ├── build.rs
+│   ├── tauri.conf.json
+│   ├── capabilities/default.json
+│   └── src/
+│       ├── main.rs
+│       ├── state.rs              # AppState (Tokio-backed)
+│       ├── events.rs             # Event constants + ThrottledEmitter
+│       └── commands/             # IPC command handlers
+│           ├── mod.rs
+│           ├── auth.rs
+│           ├── profile.rs
+│           ├── version.rs
+│           ├── modloader.rs
+│           ├── launch.rs
+│           └── settings.rs
+├── src/                          # Frontend (SolidJS — placeholder)
+│   ├── index.html
+│   ├── main.tsx                  # Minimal entry point
+│   ├── App.tsx                   # Placeholder: "GUI deferred, use CLI"
+│   ├── routes/                   # (retained for future GUI)
+│   ├── components/
+│   ├── ipc/
+│   │   ├── api.ts                # IPC type definitions
+│   │   └── events.ts             # Event name constants
+│   └── styles/app.css
+└── assets/                       # Static assets (icons)
+```
+
+## 3. Rust Core Architecture
+
+### 3.1 Crate Dependency Graph
+
+```
+rmccc-core (orchestrator + DI container)
+├── rmccc-auth
+├── rmccc-download
+├── rmccc-version
+│   └── rmccc-download
+├── rmccc-modloader
+│   ├── rmccc-download
+│   └── rmccc-version
+├── rmccc-mods
+│   └── rmccc-download
+├── rmccc-launch
+│   ├── rmccc-version
+│   └── rmccc-config
+├── rmccc-profile
+│   └── rmccc-config
+└── rmccc-config
+```
+
+`rmccc-core` 不仅是 re-export，还承担两个职责：
+1. **Pipeline 编排**：将多个 crate 的操作组合成完整流程（如 "安装游戏" = version fetch → download batch → verify）
+2. **DI 容器**：持有所有 trait object（`Box<dyn AuthProvider>`, `Box<dyn ModSource>` 等），提供统一的 `CoreContext` 给 Tauri 层
+
+### 3.2 Trait System (Extensibility)
+
+#### AuthProvider
+
+```rust
+#[async_trait]
+pub trait AuthProvider: Send + Sync {
+    /// Unique provider identifier
+    fn provider_id(&self) -> &str;
+
+    /// Perform authentication, may require user interaction (browser)
+    async fn authenticate(&self) -> Result<AuthSession, RmcccError>;
+
+    /// Refresh an expired session without user interaction
+    async fn refresh(&self, session: &AuthSession) -> Result<AuthSession, RmcccError>;
+
+    /// Validate whether a session is still usable
+    async fn validate(&self, session: &AuthSession) -> bool;
+}
+
+// Implementations:
+// - MicrosoftAuthProvider  (OAuth2 device code flow)
+// - OfflineAuthProvider    (UUID generation from username)
+```
+
+#### VersionProvider
+
+```rust
+#[async_trait]
+pub trait VersionProvider: Send + Sync {
+    fn provider_id(&self) -> &str;
+
+    /// Fetch available game versions (with offline fallback)
+    async fn fetch_versions(&self) -> Result<Vec<VersionInfo>, RmcccError>;
+
+    /// Fetch full version JSON for a specific version
+    async fn fetch_version(&self, id: &str) -> Result<GameVersion, RmcccError>;
+}
+
+// Implementations:
+// - MojangVersionProvider   (Official Mojang API, caches to disk)
+// - MirrorVersionProvider   (BMCLAPI / custom mirror)
+```
+
+#### ModLoaderProvider
+
+```rust
+#[async_trait]
+pub trait ModLoaderProvider: Send + Sync {
+    fn loader_type(&self) -> ModLoaderType;
+
+    /// List available loader versions for a game version
+    async fn list_versions(&self, game_version: &str) -> Result<Vec<LoaderVersion>, RmcccError>;
+
+    /// Install the loader, returns the version ID used as --version
+    async fn install(
+        &self,
+        game_version: &str,
+        loader_version: &str,
+        game_dir: &Path,
+        progress: ProgressCallback,
+    ) -> Result<String, RmcccError>;
+}
+
+// Implementations:
+// - ForgeInstaller     (Forge installer JAR execution / slim installer)
+// - FabricInstaller    (Fabric meta API + profile generation)
+// - NeoForgeInstaller  (NeoForge installer)
+```
+
+#### ModSource
+
+```rust
+#[async_trait]
+pub trait ModSource: Send + Sync {
+    fn source_id(&self) -> &str;
+
+    /// Search mods by query and filters
+    async fn search(&self, query: &ModSearchQuery) -> Result<ModSearchResult, RmcccError>;
+
+    /// Get detailed mod info by slug/ID
+    async fn get_mod(&self, id: &str) -> Result<ModDetail, RmcccError>;
+
+    /// List available versions of a mod
+    async fn list_versions(&self, mod_id: &str) -> Result<Vec<ModVersion>, RmcccError>;
+
+    /// Get download URL for a specific version
+    async fn get_download_url(&self, version_id: &str) -> Result<String, RmcccError>;
+}
+
+// Implementations:
+// - ModrinthSource     (Modrinth v2 API, open, no key needed)
+// - CurseForgeSource   (CurseForge Core API, API key from env or key file)
+```
+
+#### DownloadManager
+
+```rust
+#[async_trait]
+pub trait DownloadManager: Send + Sync {
+    /// Submit a batch of items, returns a task handle
+    async fn download_batch(
+        &self,
+        items: Vec<DownloadItem>,
+        progress: ProgressCallback,
+    ) -> Result<DownloadHandle, RmcccError>;
+
+    /// Cancel an entire download batch
+    async fn cancel_batch(&self, handle: &DownloadHandle) -> Result<(), RmcccError>;
+
+    /// Cancel a single file within a batch
+    async fn cancel_file(&self, handle: &DownloadHandle, item_id: &str) -> Result<(), RmcccError>;
+
+    /// Pause a download batch (flush in-progress, stop dequeuing)
+    async fn pause(&self, handle: &DownloadHandle) -> Result<(), RmcccError>;
+
+    /// Resume a paused download batch
+    async fn resume(&self, handle: &DownloadHandle) -> Result<(), RmcccError>;
+}
+
+// Implementation:
+// - ConcurrentDownloadManager (tokio-based worker pool, retry, resume, SHA1 verify)
+```
+
+### 3.3 Key Data Models
+
+```rust
+/// A game instance (profile)
+pub struct Profile {
+    pub id: String,                  // UUID
+    pub name: String,
+    pub game_version: String,        // e.g. "1.20.4"
+    pub mod_loader: Option<ModLoaderConfig>,
+    pub java_path: Option<String>,   // auto-detect if None
+    pub jvm_args: Vec<String>,       // extra JVM args
+    pub game_args: Vec<String>,      // extra game args
+    pub memory_mb: u32,              // heap size
+    pub game_dir: PathBuf,           // instance directory
+    pub created_at: DateTime<Utc>,
+    pub last_played: Option<DateTime<Utc>>,
+    pub icon: Option<String>,        // custom icon path
+}
+
+pub struct ModLoaderConfig {
+    pub loader_type: ModLoaderType,  // Forge | Fabric | NeoForge
+    pub loader_version: String,
+}
+
+/// Authentication session (persisted, tokens encrypted at rest)
+pub struct AuthSession {
+    pub provider: String,            // "microsoft" | "offline"
+    pub access_token: String,        // in-memory plaintext, encrypted on disk
+    pub username: String,
+    pub uuid: String,
+    pub refresh_token: Option<String>,
+    pub expires_at: Option<DateTime<Utc>>,
+}
+
+/// Game version metadata (parsed from Mojang manifest)
+pub struct GameVersion {
+    pub id: String,
+    pub release_type: ReleaseType,   // Release | Snapshot | OldBeta | OldAlpha
+    pub main_class: String,
+    pub asset_index: AssetIndex,
+    pub downloads: HashMap<String, DownloadEntry>,  // client, server, etc.
+    pub libraries: Vec<Library>,
+    pub arguments: GameArguments,
+    pub java_version: Option<JavaRequirement>,
+}
+
+/// MC version → minimum Java version mapping
+pub struct JavaRequirement {
+    pub major_version: u32,          // e.g. 8, 16, 17, 21
+    pub component: String,           // e.g. "java-runtime-gamma"
+}
+
+// Well-known mapping (used as fallback when manifest lacks info):
+// 1.6 – 1.16  → Java 8
+// 1.17        → Java 16
+// 1.18 – 1.20.4 → Java 17
+// 1.20.5+     → Java 21
+
+/// Mod metadata
+pub struct ModInfo {
+    pub id: String,
+    pub source: String,              // "modrinth" | "curseforge"
+    pub name: String,
+    pub slug: String,
+    pub authors: Vec<String>,        // multiple authors supported
+    pub description: String,
+    pub download_count: u64,
+    pub icon_url: Option<String>,
+    pub categories: Vec<String>,
+    pub versions: Vec<ModVersionInfo>,
+    pub dependencies: Vec<ModDependency>,  // required/optional deps
+}
+
+/// Mod dependency (e.g. Sodium requires Fabric API)
+pub struct ModDependency {
+    pub mod_id: String,
+    pub version_constraint: Option<String>,  // semver range if applicable
+    pub dependency_type: DependencyType,     // Required | Optional | Incompatible
+    pub source: String,              // same source as parent mod
+}
+
+/// Modpack placeholder (for future implementation)
+pub struct Modpack {
+    pub id: String,
+    pub name: String,
+    pub version: String,
+    pub source: String,              // "modrinth" | "curseforge"
+    pub game_version: String,
+    pub mod_loader: ModLoaderConfig,
+    pub mods: Vec<ModpackEntry>,     // ordered list of mods with versions
+    pub overrides: Vec<PathBuf>,     // config files to copy
+}
+
+pub struct ModpackEntry {
+    pub mod_id: String,
+    pub version_id: String,
+    pub required: bool,
+}
+```
+
+### 3.4 Rust Dependencies (Size-Optimized)
+
+```toml
+# Core dependencies (chosen for size)
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "fs", "process", "sync"] }
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json", "stream"] }
+sha1 = "0.10"
+sha2 = "0.10"
+zip = { version = "2", default-features = false, features = ["deflate"] }
+uuid = { version = "1", features = ["v4"] }
+chrono = { version = "0.4", features = ["serde"] }
+thiserror = "2"
+anyhow = "1"
+async-trait = "0.1"
+dirs = "6"
+url = "2"
+
+# Concurrency & state
+dashmap = "6"                 # Lock-free concurrent HashMap (AppState)
+tokio-util = { version = "0.7", features = ["rt"] }  # CancellationToken
+
+# System
+fs2 = "0.4"                   # free_space() for disk pre-check
+
+# Auth specific
+oauth2 = "5"
+urlencoding = "2"
+aes-gcm = "0.10"              # AES-256-GCM token encryption (~30KB)
+rand = "0.8"                  # Key generation
+
+# Logging
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+tracing-appender = "0.2"
+
+# Type bridge (dev dependency, generates TS types at build time)
+ts-rs = { version = "10", features = ["serde-json"] }
+
+# Tauri app specific
+tauri = { version = "2", features = ["tray-icon"] }
+tauri-build = { version = "2", features = [] }
+tauri-plugin-updater = "2"          # Auto-update
+tauri-plugin-process = "2"          # Process utilities
+tauri-plugin-window-state = "2"     # Persist window size/position
+tauri-plugin-deep-link = "2"        # rmccc:// protocol handler
+```
+
+**Size-critical choices:**
+
+- `reqwest` with `rustls-tls` instead of `native-tls`: avoids OpenSSL/SSPI linking, slightly smaller
+- `zip` with only `deflate`: skip bzip2/zstd features
+- `aes-gcm` for token encryption: ~30KB, no system keychain dependency
+- No `regex` in core (use `str::matches` or simple parsers)
+- Avoid `clap` in GUI mode (CLI can be an optional feature)
+- `reqwest` configured with `pool_max_idle_per_host: 32` for high-concurrency same-domain downloads (MC asset servers have thousands of files)
+
+## 4. Security Architecture
+
+### 4.1 Token Encryption (AES-256-GCM)
+
+Token 存储采用轻量级本地加密方案，不依赖系统密钥链：
+
+```
+{data_dir}/rmccc/
+├── .key                  # 32-byte random AES key (file permissions: 600)
+└── auth.json             # Tokens encrypted with AES-256-GCM
+```
+
+**加密流程：**
+
+```rust
+// rmccc-auth/src/crypto.rs
+use aes_gcm::{Aes256Gcm, KeyInit, Nonce};
+use aes_gcm::aead::Aead;
+
+pub struct TokenVault {
+    cipher: Aes256Gcm,
+}
+
+impl TokenVault {
+    /// Load or create encryption key
+    pub fn init(key_path: &Path) -> Result<Self> {
+        let key_bytes = if key_path.exists() {
+            fs::read(key_path)?
+        } else {
+            let key = rand::random::<[u8; 32]>();
+            fs::write(key_path, &key)?;
+            // Set file permissions to owner-only (Unix)
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                fs::set_permissions(key_path, PermissionsExt::from_mode(0o600))?;
+            }
+            key.to_vec()
+        };
+        let cipher = Aes256Gcm::new_from_slice(&key_bytes)?;
+        Ok(Self { cipher })
+    }
+
+    /// Encrypt AuthSession → JSON string (for writing auth.json)
+    pub fn encrypt(&self, session: &AuthSession) -> Result<String> {
+        let nonce = rand::random::<[u8; 12]>();
+        let plaintext = serde_json::to_vec(session)?;
+        let ciphertext = self.cipher.encrypt(Nonce::from_slice(&nonce), &plaintext)?;
+        // Store as: { "nonce": base64, "data": base64 }
+        Ok(serde_json::to_string(&EncryptedPayload { nonce, ciphertext })?)
+    }
+
+    /// Decrypt JSON string → AuthSession (for reading auth.json)
+    pub fn decrypt(&self, payload: &str) -> Result<AuthSession> {
+        let EncryptedPayload { nonce, ciphertext } = serde_json::from_str(payload)?;
+        let plaintext = self.cipher.decrypt(Nonce::from_slice(&nonce), &ciphertext)?;
+        Ok(serde_json::from_slice(&plaintext)?)
+    }
+}
+```
+
+**安全边界说明：**
+- 防御目标：防止其他非特权用户、恶意脚本读取 token
+- 已知局限：本机物理访问者可读 `.key` 文件（桌面应用场景可接受）
+- `.key` 丢失则 auth.json 不可恢复（用户需重新登录）
+
+### 4.2 API Key 管理
+
+敏感 API Key（如 CurseForge）不入 config.json：
+
+```rust
+// Priority order for API keys:
+// 1. Environment variable (RMCCC_CURSEFORGE_KEY=xxx)
+// 2. .key file in data_dir (separate from token key)
+// 3. Prompt user at runtime (store in .key file)
+pub fn get_api_key(name: &str, data_dir: &Path) -> Result<Option<String>> {
+    // Check env first
+    if let Ok(key) = std::env::var(format!("RMCCC_{}", name.to_uppercase())) {
+        return Ok(Some(key));
+    }
+    // Then check key file
+    let key_path = data_dir.join(format!(".api_keys/{}", name));
+    if key_path.exists() {
+        return Ok(Some(fs::read_to_string(key_path)?.trim().to_string()));
+    }
+    Ok(None)
+}
+```
+
+### 4.3 Tauri Capability Model
+
+最小化 IPC 暴露面，每个 capability 明确声明允许的命令：
+
+```json
+// capabilities/default.json
+{
+  "identifier": "default",
+  "description": "Default capabilities for the main window",
+  "windows": ["main"],
+  "permissions": [
+    "core:window:default",
+    "core:window:allow-set-focus",
+    "core:window:allow-minimize",
+    "core:window:allow-close",
+    "core:event:default",
+    "core:event:allow-listen",
+    "core:event:allow-emit"
+  ]
+}
+```
+
+IPC commands通过 Tauri 的 `#[tauri::command]` 宏注册，天然只暴露在主窗口 context 中。不允许 `fs:default`、`shell:default` 等通用权限——所有文件/网络操作都在 Rust 侧完成。
+
+**Note**: P2 阶段引入 system tray、deep link、updater 时，需在 `capabilities/` 中添加对应的 plugin permission 声明（如 `updater:default`、`deep-link:default`）。
+
+### 4.4 Process Argument Security
+
+`--accessToken` 在进程列表中明文可见是一个已知风险（`ps aux` 可查看）。解决方案：
+
+```rust
+// rmccc-launch/src/process.rs
+//
+// Instead of: java ... --accessToken REAL_TOKEN
+// Use a response file: java @/tmp/rmccc-launch-args-XXXX
+
+pub fn build_response_file(args: &[String], game_dir: &Path) -> Result<PathBuf> {
+    let path = game_dir.join(format!(".launch-args-{}", uuid::Uuid::new_v4()));
+    // Write one arg per line
+    fs::write(&path, args.join("\n"))?;
+    // Restrict permissions
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&path, PermissionsExt::from_mode(0o600))?;
+    }
+    Ok(path)
+}
+
+// Spawn with: java @response_file_path
+// Delete file after process starts (or on exit)
+```
+
+## 5. Error Architecture
+
+### 5.1 Unified Error Enum
+
+```rust
+// rmccc-core/src/error.rs
+use thiserror::Error;
+
+#[derive(Debug, Error)]
+pub enum RmcccError {
+    // ── Network ──
+    #[error("Network request failed: {0}")]
+    Network(String),
+    #[error("HTTP {status}: {url}")]
+    HttpStatus { status: u16, url: String },
+    #[error("Connection timeout after {0}s")]
+    Timeout(u64),
+
+    // ── Auth ──
+    #[error("Authentication failed: {0}")]
+    AuthFailed(String),
+    #[error("Token expired and refresh failed")]
+    TokenExpired,
+    #[error("Device code auth pending: visit {uri} and enter code {user_code}")]
+    DeviceCodePending { uri: String, user_code: String },
+
+    // ── Download ──
+    #[error("Download failed: {url} — {reason}")]
+    DownloadFailed { url: String, reason: String },
+    #[error("SHA1 mismatch for {path}: expected {expected}, got {actual}")]
+    HashMismatch { path: String, expected: String, actual: String },
+    #[error("Insufficient disk space: need {needed} bytes, have {available}")]
+    InsufficientDiskSpace { needed: u64, available: u64 },
+
+    // ── Java ──
+    #[error("Java not found")]
+    JavaNotFound,
+    #[error("Java version {found} too old, need {required}+")]
+    JavaVersionMismatch { found: u32, required: u32 },
+
+    // ── Launch ──
+    #[error("Game process exited with code {0}")]
+    GameCrashed(i32),
+    #[error("Profile not found: {0}")]
+    ProfileNotFound(String),
+
+    // ── Mod ──
+    #[error("Mod dependency missing: {0}")]
+    MissingDependency(String),
+    #[error("Mod version conflict: {mod_name} requires {constraint}")]
+    ModVersionConflict { mod_name: String, constraint: String },
+
+    // ── IO / System ──
+    #[error("IO error: {0}")]
+    Io(#[from] std::io::Error),
+    #[error("JSON parse error: {0}")]
+    Json(#[from] serde_json::Error),
+
+    // ── Generic ──
+    #[error("{0}")]
+    Other(String),
+}
+
+impl RmcccError {
+    /// Whether this error is worth retrying
+    pub fn is_retryable(&self) -> bool {
+        matches!(self,
+            RmcccError::Network(_) |
+            RmcccError::Timeout(_) |
+            RmcccError::HttpStatus { status, .. } if *status >= 500
+        )
+    }
+}
+```
+
+### 5.2 IPC Error Bridge
+
+所有 IPC command 返回 `Result<T, IpcError>`，前端根据 `code` + `retryable` 决定 UI 行为：
+
+```rust
+// src-tauri/src/ipc_error.rs
+use serde::Serialize;
+use ts_rs::TS;
+
+#[derive(Debug, Serialize, TS)]
+#[ts(export)]
+pub struct IpcError {
+    pub code: ErrorCode,
+    pub message: String,
+    pub retryable: bool,
+}
+
+#[derive(Debug, Serialize, TS)]
+#[ts(export)]
+#[serde(rename_all = "snake_case")]
+pub enum ErrorCode {
+    NetworkError,
+    AuthFailed,
+    TokenExpired,
+    DownloadFailed,
+    HashMismatch,
+    InsufficientDiskSpace,
+    JavaNotFound,
+    JavaVersionMismatch,
+    GameCrashed,
+    ProfileNotFound,
+    MissingDependency,
+    ModVersionConflict,
+    IoError,
+    Unknown,
+}
+
+impl From<RmcccError> for IpcError {
+    fn from(err: RmcccError) -> Self {
+        let retryable = err.is_retryable();
+        let code = match &err {
+            RmcccError::Network(_) | RmcccError::Timeout(_) | RmcccError::HttpStatus { .. } =>
+                ErrorCode::NetworkError,
+            RmcccError::AuthFailed(_) => ErrorCode::AuthFailed,
+            RmcccError::TokenExpired => ErrorCode::TokenExpired,
+            RmcccError::DownloadFailed { .. } => ErrorCode::DownloadFailed,
+            RmcccError::HashMismatch { .. } => ErrorCode::HashMismatch,
+            RmcccError::InsufficientDiskSpace { .. } => ErrorCode::InsufficientDiskSpace,
+            RmcccError::JavaNotFound => ErrorCode::JavaNotFound,
+            RmcccError::JavaVersionMismatch { .. } => ErrorCode::JavaVersionMismatch,
+            RmcccError::GameCrashed(_) => ErrorCode::GameCrashed,
+            RmcccError::ProfileNotFound(_) => ErrorCode::ProfileNotFound,
+            RmcccError::MissingDependency(_) => ErrorCode::MissingDependency,
+            RmcccError::ModVersionConflict { .. } => ErrorCode::ModVersionConflict,
+            RmcccError::Io(_) => ErrorCode::IoError,
+            RmcccError::Json(_) => ErrorCode::IoError,        // parse errors → IO category
+            RmcccError::DeviceCodePending { .. } => ErrorCode::AuthFailed,  // informational, not a true error
+            _ => ErrorCode::Unknown,
+        };
+        IpcError {
+            code,
+            message: err.to_string(),
+            retryable,
+        }
+    }
+}
+```
+
+**前端错误处理模式：**
+
+```typescript
+// hooks/useIpc.ts
+import type { IpcError } from "../ipc/types";
+
+export async function safeInvoke<T>(
+  cmd: string,
+  args?: Record<string, unknown>
+): Promise<{ ok: true; data: T } | { ok: false; error: IpcError }> {
+  try {
+    const data = await invoke<T>(cmd, args);
+    return { ok: true, data };
+  } catch (e) {
+    return { ok: false, error: e as IpcError };
+  }
+}
+
+// Frontend decides UI based on error.code + error.retryable:
+// - retryable=true → show "Retry" button
+// - code=JavaNotFound → show "Install Java" link
+// - code=TokenExpired → auto-refresh or re-login prompt
+```
+
+## 6. Logging Architecture
+
+### 6.1 Tracing Setup (Phase 1)
+
+Logging 前置到 Phase 1，不等 Phase 5：
+
+```rust
+// rmccc-config/src/logging.rs (or rmccc-core)
+use tracing_subscriber::{fmt, EnvFilter, prelude::*};
+use tracing_appender::rolling;
+
+pub fn init_logging(log_dir: &Path) -> Result<()> {
+    let file_appender = rolling::daily(log_dir, "rmccc");
+    let (non_blocking, _guard) = tracing_appender::non_blocking(file_appender);
+
+    tracing_subscriber::registry()
+        // Console: colored, INFO level
+        .with(fmt::layer().with_target(false))
+        // File: JSON structured, DEBUG level
+        .with(fmt::layer().json().with_writer(non_blocking))
+        // Filter: RUST_LOG env var or default INFO
+        .with(EnvFilter::from_default_env().add_directive("rmccc=info".parse()?))
+        .init();
+
+    Ok(())
+}
+```
+
+### 6.2 Span Strategy
+
+```rust
+// Every IPC command gets a span
+#[tauri::command]
+#[tracing::instrument(skip(state), fields(cmd = "version_install"))]
+async fn version_install(
+    state: tauri::State<'_, AppState>,
+    version: String,
+    profile_id: String,
+) -> Result<(), IpcError> { ... }
+
+// Every download batch gets a span
+#[tracing::instrument(skip(items, progress), fields(batch_size = items.len()))]
+async fn download_batch(
+    &self,
+    items: Vec<DownloadItem>,
+    progress: ProgressCallback,
+) -> Result<DownloadHandle, RmcccError> { ... }
+```
+
+## 7. Resilience & Robustness
+
+### 7.1 Download Retry
+
+```rust
+// rmccc-download/src/retry.rs
+pub struct RetryConfig {
+    pub max_retries: u32,        // default: 3
+    pub base_delay: Duration,    // default: 1s
+    pub max_delay: Duration,     // default: 30s
+}
+
+impl RetryConfig {
+    /// Exponential backoff: 1s → 2s → 4s (capped at max_delay)
+    pub fn delay_for_attempt(&self, attempt: u32) -> Duration {
+        let delay = self.base_delay * 2u32.pow(attempt);
+        delay.min(self.max_delay)
+    }
+}
+```
+
+### 7.2 Download Resume (HTTP Range)
+
+```rust
+// rmccc-download/src/resume.rs
+/// Check existing partial file, request with Range header
+pub async fn resume_download(
+    client: &reqwest::Client,
+    url: &str,
+    dest: &Path,
+) -> Result<reqwest::RequestBuilder, RmcccError> {
+    let existing_size = if dest.exists() {
+        fs::metadata(dest)?.len()
+    } else {
+        0
+    };
+
+    let mut builder = client.get(url);
+    if existing_size > 0 {
+        builder = builder.header("Range", format!("bytes={}-", existing_size));
+    }
+    Ok(builder)
+}
+// Server returns 206 Partial Content → append to existing file
+// Server returns 200 OK → server doesn't support Range, re-download from start
+```
+
+### 7.3 Disk Space Pre-Check
+
+```rust
+// Before starting any download batch:
+pub fn check_disk_space(dest: &Path, required_bytes: u64) -> Result<(), RmcccError> {
+    let available = fs2::free_space(dest)?;
+    if available < required_bytes {
+        return Err(RmcccError::InsufficientDiskSpace {
+            needed: required_bytes,
+            available,
+        });
+    }
+    Ok(())
+}
+```
+
+### 7.4 Offline Fallback Cache
+
+```rust
+// rmccc-version/src/cache.rs
+/// Cache version list locally, serve stale on network failure
+pub struct VersionCache {
+    cache_dir: PathBuf,
+    ttl: Duration,  // default: 1 hour
+}
+
+impl VersionCache {
+    pub async fn fetch_versions(&self, provider: &dyn VersionProvider) -> Result<Vec<VersionInfo>> {
+        match provider.fetch_versions().await {
+            Ok(versions) => {
+                // Update cache
+                self.write_cache(&versions)?;
+                Ok(versions)
+            }
+            Err(e) if e.is_retryable() => {
+                // Network failure → try stale cache
+                if let Some(cached) = self.read_cache()? {
+                    tracing::warn!("Using stale version cache: {}", e);
+                    Ok(cached)
+                } else {
+                    Err(e) // No cache available either
+                }
+            }
+            Err(e) => Err(e), // Non-retryable error, don't use cache
+        }
+    }
+}
+```
+
+### 7.5 Event Throttling
+
+```rust
+// src-tauri/src/events.rs
+/// Throttle download progress events to avoid flooding frontend
+pub struct ThrottledEmitter {
+    app: AppHandle,
+    last_emit: Arc<Mutex<Instant>>,
+    throttle_interval: Duration,  // default: 100ms
+}
+
+impl ThrottledEmitter {
+    pub fn emit_progress(&self, payload: DownloadProgress) {
+        let mut last = self.last_emit.lock().unwrap();
+        if last.elapsed() >= self.throttle_interval {
+            let _ = self.app.emit(events::DOWNLOAD_PROGRESS, &payload);
+            *last = Instant::now();
+        }
+        // Always emit 100% completion
+        if payload.progress >= 1.0 {
+            let _ = self.app.emit(events::DOWNLOAD_PROGRESS, &payload);
+        }
+    }
+}
+```
+
+## 8. Concurrency & State Management
+
+### 8.1 AppState Structure
+
+```rust
+// src-tauri/src/state.rs
+use std::sync::Arc;
+use tokio::sync::RwLock;
+use dashmap::DashMap;
+
+pub struct AppState {
+    /// Core orchestrator (trait registry + pipelines)
+    pub core: Arc<RwLock<rmccc_core::CoreContext>>,
+
+    /// Shared HTTP client (connection pooling)
+    pub http_client: reqwest::Client,
+
+    /// Active download tasks (handle_id → task state)
+    pub downloads: Arc<DashMap<String, DownloadTaskState>>,
+
+    /// Running game processes (profile_id → child process)
+    pub running_games: Arc<DashMap<String, tokio::process::Child>>,
+
+    /// Token vault for encryption/decryption
+    pub vault: Arc<rmccc_auth::TokenVault>,
+}
+
+pub struct DownloadTaskState {
+    pub status: DownloadStatus,        // Running | Paused | Completed | Failed | Cancelled
+    pub total_bytes: u64,
+    pub downloaded_bytes: u64,
+    pub cancel_token: tokio_util::sync::CancellationToken,
+}
+
+impl AppState {
+    pub fn new(data_dir: &Path) -> Result<Self> {
+        let http_client = reqwest::Client::builder()
+            .pool_max_idle_per_host(32)  // MC asset servers: thousands of files on same host
+            .connect_timeout(Duration::from_secs(10))
+            .build()?;
+
+        Ok(Self {
+            core: Arc::new(RwLock::new(rmccc_core::CoreContext::new(data_dir)?)),
+            http_client,
+            downloads: Arc::new(DashMap::new()),
+            running_games: Arc::new(DashMap::new()),
+            vault: Arc::new(rmccc_auth::TokenVault::init(&data_dir.join(".key"))?),
+        })
+    }
+}
+```
+
+### 8.2 Multi-Instance Policy
+
+- **允许**：同一时间运行多个 MC 实例（不同 profile）
+- **限制**：同一 profile 不可同时运行两个实例（`running_games` map 检查）
+- **内存预检**：启动前估算所需内存，超出系统可用内存时警告
+
+### 8.3 Download Control Granularity
+
+| Operation | Scope | Behavior |
+|-----------|-------|----------|
+| `download_cancel` | 单文件 | 取消指定文件，其余继续 |
+| `download_cancel_batch` | 整批 | 取消整批，清理已下载的 partial 文件 |
+| `download_pause` | 整批 | 等待当前 worker 完成，停止 dequeuing 新任务 |
+| `download_resume` | 整批 | 从断点继续（HTTP Range） |
+
+## 9. Frontend Architecture
+
+### 9.1 Pages & Routing
+
+```
+/                  → Dashboard (active downloads, recent profiles, quick launch)
+/profiles          → Profile List (grid of game instances)
+/profiles/:id      → Profile Detail (launch, mods, settings)
+/mods              → Mod Browser (search, install, manage)
+/settings          → Global Settings (auth, JVM, download mirrors)
+/login             → Login Flow (Microsoft OAuth / offline)
+```
+
+### 9.2 State Management
+
+```typescript
+// SolidJS stores — one store per domain
+// stores/auth.ts
+export function createAuthStore() {
+  const [session, setSession] = createStore<AuthSession | null>(null);
+  const [loading, setLoading] = createSignal(false);
+
+  const login = async () => { /* invoke IPC */ };
+  const logout = async () => { /* invoke IPC */ };
+  const refresh = async () => { /* invoke IPC */ };
+
+  return { session, loading, login, logout, refresh };
+}
+
+// stores/download.ts — tracks all active downloads
+export function createDownloadStore() {
+  const [tasks, setTasks] = createStore<Map<string, DownloadTask>>(new Map());
+
+  // Listen to Tauri events for progress (throttled at 100ms on Rust side)
+  onMount(() => {
+    listen<DownloadProgress>("download://progress", (event) => {
+      setTasks(event.payload.taskId, (prev) => ({
+        ...prev,
+        progress: event.payload.progress,
+      }));
+    });
+  });
+
+  return { tasks };
+}
+```
+
+### 9.3 IPC Type Bridge (Auto-Generated Types + Manual API Wrapper)
+
+```typescript
+// ipc/types.ts — AUTO-GENERATED by ts-rs, do not edit manually
+// Rust structs with #[derive(TS)] produce matching TypeScript interfaces:
+// interface Profile { id: string; name: string; ... }
+// interface IpcError { code: ErrorCode; message: string; retryable: boolean; }
+// etc.
+
+// ipc/api.ts — MANUAL API wrapper, imports types from types.ts
+import { invoke } from "@tauri-apps/api/core";
+import type { AuthSession, Profile, VersionInfo, ... } from "./types";
+
+// Auth
+export const auth = {
+  microsoftLogin: () => invoke<AuthSession>("auth_microsoft_login"),
+  offlineLogin: (username: string) => invoke<AuthSession>("auth_offline_login", { username }),
+  logout: () => invoke<void>("auth_logout"),
+  getSession: () => invoke<AuthSession | null>("auth_get_session"),
+};
+
+// Profiles
+export const profiles = {
+  list: () => invoke<Profile[]>("profile_list"),
+  create: (opts: CreateProfileOpts) => invoke<Profile>("profile_create", { opts }),
+  delete: (id: string) => invoke<void>("profile_delete", { id }),
+  update: (id: string, opts: UpdateProfileOpts) => invoke<void>("profile_update", { id, opts }),
+  import: (filePath: string) => invoke<Profile>("profile_import", { filePath }),
+  export: (id: string, destPath: string) => invoke<void>("profile_export", { id, destPath }),
+};
+
+// Versions
+export const versions = {
+  list: () => invoke<VersionInfo[]>("version_list"),
+  install: (version: string, profileId: string) => invoke<void>("version_install", { version, profileId }),
+};
+
+// Mod Loaders (unified)
+export const modloaders = {
+  list: (loaderType: string, gameVersion: string) =>
+    invoke<LoaderVersion[]>("modloader_list", { loaderType, gameVersion }),
+  install: (profileId: string, loaderType: string, loaderVersion: string) =>
+    invoke<void>("modloader_install", { profileId, loaderType, loaderVersion }),
+};
+
+// Mods
+export const mods = {
+  search: (query: string, source: string) => invoke<ModSearchResult>("mod_search", { query, source }),
+  install: (profileId: string, modId: string, versionId: string) =>
+    invoke<void>("mod_install", { profileId, modId, versionId }),
+  remove: (profileId: string, modId: string) => invoke<void>("mod_remove", { profileId, modId }),
+  list: (profileId: string) => invoke<InstalledMod[]>("mod_list", { profileId }),
+  toggle: (profileId: string, modId: string, enabled: boolean) =>
+    invoke<void>("mod_toggle", { profileId, modId, enabled }),
+};
+
+// Launch
+export const launch = {
+  start: (profileId: string) => invoke<void>("launch_start", { profileId }),
+  getStatus: () => invoke<LaunchStatus>("launch_status"),
+  kill: (profileId: string) => invoke<void>("launch_kill", { profileId }),
+};
+
+// Downloads
+export const downloads = {
+  cancel: (taskId: string) => invoke<void>("download_cancel", { taskId }),
+  cancelBatch: (batchId: string) => invoke<void>("download_cancel_batch", { batchId }),
+  pause: (batchId: string) => invoke<void>("download_pause", { batchId }),
+  resume: (batchId: string) => invoke<void>("download_resume", { batchId }),
+};
+
+// Settings & Logs
+export const settings = {
+  get: () => invoke<GlobalSettings>("settings_get"),
+  set: (opts: Partial<GlobalSettings>) => invoke<void>("settings_set", { opts }),
+  detectJava: () => invoke<JavaInfo[]>("java_detect"),
+};
+
+export const logs = {
+  get: (lines?: number) => invoke<string>("log_get", { lines }),
+  clear: () => invoke<void>("log_clear"),
+};
+```
+
+### 9.4 Event System (Rust → Frontend)
+
+```rust
+// src-tauri/src/events.rs
+pub mod events {
+    // Download
+    pub const DOWNLOAD_PROGRESS: &str = "download://progress";
+    pub const DOWNLOAD_COMPLETE: &str = "download://complete";
+    pub const DOWNLOAD_ERROR: &str = "download://error";
+    pub const DOWNLOAD_PAUSED: &str = "download://paused";
+    pub const DOWNLOAD_RESUMED: &str = "download://resumed";
+
+    // Auth
+    pub const AUTH_STATE_CHANGED: &str = "auth://state-changed";
+    pub const AUTH_DEVICE_CODE: &str = "auth://device-code";
+
+    // Launch
+    pub const LAUNCH_STARTED: &str = "launch://started";
+    pub const LAUNCH_OUTPUT: &str = "launch://output";    // stdout/stderr stream
+    pub const LAUNCH_EXITED: &str = "launch://exited";
+
+    // Mod Loader
+    pub const MODLOADER_INSTALL_PROGRESS: &str = "modloader://progress";
+}
+
+// All event names and error codes are string constants.
+// ts-rs exports them as TypeScript const enums for type safety.
+```
+
+### 9.5 Virtual Scrolling
+
+Mod 搜索结果和下载列表使用虚拟滚动（前端可见行数固定，只渲染可视区域）：
+
+```typescript
+// components/VirtualList.tsx
+// Renders only visible rows, handles thousands of items smoothly
+// Key props: items, rowHeight, overscan (default 5 rows buffer)
+```
+
+## 10. Data Flow
+
+### 10.1 Game Installation Flow
+
+```
+User clicks "Install MC 1.20.4"
+  │
+  ├─ Frontend: invoke("version_install", { version: "1.20.4", profileId })
+  │
+  ├─ Rust: Check disk space (RmcccError::InsufficientDiskSpace if insufficient)
+  │
+  ├─ Rust: VersionProvider::fetch_version("1.20.4")
+  │   └─ GET https://piston-meta.mojang.com/v1/packages/.../1.20.4.json
+  │   └─ On failure: try local cache (offline fallback)
+  │
+  ├─ Rust: Resolve all dependencies
+  │   ├─ Client JAR download URL
+  │   ├─ Asset index → individual asset files (~4000 files for 1.20)
+  │   ├─ Library JARs (with OS-native filtering)
+  │   └─ Native libraries (zip extraction)
+  │
+  ├─ Rust: DownloadManager::download_batch(items)
+  │   ├─ Concurrent downloads (configurable workers, default 16)
+  │   ├─ Exponential backoff retry (1s → 2s → 4s, max 3 attempts)
+  │   ├─ HTTP Range resume for interrupted downloads
+  │   ├─ SHA1 verification per file
+  │   └─ Throttled progress events (100ms interval) → Frontend
+  │
+  └─ Frontend: Update progress bar, show completion
+```
+
+### 10.2 Mod Loader Installation Flow
+
+```
+User selects "Install Fabric 0.15.6" for profile
+  │
+  ├─ Frontend: invoke("modloader_install", { profileId, loaderType: "fabric", loaderVersion })
+  │
+  ├─ Rust: ModLoaderProvider::list_versions(game_version)
+  │   └─ Fabric: GET https://meta.fabricmc.net/v2/versions/loader/{gameVersion}
+  │   └─ Forge:  GET https://files.minecraftforge.net/net/minecraftforge/forge/promotions_slim.json
+  │
+  ├─ Rust: ModLoaderProvider::install(game_version, loader_version, game_dir)
+  │   ├─ Fabric: Generate profile JSON + download fabric-loader JAR
+  │   └─ Forge:  Download installer JAR + execute slim install (no GUI)
+  │
+  ├─ Rust: Update profile's mod_loader field + version JSON
+  │
+  └─ Frontend: Show "Fabric installed" + refresh UI
+```
+
+### 10.3 Microsoft Authentication Flow
+
+```
+User clicks "Microsoft Login"
+  │
+  ├─ Frontend: invoke("auth_microsoft_login")
+  │
+  ├─ Rust: MicrosoftAuthProvider::authenticate()
+  │   ├─ Start OAuth2 device code flow
+  │   │   └─ POST https://login.microsoftonline.com/consumers/oauth2/v2.0/devicecode
+  │   ├─ Emit "auth://device-code" with { user_code, verification_uri }
+  │   ├─ Frontend shows: "Go to microsoft.com/link, enter code XXXX"
+  │   ├─ Poll for token (user completes browser auth)
+  │   ├─ Exchange for Xbox Live token
+  │   ├─ Exchange for XSTS token
+  │   ├─ Exchange for Minecraft access token
+  │   ├─ GET https://api.minecraftservices.com/minecraft/profile
+  │   ├─ Encrypt session via TokenVault (AES-256-GCM)
+  │   ├─ Write encrypted auth.json to disk
+  │   └─ Return AuthSession
+  │
+  └─ Frontend: Show logged-in username, store session
+```
+
+### 10.4 Game Launch Flow
+
+```
+User clicks "Launch" on a profile
+  │
+  ├─ Frontend: invoke("launch_start", { profileId })
+  │
+  ├─ Rust: Resolve launch context
+  │   ├─ Load profile + version JSON
+  │   ├─ Detect/validate Java installation
+  │   │   └─ Check MC version → Java version mapping
+  │   ├─ Build classpath (libraries + client JAR + mod loader JARs)
+  │   ├─ Construct argument list:
+  │   │   ├─ JVM args: -Xmx, -Xms, -XX:+UseG1GC, ...
+  │   │   ├─ Main class (from version JSON or mod loader override)
+  │   │   └─ Game args: --username, --uuid, --accessToken, --version, --gameDir, ...
+  │   ├─ Write args to response file (avoid ps aux token leak)
+  │   └─ Merge mod loader specific args (Forge tweaks, Fabric mixins)
+  │
+  ├─ Rust: Spawn process
+  │   ├─ Command::new(java_path).arg(format!("@{}", response_file)).spawn()
+  │   ├─ Capture stdout/stderr → emit "launch://output"
+  │   ├─ Delete response file after spawn
+  │   └─ Wait for exit → emit "launch://exited" with exit code
+  │
+  └─ Frontend: Show game log console, "Kill" button
+```
+
+## 11. IPC Command Table
+
+| Command | Handler | Description |
+|---------|---------|-------------|
+| `auth_microsoft_login` | `auth.rs` | Start MS OAuth2 device flow |
+| `auth_offline_login` | `auth.rs` | Create offline session |
+| `auth_logout` | `auth.rs` | Clear session + delete encrypted file |
+| `auth_get_session` | `auth.rs` | Decrypt + return cached session |
+| `profile_list` | `profile.rs` | List all profiles |
+| `profile_create` | `profile.rs` | Create new profile |
+| `profile_update` | `profile.rs` | Update profile settings |
+| `profile_delete` | `profile.rs` | Delete profile + cleanup game dir |
+| `profile_import` | `profile.rs` | Import profile from JSON file |
+| `profile_export` | `profile.rs` | Export profile to JSON file |
+| `version_list` | `version.rs` | List available MC versions (with cache) |
+| `version_install` | `version.rs` | Download + install MC version |
+| `modloader_list` | `modloader.rs` | List loader versions (unified, takes `loader_type` param) |
+| `modloader_install` | `modloader.rs` | Install mod loader |
+| `mod_search` | `mods.rs` | Search mods (Modrinth/CurseForge) |
+| `mod_install` | `mods.rs` | Download + install mod (+ dependency resolution) |
+| `mod_remove` | `mods.rs` | Remove mod from profile |
+| `mod_list` | `mods.rs` | List installed mods |
+| `mod_toggle` | `mods.rs` | Enable/disable mod (move to/from `mods/disabled/` subdirectory) |
+| `launch_start` | `launch.rs` | Launch game (response file for args) |
+| `launch_kill` | `launch.rs` | Kill game process |
+| `launch_status` | `launch.rs` | Get running game status |
+| `download_cancel` | `download.rs` | Cancel single file in batch |
+| `download_cancel_batch` | `download.rs` | Cancel entire download batch |
+| `download_pause` | `download.rs` | Pause download batch |
+| `download_resume` | `download.rs` | Resume paused download batch |
+| `settings_get` | `settings.rs` | Get global settings |
+| `settings_set` | `settings.rs` | Update global settings (hot-reload where applicable) |
+| `java_detect` | `settings.rs` | Auto-detect Java installations |
+| `log_get` | `log.rs` | Get recent launcher log lines |
+| `log_clear` | `log.rs` | Clear/truncate log file |
+
+## 12. Size Budget
+
+### 12.1 Target: < 10MB Total
+
+| Component | Target Size | Notes |
+|-----------|------------|-------|
+| Tauri 2.x binary (stripped + LTO) | ~4.5 MB | Rust code + WebView glue |
+| SolidJS frontend (gzipped) | ~80 KB | JS + Tailwind CSS |
+| Static assets (icons) | ~100 KB | PNG icons, splash |
+| **Total** | **~4.7 MB** | **Well under 10MB** |
+
+### 12.2 Binary Optimization Strategy
+
+```toml
+# Cargo.toml (workspace root)
+[profile.release]
+opt-level = "s"          # Optimize for size
+lto = true               # Link-time optimization
+codegen-units = 1        # Single codegen unit (better LTO)
+strip = true             # Strip debug symbols
+panic = "abort"          # Abort on panic (smaller binary)
+
+[profile.release.package."*"]
+opt-level = "s"
+strip = true
+```
+
+### 12.3 Frontend Build Optimization
+
+```typescript
+// vite.config.ts
+export default defineConfig({
+  build: {
+    target: "esnext",
+    minify: "esbuild",
+    cssMinify: true,
+    rollupOptions: {
+      output: {
+        manualChunks: undefined,  // single chunk (small enough)
+      },
+    },
+  },
+  plugins: [solid(), tailwindcss()],
+});
+```
+
+### 12.4 Dependency Audit Checklist
+
+Before adding any crate, evaluate:
+
+1. **Size impact**: `cargo bloat --release` to measure
+2. **Alternatives**: Prefer lighter crates (e.g., `ureq` vs `reqwest` if async not needed)
+3. **Feature flags**: Disable default features, enable only what's needed
+4. **Duplication**: Avoid multiple crates doing the same thing
+
+## 13. Cross-Platform Strategy
+
+### 13.1 Platform Matrix
+
+| Feature | Windows | macOS | Linux |
+|---------|---------|-------|-------|
+| WebView | WebView2 (built-in Win10+) | WebKit (system) | WebKit2GTK |
+| Java detection | Registry + PATH + common paths | `/usr/libexec/java_home` + PATH | `update-alternatives` + PATH |
+| Game directory | `%APPDATA%/.minecraft` | `~/Library/Application Support/minecraft` | `~/.minecraft` |
+| Process spawn | `CreateProcess` | `fork+exec` | `fork+exec` |
+| File separator | `\` | `/` | `/` |
+| Executable | `.exe` | (no ext) | (no ext) |
+| Min version | Windows 10 | macOS 11+ | Ubuntu 22.04+ |
+| .key permissions | ACL (icacls) | chmod 600 | chmod 600 |
+
+### 13.2 Conditional Compilation
+
+```rust
+// Platform-specific Java detection
+#[cfg(target_os = "windows")]
+mod java_windows {
+    use winreg::enums::*;
+    use winreg::RegKey;
+    // Scan registry for JDK/JRE installations
+}
+
+#[cfg(target_os = "macos")]
+mod java_macos {
+    // Use /usr/libexec/java_home -V
+}
+
+#[cfg(target_os = "linux")]
+mod java_linux {
+    // Scan /usr/lib/jvm/ + update-alternatives
+}
+```
+
+### 13.3 CI/CD Cross-Compilation
+
+```yaml
+# .github/workflows/build.yml (conceptual)
+strategy:
+  matrix:
+    target:
+      - os: windows-latest
+        rust-target: x86_64-pc-windows-msvc
+      - os: macos-latest
+        rust-target: aarch64-apple-darwin    # Apple Silicon
+      - os: macos-latest
+        rust-target: x86_64-apple-darwin     # Intel
+      - os: ubuntu-22.04
+        rust-target: x86_64-unknown-linux-gnu
+  steps:
+    - name: Build
+      run: cargo build --release --target ${{ matrix.rust-target }}
+    - name: Test
+      run: cargo test --workspace --target ${{ matrix.rust-target }}
+    - name: Clippy
+      run: cargo clippy --workspace -- -D warnings
+    - name: Package (Tauri)
+      run: pnpm tauri build
+```
+
+## 14. Tauri Platform Features (P2)
+
+| Feature | Plugin / Approach |
+|---------|------------------|
+| Auto-update | `tauri-plugin-updater` — GitHub Releases as update source |
+| System tray | Game running → minimize to tray, show status |
+| Window state | Persist window size/position in config.json |
+| Deep link | `rmccc://profile/{id}` — browser one-click import |
+| Linux min version | Ubuntu 22.04+ (WebKit2GTK 4.0+) |
+
+## 15. File System Layout
+
+### 15.1 User Data Directory
+
+```
+{data_dir}/rmccc/                    # Platform data dir
+├── config.json                      # Global settings
+├── .key                             # AES-256 encryption key (chmod 600)
+├── auth.json                        # Encrypted auth session
+├── .api_keys/                       # API keys (separate from config)
+│   └── curseforge                   # CurseForge API key
+├── cache/                           # Offline caches
+│   ├── versions.json                # Cached version list
+│   └── mod_search/                  # Cached mod search results
+├── profiles/                        # Profile definitions
+│   ├── {profile-id-1}.json
+│   └── {profile-id-2}.json
+└── logs/                            # Launcher logs
+    ├── rmccc-2026-07-29.log         # Daily rolling
+    └── rmccc-2026-07-28.log
+
+{game_dir}/                          # Per-profile game directory
+├── versions/
+│   └── 1.20.4/
+│       ├── 1.20.4.json              # Version metadata
+│       ├── 1.20.4.jar               # Client JAR
+│       └── 1.20.4-fabric-0.15.6/   # Mod loader version
+│           └── 1.20.4-fabric-0.15.6.json
+├── libraries/                       # Shared libraries
+│   └── com/google/...
+├── assets/                          # Game assets
+│   ├── indexes/
+│   └── objects/
+├── mods/                            # Installed mods
+│   ├── sodium-0.5.5.jar
+│   ├── lithium-0.12.0.jar
+│   └── disabled/                    # Disabled mods (toggled)
+│       └── iris-1.7.0.jar.disabled
+├── resourcepacks/
+└── logs/
+```
+
+### 15.2 Profile JSON Schema
+
+```json
+{
+  "id": "550e8400-e29b-41d4-a716-446655440000",
+  "name": "Survival Pack",
+  "game_version": "1.20.4",
+  "mod_loader": {
+    "loader_type": "fabric",
+    "loader_version": "0.15.6"
+  },
+  "java_path": null,
+  "jvm_args": ["-XX:+UseG1GC", "-XX:+ParallelRefProcEnabled"],
+  "game_args": [],
+  "memory_mb": 4096,
+  "game_dir": "/Users/xxx/.rmccc/instances/survival-pack",
+  "created_at": "2026-07-29T10:00:00Z",
+  "last_played": null,
+  "icon": null
+}
+```
+
+## 16. Testing Strategy
+
+### 16.1 Test Pyramid
+
+| Level | Scope | Tools | When |
+|-------|-------|-------|------|
+| Unit | Argument builder, classpath resolution, SHA1 verify, version comparison | `#[cfg(test)]` + `assert_eq!` | Every commit |
+| Integration | API interactions (mocked) | `wiremock` crate | Every PR |
+| Trait Mock | Orchestrator pipeline logic | `mockall` or hand-written mocks | Every PR |
+| E2E | Login → create profile → launch | `tauri-driver` | Release CI |
+
+### 16.2 Key Test Cases
+
+```rust
+// Unit: Argument builder
+#[test]
+fn test_jvm_args_default() {
+    let args = build_jvm_args(4096, &[]);
+    assert!(args.contains(&"-Xmx4096M".to_string()));
+    assert!(args.contains(&"-Xms256M".to_string()));
+}
+
+// Unit: Java version mapping
+#[test]
+fn test_java_version_mapping() {
+    assert_eq!(java_version_for_mc("1.16.5"), 8);
+    assert_eq!(java_version_for_mc("1.17"), 16);
+    assert_eq!(java_version_for_mc("1.20.4"), 17);
+    assert_eq!(java_version_for_mc("1.20.5"), 21);
+}
+
+// Integration: Mock Mojang API
+#[tokio::test]
+async fn test_version_fetch_with_mock() {
+    let mock_server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/mc/game/version_manifest_v2.json"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(fixture_manifest()))
+        .mount(&mock_server)
+        .await;
+
+    let provider = MojangVersionProvider::new(mock_server.uri());
+    let versions = provider.fetch_versions().await.unwrap();
+    assert!(!versions.is_empty());
+}
+
+// Trait Mock: Pipeline orchestration
+#[tokio::test]
+async fn test_install_pipeline_calls_download() {
+    let mut mock_version = MockVersionProvider::new();
+    mock_version.expect_fetch_version().returning(|_| Ok(fixture_version()));
+
+    let mut mock_download = MockDownloadManager::new();
+    mock_download.expect_download_batch().returning(|_, _| Ok(fixture_handle()));
+
+    // Test pipeline wires providers correctly
+}
+```
+
+### 16.3 CI Pipeline
+
+```yaml
+# Every PR:
+- cargo test --workspace --all-features
+- cargo clippy --workspace -- -D warnings
+- cargo fmt --check
+- cd src/ && pnpm typecheck   # Frontend type check
+
+# Release:
+- cargo test --workspace --release
+- tauri-driver E2E suite
+- cargo bloat --release (size regression check)
+```
+
+## 17. Engineering Standards
+
+### 17.1 Type Generation (ts-rs)
+
+All IPC-related Rust structs derive `TS`, build script auto-generates TypeScript types：
+
+```rust
+// Every IPC type derives TS
+#[derive(Debug, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct Profile { ... }
+
+#[derive(Debug, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct IpcError { ... }
+
+// build.rs in src-tauri triggers ts-rs export
+// Output: src/ipc/types.ts (auto-generated, gitignored)
+```
+
+### 17.2 Event & Error Constants
+
+```rust
+// Event names: centralized in events.rs as &str constants
+// Error codes: ErrorCode enum (serialized as snake_case)
+// Frontend imports auto-generated const enums — no stringly-typed events
+```
+
+### 17.3 Hot-Reloadable Config
+
+```rust
+// Some settings can be changed without restarting the app:
+pub struct HotReloadConfig {
+    pub download_concurrency: u32,    // change worker pool size
+    pub mirror_url: Option<String>,   // switch download mirror
+    pub event_throttle_ms: u64,       // adjust throttle interval
+}
+
+// Other settings require restart:
+pub struct ColdConfig {
+    pub data_dir: PathBuf,
+    pub default_java_path: Option<String>,
+}
+```
+
+## 18. Implementation Phases
+
+### Phase 1: Foundation (Week 1-2)
+- Workspace setup (Cargo workspace, Tauri project init, ts-rs config)
+- `rmccc-config`: Path resolution, global settings, **logging init (tracing)**
+- `rmccc-core`: RmcccError enum, IpcError bridge, CoreContext skeleton
+- `rmccc-download`: Concurrent download engine + SHA1 verification + retry + resume
+- `rmccc-auth`: Microsoft OAuth2 device flow + offline auth + **AES-256-GCM encryption**
+- Frontend: Project scaffold + layout + login page + **error handling UI**
+
+### Phase 2: Core Game (Week 3-4)
+- `rmccc-version`: Mojang manifest parsing, version listing + **offline cache**
+- `rmccc-launch`: Classpath resolution, argument builder (**response file**), process spawn + **Java version mapping**
+- Game download pipeline (client JAR + assets + libraries) + **disk pre-check**
+- Frontend: Profile creation + version install + launch button
+
+### Phase 3: Mod Loaders (Week 5-6)
+- `rmccc-modloader`: Fabric installer (meta API + profile generation)
+- `rmccc-modloader`: Forge installer (installer JAR execution)
+- `rmccc-modloader`: NeoForge installer
+- Frontend: Mod loader selection + install UI
+
+### Phase 4: Mod Management (Week 7-8)
+- `rmccc-mods`: Modrinth API integration + **dependency resolution**
+- `rmccc-mods`: CurseForge API integration + **API key management**
+- Local mod file management (install/remove/toggle)
+- Frontend: Mod browser + search + install/manage UI + **virtual scrolling**
+
+### Phase 5: Polish & Ship (Week 9-10)
+- Binary size optimization (LTO, stripping, feature audit)
+- **Integration tests** (wiremock) + **E2E tests** (tauri-driver)
+- Cross-platform CI/CD pipeline
+- Auto-update plugin + system tray + deep link
+- UI polish + dark theme + responsive layout
+- **Performance audit**: `cargo bloat`, `pool_max_idle_per_host` tuning
+
+## 19. Key Design Decisions
+
+### Why Tauri 2.x over Electron?
+Electron bundles Chromium (~150MB+). Tauri uses system WebView, keeping binary at ~4-5MB. For a 10MB target, this is non-negotiable.
+
+### Why SolidJS over React?
+SolidJS compiles to fine-grained reactive DOM updates with no virtual DOM overhead. Bundle is ~8KB vs React's ~40KB. For a launcher that's mostly a management UI (not complex interactive apps), SolidJS is more than sufficient.
+
+### Why workspace with many small crates?
+Compile-time isolation: changing one module doesn't recompile everything. Also enforces clean boundaries — each crate has a clear public API. Future option: publish `rmccc-core` as a standalone library for other launchers.
+
+### Why reqwest over ureq?
+Concurrent downloads need async. reqwest with rustls-tls gives us async HTTP without system OpenSSL dependency. ureq is sync-only and would require thread-per-download.
+
+### Why JSON for profile storage over SQLite?
+Profiles are simple, rarely concurrent, and human-debuggable. SQLite adds ~500KB to binary. JSON is zero-cost (already using serde_json). Can migrate to SQLite later if needed.
+
+### Why AES-256-GCM over system keychain?
+System keychain (`keyring` crate) adds cross-platform complexity (different backends per OS, potential D-Bus issues on Linux). AES-256-GCM with a random key file is ~30KB, pure Rust, zero system dependencies. Security boundary: protects against non-privileged users and scripts. Desktop app threat model accepts local physical access risk.
+
+### Why tracing from Phase 1 instead of Phase 5?
+Logging is infrastructure, not polish. Adding it late means retrofitting spans into every function, and missing critical debugging data during development. Every IPC command and download batch gets a span from day one.
+
+### Why response files for game launch arguments?
+`--accessToken` in process args is visible via `ps aux` / Task Manager. Writing args to a temporary file and passing `@filepath` to Java keeps tokens out of process listings. File is deleted immediately after spawn.

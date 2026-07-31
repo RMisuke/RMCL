@@ -1,0 +1,101 @@
+[workspace]
+members = [
+    "crates/rmccc-error",
+    "crates/rmccc-core",
+    "crates/rmccc-auth",
+    "crates/rmccc-download",
+    "crates/rmccc-launch",
+    "crates/rmccc-version",
+    "crates/rmccc-modloader",
+    "crates/rmccc-mods",
+    "crates/rmccc-profile",
+    "crates/rmccc-config",
+    "src-tauri",
+    "src-cli",
+]
+resolver = "2"
+
+[workspace.dependencies]
+# Serialization
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# Async runtime
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "fs", "process", "sync", "time", "io-util"] }
+tokio-util = { version = "0.7", features = ["rt"] }
+async-trait = "0.1"
+
+# HTTP
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json", "stream"] }
+
+# Crypto & hashing
+sha1 = "0.10"
+sha2 = "0.10"
+aes-gcm = "0.10"
+rand = "0.8"
+base64 = "0.22"
+
+# Auth
+oauth2 = "5"
+
+# Archive
+zip = { version = "2", default-features = false, features = ["deflate"] }
+
+# Utilities
+uuid = { version = "1", features = ["v4", "v5"] }
+chrono = { version = "0.4", features = ["serde"] }
+thiserror = "2"
+anyhow = "1"
+dirs = "6"
+url = "2"
+urlencoding = "2"
+
+# CLI
+clap = { version = "4", features = ["derive"] }
+rustyline = { version = "15", features = ["derive"] }
+shlex = "1"
+
+# Concurrency
+dashmap = "6"
+
+# System
+fs2 = "0.4"
+
+# Logging
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+tracing-appender = "0.2"
+
+# Type bridge
+ts-rs = { version = "10", features = ["serde_json"] }
+
+# Tauri
+tauri = { version = "2", features = ["tray-icon", "macos-private-api"] }
+tauri-build = { version = "2" }
+tauri-plugin-updater = "2"
+tauri-plugin-process = "2"
+tauri-plugin-window-state = "2"
+tauri-plugin-deep-link = "2"
+
+# Internal crates
+rmccc-error = { path = "crates/rmccc-error" }
+rmccc-core = { path = "crates/rmccc-core" }
+rmccc-auth = { path = "crates/rmccc-auth" }
+rmccc-download = { path = "crates/rmccc-download" }
+rmccc-launch = { path = "crates/rmccc-launch" }
+rmccc-version = { path = "crates/rmccc-version" }
+rmccc-modloader = { path = "crates/rmccc-modloader" }
+rmccc-mods = { path = "crates/rmccc-mods" }
+rmccc-profile = { path = "crates/rmccc-profile" }
+rmccc-config = { path = "crates/rmccc-config" }
+
+[profile.release]
+opt-level = "s"
+lto = true
+codegen-units = 1
+strip = true
+panic = "abort"
+
+[profile.release.package."*"]
+opt-level = "s"
+strip = true

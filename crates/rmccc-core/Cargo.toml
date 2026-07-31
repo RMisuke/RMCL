@@ -1,0 +1,19 @@
+[package]
+name = "rmccc-core"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+rmccc-error = { workspace = true }
+rmccc-auth = { workspace = true }
+rmccc-download = { workspace = true }
+rmccc-version = { workspace = true }
+rmccc-launch = { workspace = true }
+rmccc-modloader = { workspace = true }
+rmccc-mods = { workspace = true }
+rmccc-profile = { workspace = true }
+rmccc-config = { workspace = true }
+serde = { workspace = true }
+reqwest = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
