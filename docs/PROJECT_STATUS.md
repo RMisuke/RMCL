@@ -8,6 +8,50 @@
 
 ## 0. 更新记录
 
+**2026-10-10（第 5 轮）**：修复"能下载但打不开游戏"，并完成创建实例的版本选择闭环。
+
+用户实测症状：前端能创建实例、能下载，但打不开游戏。根因是**三个独立 bug 叠加**，全部修复并实机验证。
+
+1. **安装目录 ≠ 仓库根目录（阻断）**：`profile_create` 把 `game_dir` 设为
+   `{game_root}/{profile_id}`，安装写进那里；而 `DefaultGameRepository` 索引的是共享
+   `{game_root}`，启动链路经 `get_resolved()` 解析版本。于是日志里装完 5262 个文件仍然
+   `instances=0`，启动在第一个阶段就失败。现统一为共享游戏根（`IsolationType` 只影响运行目录），
+   并新增旧布局迁移把 `instances/{id}/versions|libraries|assets` 并入共享根。
+2. **response file 竞态（阻断）**：文件在 `spawn()` 后**立即删除**，而 JVM 是在解析命令行时才读
+   `@argfile`，两者竞争 → 游戏以 `could not open .../.launch-args-*` 退出（exit 1）。
+   现改为交给后台任务在 JVM 读完参数后删除，并在下次启动清扫陈旧文件。
+3. **argfile 混入 java 可执行文件（阻断）**：`Command::jvm_args` 的第一项是 java 路径（其文档只说是
+   "JVM arguments"），于是 response file 首行成了 java 路径，被 JVM 当成主类 →
+   `could not find or load main class /Library/.../bin/java`。现由两个消费方各自提供可执行文件
+   （`spawn_game()` 作为程序、`make_launch_script()` 前置）。
+
+**实机验证**（临时数据目录 + 软链真实 SHA1 缓存）：
+
+```
+Game repository refreshed game_dir=.../instances instances=1        ← 修复 1
+[Render thread/INFO]: Setting user: E2ETester                       ← 修复 2+3
+[Render thread/INFO]: Backend library: LWJGL version 3.4.3+4
+[Render thread/INFO]: Using graphics device: Apple M1 (Apple)
+[Render thread/INFO]: Created window using SDL video driver: cocoa
+```
+
+（离线账号的 `Failed to fetch user properties ... 401` 属预期，不影响启动。）
+
+**前端**：创建实例的弹窗新增**必选**游戏版本下拉（默认正式版，可勾选包含快照），
+名称或版本为空时 Create 按钮禁用；创建成功后立即为该实例下载所选版本。
+
+**$schema 命名空间**改为 `https://rmcl.snowebsite.top/json/schema/...`，旧 HMCL 命名空间仍可读，
+并在**加载时**即被改写（不再等用户改设置）。已确认本机 `launcher-settings.json` /
+`user-settings.json` 均已迁移且设置值完整保留。
+
+| commit | 内容 |
+|--------|------|
+| `049cc26` | feat(config)：schema 命名空间迁移 |
+| `15f1cf3` | fix(core,tauri,cli)：安装到共享游戏根 + 旧布局迁移 |
+| `4046bfa` | fix(launch)：response file 交付修复 |
+| `36c2234` | feat(ui)：创建实例必须选版本并立即下载 |
+| `2270d8c` | feat(config)：加载时改写旧 `$schema` + 文档同步 |
+
 **2026-10-10（第 4 轮）**：修复窗口外壳与交互缺陷，并新增语言设置（English / 简体中文）。
 
 **窗口外壳缺陷**（用户实测反馈：无法拖动、启动在角落、四周有缝隙）根因三条，均已修复：
@@ -86,7 +130,7 @@
 | 编译 | `cargo check --workspace --all-targets` **通过**；clippy 无 warning |
 | 前端类型 | `pnpm typecheck` **通过** |
 | CI lint 三门禁 | `cargo fmt --check` / `clippy --all-targets -D warnings` / `clippy --lib --bins -D clippy::panic -D clippy::unwrap_used` **全部本地通过** |
-| 测试 | **286 passed / 0 failed**（修复 CLI 致命 bug 前为 256 / 28，见 §0/§3/§4） |
+| 测试 | **292 passed / 0 failed**（修复 CLI 致命 bug 前为 256 / 28，见 §0/§3/§4） |
 | 版本控制 | ✅ **已按主题提交为 10 个 commit**，工作区干净（原为 110 改 + 52 新增、零提交） |
 | 发布体积 | CLI release 二进制 5.74MB；手工 strip 后 **4.09MB**（`strip = true` 在本机失效，见 §7.3） |
 | 代码规模 | Rust 133 文件 / **29,284 行**（不含 `tests/` 为 28,431 行）；前端 12 文件 / 3,203 行 |
@@ -260,6 +304,10 @@ src-cli    4.3k 行  clap 命令面 + CliContext 门面 + registry（帮助/补�
 - `crates/rmccc-modloader/src/cleanroom/` 整个子模块是 stub（`execute()` 直接返回 "not yet implemented"）。
 - 死代码：`src/App.tsx`（33 行占位，无人 import）、`src/components/TitleBar.tsx`（92 行，0 引用）、`ToastContainer`（从未挂载）、`src/routes/index.ts`（3 行空操作）。
 
+**已解除（第 5 轮）**：曾经的三处启动阻断——`instances=0`（安装目录与仓库根不一致）、
+response file 竞态、argfile 首行混入 java 路径——全部修复；"安装 → 仓库索引 → 启动游戏"全链路
+已实机跑通（Minecraft 26.3 进入渲染线程并创建窗口），创建实例的版本选择闭环也已完成。
+
 **测试覆盖薄弱处**：`src-tauri/src/commands/` 45 个命令 **0 个单测**；`rmccc-mods` 4、`rmccc-profile` 3、`rmccc-core` 3、`rmccc-error` 0。
 
 ---
@@ -324,7 +372,7 @@ export CARGO_HOME=$HOME/.cargo
 ### 第 0 步：地基 —— ✅ 全部完成
 
 1. ✅ **提交现有工作**。已按主题拆为 10 个 commit（见 §0），CI 可运行、历史可追溯。
-2. ✅ **修掉 §3/§4 的 CLI 问题**，`cargo test --workspace` 已 **286 passed / 0 failed**。
+2. ✅ **修掉 §3/§4 的 CLI 问题**，`cargo test --workspace` 已 **292 passed / 0 failed**。
 3. ✅ **补齐本地 lint 能力**并跑通 CI 的 lint job：安装 rustfmt/clippy 组件后，发现三门禁原本全红
    （27 文件未格式化 + 15 处 clippy lint + 9 处生产 `unwrap()`），均已修复。
 4. ✅ **同步文档漂移**：`ARCHITECTURE.md` 8 类漂移已修（§7.2）、`DEVELOPMENT_PLAN.md` 已回填
