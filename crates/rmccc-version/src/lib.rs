@@ -1,23 +1,39 @@
 //! Minecraft version management: Mojang API, asset resolution, library resolution,
-//! offline cache, and version metadata types.
+//! offline cache, local instance repository (HMCL-aligned), and version metadata types.
+//!
+//! The version management system is **local-disk centered**: [`DefaultGameRepository`]
+//! indexes `versions/` and resolves manifests offline; the network
+//! [`MojangVersionProvider`] is used only as a metadata source during installation.
 
 pub mod arguments;
 pub mod assets;
 pub mod cache;
+pub mod compatibility;
+pub mod completion;
+pub mod default_game_repository;
+pub mod file_layout;
+pub mod game_repository;
+pub mod isolation;
 pub mod libraries;
 pub mod manifest;
 pub mod repository;
+pub mod resolved;
 pub mod types;
 
 pub use arguments::{
     build_template_vars, parse_legacy_arguments, replace_templates, resolve_arguments,
 };
+pub use default_game_repository::DefaultGameRepository;
+pub use game_repository::GameRepository;
+pub use isolation::IsolationType;
 pub use manifest::MojangVersionProvider;
 pub use repository::resolve_version;
+pub use resolved::ResolvedVersion;
 pub use types::{
-    ArgumentRule, ArgumentValue, AssetIndex, DownloadEntry, GamePatch, GameVersion,
-    JavaRequirement, Library, LibraryDownloads, LibraryRule, OsCondition, OsRule, ReleaseType,
-    VersionArgument, VersionArguments, VersionInfo, VersionProvider,
+    ArgumentRule, ArgumentValue, AssetIndex, CompatibilityRule, DownloadEntry, ExtractRules,
+    GamePatch, GameVersion, JavaRequirement, Library, LibraryDownloads, LibraryRule,
+    LoggingInfo, OsCondition, OsRule, ReleaseType, VersionArgument, VersionArguments,
+    VersionInfo, VersionProvider,
 };
 
 /// Map MC version string to minimum Java major version.

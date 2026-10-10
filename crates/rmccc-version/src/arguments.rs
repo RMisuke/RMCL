@@ -56,6 +56,7 @@ pub mod vars {
 /// * `launcher_version` - Launcher version string
 /// * `width` - Optional window width
 /// * `height` - Optional window height
+#[allow(clippy::too_many_arguments)]
 pub fn build_template_vars(
     username: &str,
     uuid: &str,
@@ -76,7 +77,10 @@ pub fn build_template_vars(
     let mut vars = HashMap::new();
     vars.insert(vars::AUTH_PLAYER_NAME.to_string(), username.to_string());
     vars.insert(vars::AUTH_SESSION.to_string(), access_token.to_string());
-    vars.insert(vars::AUTH_ACCESS_TOKEN.to_string(), access_token.to_string());
+    vars.insert(
+        vars::AUTH_ACCESS_TOKEN.to_string(),
+        access_token.to_string(),
+    );
     vars.insert(vars::AUTH_UUID.to_string(), uuid.to_string());
     vars.insert(vars::VERSION_NAME.to_string(), version_name.to_string());
     vars.insert(vars::PROFILE_NAME.to_string(), version_name.to_string());
@@ -84,18 +88,27 @@ pub fn build_template_vars(
     vars.insert(vars::GAME_DIRECTORY.to_string(), game_dir.to_string());
     vars.insert(vars::USER_TYPE.to_string(), user_type.to_string());
     vars.insert(vars::ASSETS_ROOT.to_string(), assets_dir.to_string());
-    vars.insert(vars::ASSETS_INDEX_NAME.to_string(), asset_index_id.to_string());
+    vars.insert(
+        vars::ASSETS_INDEX_NAME.to_string(),
+        asset_index_id.to_string(),
+    );
     vars.insert(vars::USER_PROPERTIES.to_string(), "{}".to_string());
     vars.insert(vars::NATIVES_DIRECTORY.to_string(), natives_dir.to_string());
     vars.insert(vars::CLASSPATH.to_string(), classpath.to_string());
     vars.insert(vars::LAUNCHER_NAME.to_string(), launcher_name.to_string());
-    vars.insert(vars::LAUNCHER_VERSION.to_string(), launcher_version.to_string());
+    vars.insert(
+        vars::LAUNCHER_VERSION.to_string(),
+        launcher_version.to_string(),
+    );
     // Java classpath separator: ':' on Unix, ';' on Windows
     #[cfg(target_os = "windows")]
     let cp_separator = ";";
     #[cfg(not(target_os = "windows"))]
     let cp_separator = ":";
-    vars.insert(vars::CLASSPATH_SEPARATOR.to_string(), cp_separator.to_string());
+    vars.insert(
+        vars::CLASSPATH_SEPARATOR.to_string(),
+        cp_separator.to_string(),
+    );
 
     // Library directory (NeoForge uses ${library_directory} in boot layer module path)
     // Always {game_dir}/libraries — Maven paths are too deep (4+ levels) for
@@ -104,8 +117,14 @@ pub fn build_template_vars(
     vars.insert(vars::LIBRARY_DIRECTORY.to_string(), library_dir);
 
     // Resolution settings (default 0 = not set)
-    vars.insert(vars::RESOLUTION_WIDTH.to_string(), width.map(|w| w.to_string()).unwrap_or_default());
-    vars.insert(vars::RESOLUTION_HEIGHT.to_string(), height.map(|h| h.to_string()).unwrap_or_default());
+    vars.insert(
+        vars::RESOLUTION_WIDTH.to_string(),
+        width.map(|w| w.to_string()).unwrap_or_default(),
+    );
+    vars.insert(
+        vars::RESOLUTION_HEIGHT.to_string(),
+        height.map(|h| h.to_string()).unwrap_or_default(),
+    );
 
     vars
 }
@@ -272,25 +291,41 @@ fn rule_matches(rule: &ArgumentRule, features: &HashMap<String, bool>) -> bool {
 /// Get the current OS name as recognized by Minecraft's version JSON rules.
 fn current_os_name() -> &'static str {
     #[cfg(target_os = "windows")]
-    { "windows" }
+    {
+        "windows"
+    }
     #[cfg(target_os = "macos")]
-    { "osx" }
+    {
+        "osx"
+    }
     #[cfg(target_os = "linux")]
-    { "linux" }
+    {
+        "linux"
+    }
     #[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
-    { "unknown" }
+    {
+        "unknown"
+    }
 }
 
 /// Get the current CPU architecture.
 fn current_arch() -> &'static str {
     #[cfg(target_arch = "x86_64")]
-    { "x86_64" }
+    {
+        "x86_64"
+    }
     #[cfg(target_arch = "aarch64")]
-    { "arm64" }
+    {
+        "arm64"
+    }
     #[cfg(target_arch = "x86")]
-    { "x86" }
+    {
+        "x86"
+    }
     #[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64", target_arch = "x86")))]
-    { "unknown" }
+    {
+        "unknown"
+    }
 }
 
 /// Parse legacy `minecraftArguments` string into individual tokens.
@@ -432,10 +467,21 @@ mod tests {
     #[test]
     fn test_build_template_vars_coverage() {
         let vars = build_template_vars(
-            "Steve", "uuid", "token", "msa",
-            "1.20.4", "release", "/game", "/game/assets",
-            "17", "/game/natives", "/game/libraries/*:/game/versions/1.20.4/1.20.4.jar",
-            "RMCL", "0.1.0", Some(1920), Some(1080),
+            "Steve",
+            "uuid",
+            "token",
+            "msa",
+            "1.20.4",
+            "release",
+            "/game",
+            "/game/assets",
+            "17",
+            "/game/natives",
+            "/game/libraries/*:/game/versions/1.20.4/1.20.4.jar",
+            "RMCL",
+            "0.1.0",
+            Some(1920),
+            Some(1080),
         );
         assert_eq!(vars.get("auth_player_name").unwrap(), "Steve");
         assert_eq!(vars.get("version_type").unwrap(), "release");
@@ -446,7 +492,10 @@ mod tests {
     #[test]
     fn test_replace_special_chars_in_value() {
         let mut vars = HashMap::new();
-        vars.insert("game_directory".to_string(), "/home/user/My Games/.minecraft".to_string());
+        vars.insert(
+            "game_directory".to_string(),
+            "/home/user/My Games/.minecraft".to_string(),
+        );
         let result = replace_templates("--gameDir ${game_directory}", &vars);
         assert_eq!(result, "--gameDir /home/user/My Games/.minecraft");
     }
@@ -517,13 +566,11 @@ mod tests {
     #[test]
     fn test_multiple_rules_all_match() {
         let args = vec![VersionArgument::Ruled {
-            rules: vec![
-                ArgumentRule {
-                    action: "allow".to_string(),
-                    os: None,
-                    features: None,
-                },
-            ],
+            rules: vec![ArgumentRule {
+                action: "allow".to_string(),
+                os: None,
+                features: None,
+            }],
             value: ArgumentValue::Multiple(vec![
                 "--width".to_string(),
                 "1920".to_string(),
@@ -558,10 +605,21 @@ mod tests {
     #[test]
     fn test_build_template_vars_no_resolution() {
         let vars = build_template_vars(
-            "Alex", "uuid-here", "token123", "legacy",
-            "1.16.5", "release", "/game", "/game/assets",
-            "1", "/game/natives", "/game/libs/*",
-            "RMCL", "0.1.0", None, None,
+            "Alex",
+            "uuid-here",
+            "token123",
+            "legacy",
+            "1.16.5",
+            "release",
+            "/game",
+            "/game/assets",
+            "1",
+            "/game/natives",
+            "/game/libs/*",
+            "RMCL",
+            "0.1.0",
+            None,
+            None,
         );
         assert_eq!(vars.get("resolution_width").unwrap(), "");
         assert_eq!(vars.get("resolution_height").unwrap(), "");

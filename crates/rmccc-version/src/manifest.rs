@@ -1,6 +1,6 @@
 //! Mojang version manifest and version JSON parsing.
 
-use rmccc_error::{RmcccError, Result};
+use rmccc_error::{Result, RmcccError};
 
 use super::types::{GameVersion, ReleaseType, VersionInfo};
 use super::VersionProvider;
@@ -10,13 +10,26 @@ const VERSION_MANIFEST_URL: &str =
     "https://piston-meta.mojang.com/mc/game/version_manifest_v2.json";
 
 /// Mojang version provider — fetches from the official API.
+///
+/// The `version_manifest_url` can be overridden for testing with wiremock.
 pub struct MojangVersionProvider {
     client: reqwest::Client,
+    /// URL for the version manifest (defaults to Mojang official).
+    pub version_manifest_url: String,
+    /// 上次响应的 ETag（P2-09 条件请求 If-None-Match）。
+    etag: std::sync::Mutex<Option<String>>,
+    /// 进程内版本列表缓存（P2-21 请求级缓存 + 304 回退）。
+    cached_versions: std::sync::Mutex<Option<Vec<VersionInfo>>>,
 }
 
 impl MojangVersionProvider {
     pub fn new(client: reqwest::Client) -> Self {
-        Self { client }
+        Self {
+            client,
+            version_manifest_url: VERSION_MANIFEST_URL.to_string(),
+            etag: std::sync::Mutex::new(None),
+            cached_versions: std::sync::Mutex::new(None),
+        }
     }
 }
 
@@ -29,18 +42,41 @@ impl VersionProvider for MojangVersionProvider {
     async fn fetch_versions(&self) -> Result<Vec<VersionInfo>> {
         tracing::info!("Fetching version manifest from Mojang");
 
-        let resp = self
-            .client
-            .get(VERSION_MANIFEST_URL)
+        // P2-09/21：带 If-None-Match 条件请求；304 时直接用进程内缓存，避免全量下载。
+        let etag = self.etag.lock().unwrap_or_else(|p| p.into_inner()).clone();
+        let mut req = self.client.get(&self.version_manifest_url);
+        if let Some(e) = &etag {
+            req = req.header(reqwest::header::IF_NONE_MATCH, e.clone());
+        }
+        let resp = req
             .send()
             .await
             .map_err(|e| RmcccError::Network(e.to_string()))?;
+
+        if resp.status() == reqwest::StatusCode::NOT_MODIFIED {
+            if let Some(cached) = self
+                .cached_versions
+                .lock()
+                .unwrap_or_else(|p| p.into_inner())
+                .clone()
+            {
+                tracing::debug!("Version manifest 304 — using in-memory cache");
+                return Ok(cached);
+            }
+        }
 
         if !resp.status().is_success() {
             return Err(RmcccError::HttpStatus {
                 status: resp.status().as_u16(),
                 url: VERSION_MANIFEST_URL.to_string(),
             });
+        }
+
+        // 记录新 ETag 供下次条件请求
+        if let Some(v) = resp.headers().get(reqwest::header::ETAG) {
+            if let Ok(s) = v.to_str() {
+                *self.etag.lock().unwrap_or_else(|p| p.into_inner()) = Some(s.to_string());
+            }
         }
 
         #[derive(serde::Deserialize)]
@@ -79,22 +115,41 @@ impl VersionProvider for MojangVersionProvider {
             .collect();
 
         tracing::info!("Fetched {} versions from Mojang", versions.len());
+        // 缓存到进程内（P2-21）
+        *self
+            .cached_versions
+            .lock()
+            .unwrap_or_else(|p| p.into_inner()) = Some(versions.clone());
         Ok(versions)
     }
 
     async fn fetch_version(&self, id: &str) -> Result<GameVersion> {
-        // First find the version URL from the manifest
-        let versions = self.fetch_versions().await?;
-        let info = versions
-            .iter()
-            .find(|v| v.id == id)
-            .ok_or_else(|| RmcccError::Other(format!("Version not found: {id}")))?;
+        // P2-19：优先用进程内缓存找 URL，避免每次 fetch_version 都全量拉 manifest。
+        let info_url = self
+            .cached_versions
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .clone()
+            .and_then(|vs| vs.into_iter().find(|v| v.id == id).map(|v| v.url));
+
+        let url = match info_url {
+            Some(u) => u,
+            None => {
+                let versions = self.fetch_versions().await?;
+                versions
+                    .iter()
+                    .find(|v| v.id == id)
+                    .ok_or_else(|| RmcccError::Other(format!("Version not found: {id}")))?
+                    .url
+                    .clone()
+            }
+        };
 
         tracing::info!(version_id = %id, "Fetching version details");
 
         let resp = self
             .client
-            .get(&info.url)
+            .get(&url)
             .send()
             .await
             .map_err(|e| RmcccError::Network(e.to_string()))?;
@@ -102,7 +157,7 @@ impl VersionProvider for MojangVersionProvider {
         if !resp.status().is_success() {
             return Err(RmcccError::HttpStatus {
                 status: resp.status().as_u16(),
-                url: info.url.clone(),
+                url: url.clone(),
             });
         }
 
@@ -116,9 +171,12 @@ impl VersionProvider for MojangVersionProvider {
 }
 
 /// Parse the Mojang version JSON format.
-fn parse_version_json(id: &str, json: &str) -> Result<GameVersion> {
-    let v: serde_json::Value =
-        serde_json::from_str(json)?;
+///
+/// `pub(crate)` so the local [`DefaultGameRepository`](super::default_game_repository)
+/// can parse `versions/{id}/{id}.json` files from disk with the exact same
+/// typed model used by the network provider.
+pub(crate) fn parse_version_json(id: &str, json: &str) -> Result<GameVersion> {
+    let v: serde_json::Value = serde_json::from_str(json)?;
 
     let main_class = v["mainClass"]
         .as_str()
@@ -140,71 +198,24 @@ fn parse_version_json(id: &str, json: &str) -> Result<GameVersion> {
         total_size: v["assetIndex"]["totalSize"].as_u64().unwrap_or(0),
     };
 
-    // Parse libraries
+    // Parse libraries — typed serde derive (G13). `Library` carries the full
+    // field set (downloads / rules / extract / natives / checksums / MMC-hint /
+    // MMC-filename), so a single `from_value` keeps a single source of truth.
     let libraries: Vec<super::types::Library> = v["libraries"]
         .as_array()
         .map(|arr| {
             arr.iter()
-                .map(|lib| super::types::Library {
-                    name: lib["name"].as_str().unwrap_or("").to_string(),
-                    downloads: {
-                        let artifact = &lib["downloads"]["artifact"];
-                        let artifact_entry = if artifact.is_object() {
-                            let url = artifact["url"].as_str().unwrap_or("").to_string();
-                            if url.is_empty() {
-                                tracing::warn!(
-                                    lib_name = %lib["name"],
-                                    "Library artifact has no download URL"
-                                );
-                                None
-                            } else {
-                                Some(super::types::DownloadEntry {
-                                    url,
-                                    sha1: artifact["sha1"].as_str().unwrap_or("").to_string(),
-                                    size: artifact["size"].as_u64().unwrap_or(0),
-                                    path: artifact["path"].as_str().map(|s| s.to_string()),
-                                })
-                            }
-                        } else {
-                            None
-                        };
-
-                        // Parse classifiers (natives)
-                        let classifiers = lib["downloads"]["classifiers"].as_object().map(|cls| {
-                            let mut map = std::collections::HashMap::new();
-                            for (key, val) in cls {
-                                map.insert(key.clone(), super::types::DownloadEntry {
-                                    url: val["url"].as_str().unwrap_or("").to_string(),
-                                    sha1: val["sha1"].as_str().unwrap_or("").to_string(),
-                                    size: val["size"].as_u64().unwrap_or(0),
-                                    path: val["path"].as_str().map(|s| s.to_string()),
-                                });
-                            }
-                            map
-                        });
-
-                        if artifact_entry.is_some() || classifiers.is_some() {
-                            Some(super::types::LibraryDownloads {
-                                artifact: artifact_entry,
-                                classifiers,
-                            })
-                        } else {
-                            None
-                        }
-                    },
-                    rules: lib["rules"].as_array().map(|rules| {
-                        rules
-                            .iter()
-                            .map(|rule| super::types::LibraryRule {
-                                action: rule["action"].as_str().unwrap_or("allow").to_string(),
-                                os: rule["os"].as_object().map(|os| super::types::OsRule {
-                                    name: os.get("name").and_then(|n| n.as_str().map(|s| s.to_string())),
-                                    arch: os.get("arch").and_then(|a| a.as_str().map(|s| s.to_string())),
-                                    version: os.get("version").and_then(|v| v.as_str().map(|s| s.to_string())),
-                                }),
-                            })
-                            .collect()
-                    }),
+                .map(|lib| {
+                    serde_json::from_value::<super::types::Library>(lib.clone()).unwrap_or_else(
+                        |e| {
+                            tracing::warn!(
+                                error = %e,
+                                lib = %lib["name"],
+                                "Failed to parse library entry"
+                            );
+                            super::types::Library::default()
+                        },
+                    )
                 })
                 .collect()
         })
@@ -228,7 +239,9 @@ fn parse_version_json(id: &str, json: &str) -> Result<GameVersion> {
     let java_version = if v["javaVersion"].is_object() {
         Some(super::types::JavaRequirement {
             major_version: v["javaVersion"]["majorVersion"].as_u64().unwrap_or(8) as u32,
-            component: v["javaVersion"]["component"].as_str().map(|s| s.to_string()),
+            component: v["javaVersion"]["component"]
+                .as_str()
+                .map(|s| s.to_string()),
         })
     } else {
         None
@@ -239,12 +252,12 @@ fn parse_version_json(id: &str, json: &str) -> Result<GameVersion> {
 
     // Parse arguments (new-style, 1.13+)
     let arguments = if v["arguments"].is_object() {
-        let jvm = v["arguments"]["jvm"].as_array().map(|arr| {
-            parse_version_arguments(arr)
-        });
-        let game = v["arguments"]["game"].as_array().map(|arr| {
-            parse_version_arguments(arr)
-        });
+        let jvm = v["arguments"]["jvm"]
+            .as_array()
+            .map(|arr| parse_version_arguments(arr));
+        let game = v["arguments"]["game"]
+            .as_array()
+            .map(|arr| parse_version_arguments(arr));
         if jvm.is_some() || game.is_some() {
             Some(super::types::VersionArguments { jvm, game })
         } else {
@@ -257,58 +270,211 @@ fn parse_version_json(id: &str, json: &str) -> Result<GameVersion> {
     // Parse legacy minecraftArguments (pre-1.13)
     let minecraft_arguments = v["minecraftArguments"].as_str().map(|s| s.to_string());
 
+    // ── HMCL-aligned fields (G3) ──
+    // jar: client JAR identity, defaults to the instance id at resolve time.
+    let jar = v["jar"].as_str().map(|s| s.to_string());
+
+    // Manifest-level compatibility rules (HMCL `compatibilityRules`).
+    let compatibility_rules: Vec<super::types::CompatibilityRule> = v["compatibilityRules"]
+        .as_array()
+        .map(|arr| parse_compatibility_rules(arr))
+        .unwrap_or_default();
+
+    // Logging configuration (log4j2 config objects).
+    let logging = v["logging"].as_object().map(|logging| {
+        let mut map = std::collections::HashMap::new();
+        for (key, val) in logging {
+            map.insert(
+                key.clone(),
+                super::types::LoggingInfo {
+                    argument: val["argument"].as_str().unwrap_or("").to_string(),
+                    file: super::types::DownloadEntry {
+                        url: val["file"]["url"].as_str().unwrap_or("").to_string(),
+                        sha1: val["file"]["sha1"].as_str().unwrap_or("").to_string(),
+                        size: val["file"]["size"].as_u64().unwrap_or(0),
+                        path: None,
+                    },
+                    log_type: val["type"].as_str().unwrap_or("log4j2-xml").to_string(),
+                },
+            );
+        }
+        map
+    });
+
+    let root = v["root"].as_bool();
+    let hidden = v["hidden"].as_bool().unwrap_or(false);
+    let minimum_launcher_version = v["minimumLauncherVersion"].as_u64().map(|n| n as u32);
+    let compliance_level = v["complianceLevel"].as_u64().map(|n| n as u32);
+    let time = v["time"].as_str().map(|s| s.to_string());
+    let release_time = v["releaseTime"].as_str().map(|s| s.to_string());
+
+    // Patches — full `GamePatch` (incremental modloader model). Patches are
+    // parsed verbatim and applied by the repository's resolve (sorted by priority).
+    let patches: Vec<super::types::GamePatch> = v["patches"]
+        .as_array()
+        .map(|arr| {
+            arr.iter()
+                .map(|p| super::types::GamePatch {
+                    id: p["id"].as_str().unwrap_or("").to_string(),
+                    version: p["version"].as_str().unwrap_or("").to_string(),
+                    priority: p["priority"].as_i64().unwrap_or(0) as i32,
+                    main_class: p["mainClass"].as_str().map(|s| s.to_string()),
+                    arguments: {
+                        let jvm = p["arguments"]["jvm"]
+                            .as_array()
+                            .map(|a| parse_version_arguments(a));
+                        let game = p["arguments"]["game"]
+                            .as_array()
+                            .map(|a| parse_version_arguments(a));
+                        if jvm.is_some() || game.is_some() {
+                            Some(super::types::VersionArguments { jvm, game })
+                        } else {
+                            None
+                        }
+                    },
+                    libraries: parse_patch_libraries(&p["libraries"]),
+                    asset_index: p["assetIndex"].as_object().map(|_| super::types::AssetIndex {
+                        id: p["assetIndex"]["id"].as_str().unwrap_or("").to_string(),
+                        url: p["assetIndex"]["url"].as_str().unwrap_or("").to_string(),
+                        sha1: p["assetIndex"]["sha1"].as_str().unwrap_or("").to_string(),
+                        size: p["assetIndex"]["size"].as_u64().unwrap_or(0),
+                        total_size: p["assetIndex"]["totalSize"].as_u64().unwrap_or(0),
+                    }),
+                    java_version: p["javaVersion"].as_object().map(|_| super::types::JavaRequirement {
+                        major_version: p["javaVersion"]["majorVersion"].as_u64().unwrap_or(8) as u32,
+                        component: p["javaVersion"]["component"]
+                            .as_str()
+                            .map(|s| s.to_string()),
+                    }),
+                    inherits_from: p["inheritsFrom"].as_str().map(|s| s.to_string()),
+                    compatibility_rules: p["compatibilityRules"]
+                        .as_array()
+                        .map(|arr| parse_compatibility_rules(arr))
+                        .unwrap_or_default(),
+                    hidden: p["hidden"].as_bool().unwrap_or(false),
+                    minecraft_arguments: p["minecraftArguments"].as_str().map(|s| s.to_string()),
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+
     Ok(GameVersion {
         id: id.to_string(),
         release_type,
         main_class,
+        jar,
         asset_index,
         downloads,
         libraries,
         java_version,
         inherits_from,
-        patches: Vec::new(),
+        patches,
         arguments,
         minecraft_arguments,
+        compatibility_rules,
+        logging,
+        root,
+        hidden,
+        minimum_launcher_version,
+        compliance_level,
+        time,
+        release_time,
         raw_json: Some(json.to_string()),
     })
+}
+
+/// Parse a `compatibilityRules` / `rules` array into unified compatibility rules.
+fn parse_compatibility_rules(arr: &[serde_json::Value]) -> Vec<super::types::CompatibilityRule> {
+    arr.iter()
+        .map(|rule| super::types::CompatibilityRule {
+            action: rule["action"].as_str().unwrap_or("allow").to_string(),
+            os: rule["os"].as_object().map(|os| super::types::OsCondition {
+                name: os.get("name").and_then(|n| n.as_str().map(|s| s.to_string())),
+                arch: os.get("arch").and_then(|a| a.as_str().map(|s| s.to_string())),
+                version: os
+                    .get("version")
+                    .and_then(|v| v.as_str().map(|s| s.to_string())),
+            }),
+            features: rule["features"].as_object().map(|f| {
+                f.iter()
+                    .map(|(k, v)| (k.clone(), v.as_bool().unwrap_or(false)))
+                    .collect()
+            }),
+        })
+        .collect()
+}
+
+/// Parse a `libraries` array into typed libraries (used inside patches).
+///
+/// Reuses [`Library`]'s serde derive so patch libraries carry the same full
+/// field set as top-level libraries.
+fn parse_patch_libraries(value: &serde_json::Value) -> Vec<super::types::Library> {
+    value
+        .as_array()
+        .map(|arr| {
+            arr.iter()
+                .map(|lib| {
+                    serde_json::from_value::<super::types::Library>(lib.clone())
+                        .unwrap_or_default()
+                })
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 /// Parse a JSON array of version arguments into our typed representation.
 /// Each element can be a simple string or a rule-gated object.
 fn parse_version_arguments(arr: &[serde_json::Value]) -> Vec<super::types::VersionArgument> {
-    arr.iter().filter_map(|v| {
-        if let Some(s) = v.as_str() {
-            Some(super::types::VersionArgument::Simple(s.to_string()))
-        } else if v.is_object() {
-            let rules = v["rules"].as_array().map(|r| {
-                r.iter().map(|rule| super::types::ArgumentRule {
-                    action: rule["action"].as_str().unwrap_or("allow").to_string(),
-                    os: rule["os"].as_object().map(|os| super::types::OsCondition {
-                        name: os.get("name").and_then(|n| n.as_str().map(|s| s.to_string())),
-                        arch: os.get("arch").and_then(|a| a.as_str().map(|s| s.to_string())),
-                        version: os.get("version").and_then(|v| v.as_str().map(|s| s.to_string())),
-                    }),
-                    features: rule["features"].as_object().map(|f| {
-                        f.iter().map(|(k, v)| (k.clone(), v.as_bool().unwrap_or(false))).collect()
-                    }),
-                }).collect()
-            }).unwrap_or_default();
+    arr.iter()
+        .filter_map(|v| {
+            if let Some(s) = v.as_str() {
+                Some(super::types::VersionArgument::Simple(s.to_string()))
+            } else if v.is_object() {
+                let rules = v["rules"]
+                    .as_array()
+                    .map(|r| {
+                        r.iter()
+                            .map(|rule| super::types::ArgumentRule {
+                                action: rule["action"].as_str().unwrap_or("allow").to_string(),
+                                os: rule["os"].as_object().map(|os| super::types::OsCondition {
+                                    name: os
+                                        .get("name")
+                                        .and_then(|n| n.as_str().map(|s| s.to_string())),
+                                    arch: os
+                                        .get("arch")
+                                        .and_then(|a| a.as_str().map(|s| s.to_string())),
+                                    version: os
+                                        .get("version")
+                                        .and_then(|v| v.as_str().map(|s| s.to_string())),
+                                }),
+                                features: rule["features"].as_object().map(|f| {
+                                    f.iter()
+                                        .map(|(k, v)| (k.clone(), v.as_bool().unwrap_or(false)))
+                                        .collect()
+                                }),
+                            })
+                            .collect()
+                    })
+                    .unwrap_or_default();
 
-            let value = if let Some(val) = v["value"].as_str() {
-                super::types::ArgumentValue::Single(val.to_string())
-            } else if let Some(arr) = v["value"].as_array() {
-                super::types::ArgumentValue::Multiple(
-                    arr.iter().filter_map(|e| e.as_str().map(|s| s.to_string())).collect()
-                )
+                let value = if let Some(val) = v["value"].as_str() {
+                    super::types::ArgumentValue::Single(val.to_string())
+                } else if let Some(arr) = v["value"].as_array() {
+                    super::types::ArgumentValue::Multiple(
+                        arr.iter()
+                            .filter_map(|e| e.as_str().map(|s| s.to_string()))
+                            .collect(),
+                    )
+                } else {
+                    return None;
+                };
+
+                Some(super::types::VersionArgument::Ruled { rules, value })
             } else {
-                return None;
-            };
-
-            Some(super::types::VersionArgument::Ruled { rules, value })
-        } else {
-            None
-        }
-    }).collect()
+                None
+            }
+        })
+        .collect()
 }
 
 #[cfg(test)]

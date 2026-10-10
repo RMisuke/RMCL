@@ -52,10 +52,7 @@ pub fn library_applies(lib: &Library) -> bool {
 /// This generates items for both the main artifact AND classifier JARs (natives).
 /// Native libraries with OS-specific classifiers like `natives-macos` are only
 /// downloaded for the current platform.
-pub fn resolve_library_items(
-    libraries: &[Library],
-    libs_dir: &Path,
-) -> Vec<DownloadItem> {
+pub fn resolve_library_items(libraries: &[Library], libs_dir: &Path) -> Vec<DownloadItem> {
     let mut items = Vec::new();
 
     for lib in libraries.iter().filter(|lib| library_applies(lib)) {
@@ -119,16 +116,14 @@ fn minecraft_arch() -> &'static str {
 }
 
 /// Check if a classifier matches the current platform.
-fn is_current_platform_classifier(classifier: &str) -> bool {
+pub(crate) fn is_current_platform_classifier(classifier: &str) -> bool {
     // On each platform, match both the generic classifier (e.g. "natives-macos")
     // and the arch-specific classifier (e.g. "natives-macos-arm64").
     // Generic is always downloaded; arch-specific only if it matches current CPU.
     #[cfg(target_os = "macos")]
     {
         let arch_specific = format!("natives-macos-{}", minecraft_arch());
-        classifier == "natives-macos"
-            || classifier == "natives-osx"
-            || classifier == arch_specific
+        classifier == "natives-macos" || classifier == "natives-osx" || classifier == arch_specific
     }
     #[cfg(target_os = "windows")]
     {
@@ -138,9 +133,7 @@ fn is_current_platform_classifier(classifier: &str) -> bool {
     #[cfg(target_os = "linux")]
     {
         let arch_specific = format!("natives-linux-{}", minecraft_arch());
-        classifier == "natives-linux"
-            || classifier == "natives-unix"
-            || classifier == arch_specific
+        classifier == "natives-linux" || classifier == "natives-unix" || classifier == arch_specific
     }
     #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
     {
@@ -193,7 +186,7 @@ fn make_library_item(lib: &Library, libs_dir: &Path) -> Option<DownloadItem> {
 /// - `org.quiltmc:*` → `https://maven.quiltmc.org/repository/release/`
 /// - Everything else → `https://repo1.maven.org/maven2/` (Maven Central)
 ///   with `https://libraries.minecraft.net/` as secondary fallback
-fn maven_urls_from_name(name: &str) -> Vec<String> {
+pub(crate) fn maven_urls_from_name(name: &str) -> Vec<String> {
     let parts: Vec<&str> = name.split(':').collect();
     if parts.len() < 3 {
         return vec![String::new()];
@@ -207,7 +200,9 @@ fn maven_urls_from_name(name: &str) -> Vec<String> {
     if group.starts_with("net.fabricmc") {
         vec![format!("https://maven.fabricmc.net/{jar_path}")]
     } else if group.starts_with("org.quiltmc") {
-        vec![format!("https://maven.quiltmc.org/repository/release/{jar_path}")]
+        vec![format!(
+            "https://maven.quiltmc.org/repository/release/{jar_path}"
+        )]
     } else {
         // Primary: Maven Central (universal), Fallback: Mojang's library repo
         vec![
@@ -222,7 +217,7 @@ fn maven_urls_from_name(name: &str) -> Vec<String> {
 /// Example:
 ///   `com.mojang:logging:1.0.0` → `libraries/com/mojang/logging/1.0.0/logging-1.0.0.jar`
 ///   `org.lwjgl:lwjgl:3.3.1:natives-macos` → `libraries/org/lwjgl/lwjgl/3.3.1/lwjgl-3.3.1-natives-macos.jar`
-fn make_library_path(name: &str, libs_dir: &Path) -> PathBuf {
+pub fn make_library_path(name: &str, libs_dir: &Path) -> PathBuf {
     let parts: Vec<&str> = name.split(':').collect();
     if parts.len() < 3 {
         return libs_dir.join(name.replace(':', "/"));
@@ -250,23 +245,20 @@ pub fn collect_classpath(libraries: &[Library], libs_dir: &Path) -> Vec<PathBuf>
     libraries
         .iter()
         .filter(|lib| library_applies(lib))
-        .filter_map(|lib| {
+        .map(|lib| {
             // If library has explicit download info, use artifact path if provided
-            if let Some(artifact_path) = lib.downloads.as_ref()
+            if let Some(artifact_path) = lib
+                .downloads
+                .as_ref()
                 .and_then(|d| d.artifact.as_ref())
                 .and_then(|a| a.path.as_ref())
             {
-                return Some(libs_dir.join(artifact_path));
+                return libs_dir.join(artifact_path);
             }
-            // Fall back to Maven-style path from the library name
-            let path = make_library_path(&lib.name, libs_dir);
-            if path.exists() {
-                Some(path)
-            } else {
-                // Still include the path — Java will fail fast with a clear ClassNotFoundException
-                // if the JAR is missing, which is better than a silent skip
-                Some(path)
-            }
+            // Fall back to Maven-style path from the library name.
+            // Still include the path — Java will fail fast with a clear ClassNotFoundException
+            // if the JAR is missing, which is better than a silent skip.
+            make_library_path(&lib.name, libs_dir)
         })
         .collect()
 }
@@ -280,10 +272,7 @@ mod tests {
     fn test_make_library_path() {
         let dir = Path::new("/game/libraries");
         let path = make_library_path("com.mojang:logging:1.0.0", dir);
-        assert_eq!(
-            path,
-            dir.join("com/mojang/logging/1.0.0/logging-1.0.0.jar")
-        );
+        assert_eq!(path, dir.join("com/mojang/logging/1.0.0/logging-1.0.0.jar"));
     }
 
     #[test]
@@ -300,28 +289,25 @@ mod tests {
     fn test_library_applies_no_rules() {
         let lib = Library {
             name: "test:lib:1.0".into(),
-            downloads: None,
-            rules: None,
+            ..Default::default()
         };
         assert!(library_applies(&lib));
     }
 
     #[test]
     fn test_library_applies_osx_only() {
-        let rules = vec![
-            LibraryRule {
-                action: "allow".into(),
-                os: Some(OsRule {
-                    name: Some("osx".into()),
-                    arch: None,
-                    version: None,
-                }),
-            },
-        ];
+        let rules = vec![LibraryRule {
+            action: "allow".into(),
+            os: Some(OsRule {
+                name: Some("osx".into()),
+                arch: None,
+                version: None,
+            }),
+        }];
         let lib = Library {
             name: "test:natives:1.0".into(),
-            downloads: None,
             rules: Some(rules),
+            ..Default::default()
         };
         #[cfg(target_os = "macos")]
         assert!(library_applies(&lib));
@@ -347,8 +333,8 @@ mod tests {
         ];
         let lib = Library {
             name: "test:natives-all-disallowed:1.0".into(),
-            downloads: None,
             rules: Some(rules),
+            ..Default::default()
         };
         assert!(!library_applies(&lib));
     }

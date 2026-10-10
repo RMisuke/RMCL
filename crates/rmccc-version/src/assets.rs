@@ -4,7 +4,7 @@
 //! for each individual asset file (mapped from hash → path).
 
 use rmccc_download::DownloadItem;
-use rmccc_error::{RmcccError, Result};
+use rmccc_error::{Result, RmcccError};
 use serde::Deserialize;
 use std::collections::HashMap;
 use std::path::Path;
@@ -69,17 +69,14 @@ pub async fn resolve_asset_items(
 
     let items: Vec<DownloadItem> = content
         .objects
-        .iter()
-        .map(|(_name, obj)| {
+        .values()
+        .map(|obj| {
             let hash_prefix = &obj.hash[..2];
             let url = format!(
                 "https://resources.download.minecraft.net/{}/{}",
                 hash_prefix, obj.hash
             );
-            let dest = assets_dir
-                .join("objects")
-                .join(hash_prefix)
-                .join(&obj.hash);
+            let dest = assets_dir.join("objects").join(hash_prefix).join(&obj.hash);
 
             DownloadItem {
                 url,

@@ -85,11 +85,8 @@ impl UrlRule {
     }
 
     fn apply(&self, url: &str) -> Option<String> {
-        if url.starts_with(self.prefix) {
-            Some(self.target.clone() + &url[self.prefix.len()..])
-        } else {
-            None
-        }
+        url.strip_prefix(self.prefix)
+            .map(|rest| format!("{}{}", self.target, rest))
     }
 }
 
@@ -136,13 +133,25 @@ impl BmclApiDownloadProvider {
             rule("https://piston-data.mojang.com", &ar),
             rule("https://launcher.mojang.com", &ar),
             // Minecraft libraries
-            rule("https://libraries.minecraft.net", &format!("{ar}/libraries")),
+            rule(
+                "https://libraries.minecraft.net",
+                &format!("{ar}/libraries"),
+            ),
             // Forge Maven (old HTTP, old HTTPS, new HTTPS)
-            rule("http://files.minecraftforge.net/maven", &format!("{ar}/maven")),
-            rule("https://files.minecraftforge.net/maven", &format!("{ar}/maven")),
+            rule(
+                "http://files.minecraftforge.net/maven",
+                &format!("{ar}/maven"),
+            ),
+            rule(
+                "https://files.minecraftforge.net/maven",
+                &format!("{ar}/maven"),
+            ),
             rule("https://maven.minecraftforge.net", &format!("{ar}/maven")),
             // NeoForge Maven
-            rule("https://maven.neoforged.net/releases/", &format!("{ar}/maven/")),
+            rule(
+                "https://maven.neoforged.net/releases/",
+                &format!("{ar}/maven/"),
+            ),
             // LiteLoader
             rule(
                 "http://dl.liteloader.com/versions/versions.json",
@@ -183,9 +192,15 @@ impl BmclApiDownloadProvider {
 
         // Fallback rules — for mod platforms (will be used in Phase 4).
         let fallback_rules = vec![
-            rule("https://api.modrinth.com", "https://mod.mcimirror.top/modrinth"),
+            rule(
+                "https://api.modrinth.com",
+                "https://mod.mcimirror.top/modrinth",
+            ),
             rule("https://cdn.modrinth.com", "https://mod.mcimirror.top"),
-            rule("https://api.curseforge.com", "https://mod.mcimirror.top/curseforge"),
+            rule(
+                "https://api.curseforge.com",
+                "https://mod.mcimirror.top/curseforge",
+            ),
             rule("https://edge.forgecdn.net", "https://mod.mcimirror.top"),
         ];
 
@@ -336,7 +351,8 @@ mod tests {
     #[test]
     fn test_bmclapi_fabric_maven() {
         let p = BmclApiDownloadProvider::new("https://bmclapi2.bangbang93.com");
-        let url = "https://maven.fabricmc.net/net/fabricmc/fabric-loader/0.15.0/fabric-loader-0.15.0.jar";
+        let url =
+            "https://maven.fabricmc.net/net/fabricmc/fabric-loader/0.15.0/fabric-loader-0.15.0.jar";
         let injected = p.inject_url(url);
         assert!(injected.contains("bmclapi2.bangbang93.com/maven"));
         assert!(!injected.contains("maven.fabricmc.net"));
@@ -394,9 +410,7 @@ mod tests {
     fn test_bmclapi_candidates_fallback() {
         let p = BmclApiDownloadProvider::new("https://bmclapi2.bangbang93.com");
         // Modrinth URL should get both original and fallback
-        let candidates = p.inject_url_with_candidates(
-            "https://api.modrinth.com/v2/mod/sodium",
-        );
+        let candidates = p.inject_url_with_candidates("https://api.modrinth.com/v2/mod/sodium");
         assert_eq!(candidates.len(), 2);
         assert_eq!(candidates[0], "https://api.modrinth.com/v2/mod/sodium");
         assert!(candidates[1].contains("mod.mcimirror.top"));
@@ -417,9 +431,7 @@ mod tests {
         assert!(p.is_some());
         let p = p.unwrap();
         assert_eq!(p.name(), "BMCLAPI");
-        let injected = p.inject_url(
-            "https://libraries.minecraft.net/test.jar",
-        );
+        let injected = p.inject_url("https://libraries.minecraft.net/test.jar");
         assert!(injected.contains("my-mirror.example.com"));
     }
 }

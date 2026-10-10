@@ -40,10 +40,17 @@ impl VersionCache {
         let cached: CachedManifest = serde_json::from_str(&data)?;
 
         let age = (chrono::Utc::now() - cached.fetched_at).num_seconds();
-        tracing::debug!(cache_age_seconds = age, ttl = self.ttl_seconds, "Version cache check");
+        tracing::debug!(
+            cache_age_seconds = age,
+            ttl = self.ttl_seconds,
+            "Version cache check"
+        );
 
         if age > self.ttl_seconds {
-            tracing::info!("Version cache expired (age={age}s > TTL={}s)", self.ttl_seconds);
+            tracing::info!(
+                "Version cache expired (age={age}s > TTL={}s)",
+                self.ttl_seconds
+            );
             return Ok(None);
         }
 

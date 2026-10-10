@@ -1,0 +1,745 @@
+//! `DefaultGameRepository` — filesystem-backed instance index
+//! (HMCL `DefaultGameRepository`).
+//!
+//! Responsibilities:
+//! - `refresh()` scans `{game_dir}/versions/`, tolerates mismatched JSON
+//!   filenames and malformed files, filters instances whose compatibility
+//!   rules don't apply, drops instances with unresolvable parents, and
+//!   ensures `launcher_profiles.json` exists (Mojang/HMCL compat).
+//! - `resolve()` follows the `inheritsFrom` chain locally, merges fields, then
+//!   applies `patches` sorted by priority, producing the dual-view
+//!   [`ResolvedVersion`](super::resolved::ResolvedVersion).
+//! - CRUD (rename / duplicate / remove) operates on the `versions/{id}`
+//!   folders atomically.
+
+use rmccc_error::{Result, RmcccError};
+use std::collections::{HashMap, HashSet};
+use std::path::{Path, PathBuf};
+
+use super::compatibility;
+use super::file_layout;
+use super::game_repository::GameRepository;
+use super::isolation::IsolationType;
+use super::resolved::ResolvedVersion;
+use super::types::{GamePatch, GameVersion};
+
+/// The Mojang-compatible profile marker HMCL ensures on refresh.
+fn launcher_profiles_content() -> String {
+    let token = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    format!(
+        "{{\"profiles\":{{}},\"selectedProfile\":\"(Default)\",\"clientToken\":\"{token:x}\",\"authenticationDatabase\":{{}}}}"
+    )
+}
+
+/// A filesystem-backed game repository rooted at a `.minecraft` directory.
+pub struct DefaultGameRepository {
+    base_directory: PathBuf,
+    manifests: HashMap<String, GameVersion>,
+}
+
+impl DefaultGameRepository {
+    pub fn new(base_directory: PathBuf) -> Self {
+        Self {
+            base_directory,
+            manifests: HashMap::new(),
+        }
+    }
+
+    /// Change the base directory and refresh the index.
+    pub fn set_base_directory(&mut self, dir: PathBuf) -> Result<()> {
+        self.base_directory = dir;
+        self.refresh()
+    }
+
+    fn ensure_launcher_profiles(&self) -> Result<()> {
+        let path = file_layout::launcher_profiles_path(&self.base_directory);
+        if path.exists() {
+            return Ok(());
+        }
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        std::fs::write(&path, launcher_profiles_content())?;
+        tracing::info!(path = %path.display(), "Created launcher_profiles.json");
+        Ok(())
+    }
+
+    /// Merge a child manifest on top of an already-resolved parent.
+    ///
+    /// Mirrors HMCL `GameInstanceManifest.merge(parent)`: the child's concrete
+    /// fields override the parent's; libraries accumulate (deduped by name).
+    fn merge_child_into_parent(parent: &mut GameVersion, child: &GameVersion) {
+        // Libraries — append child libs not already present.
+        let existing: HashSet<String> =
+            parent.libraries.iter().map(|l| l.name.clone()).collect();
+        for lib in &child.libraries {
+            if !existing.contains(&lib.name) {
+                parent.libraries.push(lib.clone());
+            }
+        }
+
+        // mainClass — child overrides when it defines a non-default entry.
+        if !child.main_class.is_empty() && child.main_class != "net.minecraft.client.main.Main" {
+            parent.main_class = child.main_class.clone();
+        }
+
+        // jar — child overrides.
+        if let Some(jar) = &child.jar {
+            parent.jar = Some(jar.clone());
+        }
+
+        // assetIndex — child overrides when non-empty.
+        if !child.asset_index.id.is_empty() {
+            parent.asset_index = child.asset_index.clone();
+        }
+
+        // javaVersion — child overrides.
+        if let Some(jv) = &child.java_version {
+            parent.java_version = Some(jv.clone());
+        }
+
+        // arguments — merge: parent's first, child's appended (HMCL addArguments).
+        if let Some(child_args) = &child.arguments {
+            let mut merged = parent.arguments.clone().unwrap_or_default();
+            if let Some(jvm) = &child_args.jvm {
+                merged.jvm.get_or_insert_with(Vec::new).extend(jvm.clone());
+            }
+            if let Some(game) = &child_args.game {
+                merged.game.get_or_insert_with(Vec::new).extend(game.clone());
+            }
+            parent.arguments = Some(merged);
+        }
+
+        // minecraftArguments — child overrides.
+        if let Some(ma) = &child.minecraft_arguments {
+            parent.minecraft_arguments = Some(ma.clone());
+        }
+
+        // compatibilityRules — accumulate.
+        parent.compatibility_rules.extend(child.compatibility_rules.clone());
+
+        // complianceLevel / root / hidden / time / releaseTime — child overrides.
+        if let Some(cl) = child.compliance_level {
+            parent.compliance_level = Some(cl);
+        }
+        if let Some(r) = child.root {
+            parent.root = Some(r);
+        }
+        if child.hidden {
+            parent.hidden = true;
+        }
+        if let Some(t) = &child.time {
+            parent.time = Some(t.clone());
+        }
+        if let Some(rt) = &child.release_time {
+            parent.release_time = Some(rt.clone());
+        }
+
+        // downloads — child's client overrides.
+        if let Some(client) = child.downloads.get("client") {
+            parent.downloads.insert("client".to_string(), client.clone());
+        }
+
+        // logging — child overrides.
+        if let Some(lg) = &child.logging {
+            parent.logging = Some(lg.clone());
+        }
+    }
+
+    /// Apply a patch to a resolved manifest (HMCL `GameInstanceManifest.merge(patch)`).
+    fn apply_patch(version: &mut GameVersion, patch: &GamePatch) {
+        if !patch.libraries.is_empty() {
+            let existing: HashSet<String> =
+                version.libraries.iter().map(|l| l.name.clone()).collect();
+            for lib in &patch.libraries {
+                if !existing.contains(&lib.name) {
+                    version.libraries.push(lib.clone());
+                }
+            }
+        }
+        if let Some(mc) = &patch.main_class {
+            version.main_class = mc.clone();
+        }
+        if let Some(ai) = &patch.asset_index {
+            version.asset_index = ai.clone();
+        }
+        if let Some(jv) = &patch.java_version {
+            version.java_version = Some(jv.clone());
+        }
+        if let Some(pa) = &patch.arguments {
+            let mut merged = version.arguments.clone().unwrap_or_default();
+            if let Some(jvm) = &pa.jvm {
+                merged.jvm.get_or_insert_with(Vec::new).extend(jvm.clone());
+            }
+            if let Some(game) = &pa.game {
+                merged.game.get_or_insert_with(Vec::new).extend(game.clone());
+            }
+            version.arguments = Some(merged);
+        }
+        if let Some(ma) = &patch.minecraft_arguments {
+            version.minecraft_arguments = Some(ma.clone());
+        }
+        version.compatibility_rules.extend(patch.compatibility_rules.clone());
+    }
+
+    /// Recursively resolve an instance along its `inheritsFrom` chain.
+    ///
+    /// Patches from every manifest on the chain are accumulated into
+    /// `patches_out` and applied by [`Self::resolve`] (sorted by priority).
+    fn resolve_from(
+        &self,
+        id: &str,
+        visited: &mut HashSet<String>,
+        patches_out: &mut Vec<GamePatch>,
+    ) -> Result<GameVersion> {
+        if !visited.insert(id.to_string()) {
+            return Err(RmcccError::Other(format!(
+                "Version inheritance cycle detected at '{id}'"
+            )));
+        }
+        let manifest = self
+            .manifests
+            .get(id)
+            .cloned()
+            .ok_or_else(|| RmcccError::Other(format!("Version not installed: {id}")))?;
+
+        patches_out.extend(manifest.patches.clone());
+
+        let mut merged = if let Some(parent) = &manifest.inherits_from {
+            let mut parent_resolved = self.resolve_from(parent, visited, patches_out)?;
+            Self::merge_child_into_parent(&mut parent_resolved, &manifest);
+            parent_resolved
+        } else {
+            manifest.clone()
+        };
+        // Base version's own patches (root-level) applied too.
+        let _ = &mut merged;
+        Ok(merged)
+    }
+
+    /// Resolve an instance into the dual-view [`ResolvedVersion`].
+    pub fn resolve(&self, id: &str) -> Result<ResolvedVersion> {
+        let unresolved = self
+            .manifests
+            .get(id)
+            .cloned()
+            .ok_or_else(|| RmcccError::Other(format!("Version not installed: {id}")))?;
+
+        let mut visited = HashSet::new();
+        let mut patches = Vec::new();
+        let merged = self.resolve_from(id, &mut visited, &mut patches)?;
+        let root_id = self.get_game_version(id);
+        patches.sort_by_key(|p| p.priority);
+
+        let mut launch = merged.clone();
+        let mut standalone = merged.clone();
+        for p in &patches {
+            Self::apply_patch(&mut launch, p);
+            Self::apply_patch(&mut standalone, p);
+        }
+        launch.inherits_from = None;
+        launch.patches = Vec::new();
+        // standalone keeps the patches list (for editing / round-tripping).
+        standalone.inherits_from = None;
+        standalone.patches = patches;
+
+        // `jar` falls back to the base version's id (HMCL): an inheriting
+        // instance shares the parent's client JAR (e.g. `1.20.4-fabric` uses
+        // `versions/1.20.4/1.20.4.jar`).
+        if launch.jar.is_none() {
+            launch.jar = Some(root_id.clone());
+        }
+        if standalone.jar.is_none() {
+            standalone.jar = Some(root_id);
+        }
+
+        Ok(ResolvedVersion {
+            unresolved,
+            launch,
+            standalone,
+        })
+    }
+
+    /// Whether every `inheritsFrom` link on the chain resolves within the index.
+    fn chain_resolvable(&self, id: &str, visited: &mut HashSet<String>) -> bool {
+        if !visited.insert(id.to_string()) {
+            return false;
+        }
+        match self.manifests.get(id).and_then(|m| m.inherits_from.clone()) {
+            Some(parent) => self.chain_resolvable(&parent, visited),
+            None => true,
+        }
+    }
+
+    /// Read and parse a manifest file, normalizing the id to the folder name.
+    fn read_instance_manifest(json_path: &Path, folder_id: &str) -> Result<GameVersion> {
+        let data = std::fs::read_to_string(json_path)?;
+        let mut manifest = super::manifest::parse_version_json(folder_id, &data)?;
+        if manifest.id.is_empty() {
+            manifest.id = folder_id.to_string();
+        } else if manifest.id != folder_id {
+            // HMCL tolerates / fixes id↔folder mismatches.
+            tracing::warn!(
+                folder = %folder_id,
+                json_id = %manifest.id,
+                "Version JSON id differs from folder name; normalizing to folder"
+            );
+            manifest.id = folder_id.to_string();
+        }
+        Ok(manifest)
+    }
+
+    /// Whether an instance is considered modded (has patches) — used by
+    /// `Modded` isolation.
+    pub fn is_modded(&self, id: &str) -> bool {
+        self.manifests
+            .get(id)
+            .map(|m| !m.patches.is_empty() || m.inherits_from.is_some())
+            .unwrap_or(false)
+    }
+}
+
+impl GameRepository for DefaultGameRepository {
+    fn game_dir(&self) -> &Path {
+        &self.base_directory
+    }
+
+    fn refresh(&mut self) -> Result<()> {
+        let versions_dir = file_layout::versions_dir(&self.base_directory);
+        self.manifests.clear();
+        self.ensure_launcher_profiles()?;
+
+        if !versions_dir.exists() {
+            std::fs::create_dir_all(&versions_dir)?;
+            return Ok(());
+        }
+
+        for entry in std::fs::read_dir(&versions_dir)? {
+            let entry = entry?;
+            let path = entry.path();
+            if !path.is_dir() {
+                continue;
+            }
+            let folder_id = match path.file_name().and_then(|n| n.to_str()) {
+                Some(name) => name.to_string(),
+                None => continue,
+            };
+
+            let json_path = path.join(format!("{folder_id}.json"));
+            let manifest = if json_path.exists() {
+                match Self::read_instance_manifest(&json_path, &folder_id) {
+                    Ok(m) => m,
+                    Err(e) => {
+                        tracing::warn!(
+                            folder = %folder_id,
+                            error = %e,
+                            "Skipping unparseable version JSON (HMCL GameJsonParseFailedEvent)"
+                        );
+                        continue;
+                    }
+                }
+            } else {
+                // Tolerate a mismatched JSON filename: use the single *.json in the folder.
+                let fallback = std::fs::read_dir(&path)
+                    .ok()
+                    .and_then(|rd| {
+                        rd.flatten()
+                            .map(|e| e.path())
+                            .find(|p| p.extension().and_then(|e| e.to_str()) == Some("json"))
+                    });
+                match fallback {
+                    Some(fb) => match Self::read_instance_manifest(&fb, &folder_id) {
+                        Ok(m) => m,
+                        Err(e) => {
+                            tracing::warn!(folder = %folder_id, error = %e, "Skipping version");
+                            continue;
+                        }
+                    },
+                    None => continue,
+                }
+            };
+
+            // Compatibility filter (HMCL `CompatibilityRule.appliesToCurrentEnvironment`).
+            if !compatibility::applies_to_environment(&manifest.compatibility_rules) {
+                tracing::debug!(
+                    folder = %folder_id,
+                    "Instance filtered by compatibility rules (not applicable on this OS)"
+                );
+                continue;
+            }
+
+            self.manifests.insert(folder_id, manifest);
+        }
+
+        // Drop instances whose inheritance chain references a missing parent.
+        let resolvable: Vec<String> = self
+            .manifests
+            .keys()
+            .filter(|id| {
+                let mut visited = HashSet::new();
+                self.chain_resolvable(id, &mut visited)
+            })
+            .cloned()
+            .collect();
+        self.manifests
+            .retain(|id, _| resolvable.contains(id));
+
+        tracing::info!(
+            game_dir = %self.base_directory.display(),
+            instances = self.manifests.len(),
+            "Game repository refreshed"
+        );
+        Ok(())
+    }
+
+    fn has_instance(&self, id: &str) -> bool {
+        self.manifests.contains_key(id)
+    }
+
+    fn get_instance_ids(&self) -> Vec<String> {
+        let mut ids: Vec<String> = self.manifests.keys().cloned().collect();
+        ids.sort();
+        ids
+    }
+
+    fn get_manifest(&self, id: &str) -> Option<&GameVersion> {
+        self.manifests.get(id)
+    }
+
+    fn get_resolved(&self, id: &str) -> Result<ResolvedVersion> {
+        self.resolve(id)
+    }
+
+    fn get_run_directory(&self, id: &str, isolation: IsolationType) -> PathBuf {
+        super::isolation::run_directory(&self.base_directory, id, isolation, self.is_modded(id))
+    }
+
+    fn get_library_file(&self, _id: &str, name: &str) -> PathBuf {
+        file_layout::library_file(&self.base_directory, name)
+    }
+
+    fn get_native_directory(&self, id: &str) -> PathBuf {
+        file_layout::resolve_native_dir(&self.base_directory, id)
+    }
+
+    fn get_instance_jar(&self, id: &str) -> PathBuf {
+        let jar_id = self
+            .manifests
+            .get(id)
+            .and_then(|m| m.jar.as_deref())
+            .map(|s| s.to_string())
+            .unwrap_or_else(|| self.get_game_version(id));
+        file_layout::instance_jar(&self.base_directory, &jar_id)
+    }
+
+    fn get_asset_index_file(&self, id: &str) -> PathBuf {
+        let asset_id = self
+            .manifests
+            .get(id)
+            .map(|m| m.asset_index.id.as_str())
+            .unwrap_or("");
+        if asset_id.is_empty() {
+            file_layout::asset_index_file(&self.base_directory, id)
+        } else {
+            file_layout::asset_index_file(&self.base_directory, asset_id)
+        }
+    }
+
+    fn get_asset_object(&self, hash: &str) -> PathBuf {
+        file_layout::asset_object(&self.base_directory, hash)
+    }
+
+    fn get_mods_directory(&self, id: &str) -> PathBuf {
+        // Mods always live in the run directory; default to shared mods dir.
+        self.get_run_directory(id, IsolationType::Never).join("mods")
+    }
+
+    fn get_game_version(&self, id: &str) -> String {
+        let mut current = id.to_string();
+        let mut visited = HashSet::new();
+        while visited.insert(current.clone()) {
+            match self.manifests.get(&current).and_then(|m| m.inherits_from.clone()) {
+                Some(parent) => current = parent,
+                None => break,
+            }
+        }
+        current
+    }
+
+    fn rename_instance(&mut self, from: &str, to: &str) -> Result<()> {
+        if from == to {
+            return Ok(());
+        }
+        if self.manifests.contains_key(to) {
+            return Err(RmcccError::Other(format!(
+                "An instance named '{to}' already exists"
+            )));
+        }
+        let from_root = file_layout::instance_root(&self.base_directory, from);
+        let to_root = file_layout::instance_root(&self.base_directory, to);
+        if !from_root.exists() {
+            return Err(RmcccError::Other(format!(
+                "Instance '{from}' not installed"
+            )));
+        }
+        if let Some(parent) = to_root.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        std::fs::rename(&from_root, &to_root)?;
+        // Rename inner {from}.json / {from}.jar → {to}.json / {to}.jar.
+        for ext in ["json", "jar"] {
+            let old = to_root.join(format!("{from}.{ext}"));
+            let new = to_root.join(format!("{to}.{ext}"));
+            if old.exists() && !new.exists() {
+                std::fs::rename(&old, &new)?;
+            }
+        }
+        self.refresh()?;
+        tracing::info!(from = %from, to = %to, "Instance renamed");
+        Ok(())
+    }
+
+    fn duplicate_instance(&mut self, from: &str, to: &str) -> Result<()> {
+        if from == to {
+            return Ok(());
+        }
+        if self.manifests.contains_key(to) {
+            return Err(RmcccError::Other(format!(
+                "An instance named '{to}' already exists"
+            )));
+        }
+        let from_root = file_layout::instance_root(&self.base_directory, from);
+        let to_root = file_layout::instance_root(&self.base_directory, to);
+        if !from_root.exists() {
+            return Err(RmcccError::Other(format!(
+                "Instance '{from}' not installed"
+            )));
+        }
+        copy_dir_recursive(&from_root, &to_root)?;
+        for ext in ["json", "jar"] {
+            let old = to_root.join(format!("{from}.{ext}"));
+            let new = to_root.join(format!("{to}.{ext}"));
+            if old.exists() && !new.exists() {
+                std::fs::rename(&old, &new)?;
+            }
+        }
+        self.refresh()?;
+        tracing::info!(from = %from, to = %to, "Instance duplicated");
+        Ok(())
+    }
+
+    fn remove_instance(&mut self, id: &str) -> Result<()> {
+        let root = file_layout::instance_root(&self.base_directory, id);
+        if root.exists() {
+            std::fs::remove_dir_all(&root)?;
+        }
+        self.manifests.remove(id);
+        tracing::info!(id = %id, "Instance removed");
+        Ok(())
+    }
+}
+
+/// Recursively copy a directory tree.
+fn copy_dir_recursive(from: &Path, to: &Path) -> Result<()> {
+    std::fs::create_dir_all(to)?;
+    for entry in std::fs::read_dir(from)? {
+        let entry = entry?;
+        let src = entry.path();
+        let dst = to.join(entry.file_name());
+        if src.is_dir() {
+            copy_dir_recursive(&src, &dst)?;
+        } else {
+            std::fs::copy(&src, &dst)?;
+        }
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::isolation::IsolationType;
+
+    fn temp_dir(tag: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "rmccc-repo-{tag}-{}-{:x}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    fn write_version(game_dir: &Path, id: &str, json: &str) {
+        let dir = file_layout::instance_root(game_dir, id);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(file_layout::instance_json(game_dir, id), json).unwrap();
+    }
+
+    fn vanilla_json(id: &str) -> String {
+        format!(
+            r#"{{
+                "id": "{id}",
+                "type": "release",
+                "mainClass": "net.minecraft.client.main.Main",
+                "assetIndex": {{"id": "17", "url": "https://example.com/17.json", "sha1": "abc", "size": 1, "totalSize": 1}},
+                "downloads": {{"client": {{"url": "https://example.com/{id}.jar", "sha1": "def", "size": 2}}}},
+                "libraries": [{{"name": "com.mojang:test:1.0"}}],
+                "javaVersion": {{"majorVersion": 21}}
+            }}"#
+        )
+    }
+
+    #[test]
+    fn test_refresh_discovers_instances() {
+        let dir = temp_dir("refresh");
+        write_version(&dir, "1.20.4", &vanilla_json("1.20.4"));
+        let mut repo = DefaultGameRepository::new(dir.clone());
+        repo.refresh().unwrap();
+        assert!(repo.has_instance("1.20.4"));
+        assert_eq!(repo.get_instance_ids(), vec!["1.20.4".to_string()]);
+        // launcher_profiles.json created (Mojang/HMCL compat)
+        assert!(file_layout::launcher_profiles_path(&dir).exists());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_resolve_merges_inheritance_chain() {
+        let dir = temp_dir("chain");
+        write_version(&dir, "1.20.4", &vanilla_json("1.20.4"));
+        // Child (modded) inheriting from 1.20.4
+        write_version(
+            &dir,
+            "1.20.4-fabric",
+            &r#"{
+                "id": "1.20.4-fabric",
+                "type": "release",
+                "inheritsFrom": "1.20.4",
+                "patches": [{
+                    "id": "fabric",
+                    "version": "0.16.9",
+                    "priority": 30000,
+                    "mainClass": "net.fabricmc.loader.impl.launch.knot.KnotClient",
+                    "libraries": [{"name": "net.fabricmc:fabric-loader:0.16.9"}]
+                }]
+            }"#
+            .to_string(),
+        );
+        let mut repo = DefaultGameRepository::new(dir.clone());
+        repo.refresh().unwrap();
+
+        let resolved = repo.get_resolved("1.20.4-fabric").unwrap();
+        resolved.validate().unwrap();
+        assert_eq!(resolved.launch.main_class, "net.fabricmc.loader.impl.launch.knot.KnotClient");
+        assert_eq!(resolved.launch.inherits_from, None);
+        assert_eq!(resolved.launch.patches.len(), 0);
+        // parent library + patch library both present
+        let names: Vec<&str> = resolved.launch.libraries.iter().map(|l| l.name.as_str()).collect();
+        assert!(names.contains(&"com.mojang:test:1.0"));
+        assert!(names.contains(&"net.fabricmc:fabric-loader:0.16.9"));
+        // javaVersion inherited
+        assert_eq!(resolved.launch.java_version.as_ref().unwrap().major_version, 21);
+        // standalone keeps the patch list
+        assert_eq!(resolved.standalone.patches.len(), 1);
+        // base MC version resolution
+        assert_eq!(repo.get_game_version("1.20.4-fabric"), "1.20.4");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_resolve_cycle_detection() {
+        let dir = temp_dir("cycle");
+        write_version(
+            &dir,
+            "a",
+            &r#"{"id":"a","type":"release","inheritsFrom":"b"}"#.to_string(),
+        );
+        write_version(
+            &dir,
+            "b",
+            &r#"{"id":"b","type":"release","inheritsFrom":"a"}"#.to_string(),
+        );
+        let mut repo = DefaultGameRepository::new(dir.clone());
+        repo.refresh().unwrap();
+        // Cyclic pair is dropped from the index (chain_resolvable = false).
+        assert!(!repo.has_instance("a"));
+        assert!(!repo.has_instance("b"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_rename_and_duplicate() {
+        let dir = temp_dir("crud");
+        write_version(&dir, "1.20.4", &vanilla_json("1.20.4"));
+        let mut repo = DefaultGameRepository::new(dir.clone());
+        repo.refresh().unwrap();
+
+        repo.rename_instance("1.20.4", "1.20.4-copy").unwrap();
+        assert!(repo.has_instance("1.20.4-copy"));
+        assert!(!repo.has_instance("1.20.4"));
+
+        repo.duplicate_instance("1.20.4-copy", "1.20.4-dup").unwrap();
+        assert!(repo.has_instance("1.20.4-dup"));
+
+        repo.remove_instance("1.20.4-dup").unwrap();
+        assert!(!repo.has_instance("1.20.4-dup"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_isolation_run_directory() {
+        let dir = temp_dir("iso");
+        write_version(&dir, "1.20.4", &vanilla_json("1.20.4"));
+        let mut repo = DefaultGameRepository::new(dir.clone());
+        repo.refresh().unwrap();
+
+        assert_eq!(
+            repo.get_run_directory("1.20.4", IsolationType::Never),
+            dir
+        );
+        assert_eq!(
+            repo.get_run_directory("1.20.4", IsolationType::Always),
+            dir.join("versions").join("1.20.4")
+        );
+        // vanilla (no patches) → Modded does not isolate
+        assert_eq!(
+            repo.get_run_directory("1.20.4", IsolationType::Modded),
+            dir
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_patch_priority_ordering() {
+        let dir = temp_dir("priority");
+        write_version(&dir, "1.20.4", &vanilla_json("1.20.4"));
+        write_version(
+            &dir,
+            "1.20.4-modded",
+            &r#"{
+                "id": "1.20.4-modded",
+                "type": "release",
+                "inheritsFrom": "1.20.4",
+                "patches": [
+                    {"id": "high", "priority": 60000, "mainClass": "com.high.Main", "libraries": [{"name": "com.high:lib:1.0"}]},
+                    {"id": "low", "priority": 10000, "mainClass": "com.low.Main", "libraries": [{"name": "com.low:lib:1.0"}]}
+                ]
+            }"#
+            .to_string(),
+        );
+        let mut repo = DefaultGameRepository::new(dir.clone());
+        repo.refresh().unwrap();
+        let resolved = repo.get_resolved("1.20.4-modded").unwrap();
+        // highest priority wins for mainClass
+        assert_eq!(resolved.launch.main_class, "com.high.Main");
+        assert_eq!(resolved.launch.libraries.len(), 3); // vanilla + low + high
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+}

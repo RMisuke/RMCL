@@ -12,7 +12,7 @@
 
 pub mod provider;
 
-use rmccc_error::{RmcccError, Result};
+use rmccc_error::{Result, RmcccError};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
@@ -156,7 +156,13 @@ impl CacheRepository {
         if dest.exists() {
             return Ok(dest); // already cached
         }
-        std::fs::create_dir_all(dest.parent().unwrap())?;
+        let parent = dest.parent().ok_or_else(|| {
+            std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "Invalid cache destination path",
+            )
+        })?;
+        std::fs::create_dir_all(parent)?;
         std::fs::copy(src, &dest)?;
         Ok(dest)
     }
@@ -199,6 +205,29 @@ impl RetryConfig {
 }
 
 // ── Download Manager ──
+
+/// Trait for download managers — enables mocking and provider swapping.
+#[async_trait::async_trait]
+pub trait DownloadManager: Send + Sync {
+    /// Submit a batch of downloads.
+    async fn download_batch(
+        &self,
+        items: Vec<DownloadItem>,
+        progress: ProgressCallback,
+    ) -> Result<DownloadHandle>;
+
+    /// Wait for all downloads in a batch to complete.
+    async fn wait_for_batch(&self, batch_id: &str);
+
+    /// Cancel all downloads in a batch.
+    fn cancel_batch(&self, batch_id: &str);
+
+    /// Pause a batch.
+    fn pause(&self, batch_id: &str);
+
+    /// Resume a paused batch.
+    fn resume(&self, batch_id: &str);
+}
 
 pub struct ConcurrentDownloadManager {
     client: reqwest::Client,
@@ -318,14 +347,18 @@ impl ConcurrentDownloadManager {
                             }
 
                             let result = download_with_retry(
-                                &client, &item, retry_config_max_retries, cache.as_deref(),
+                                &client,
+                                &item,
+                                retry_config_max_retries,
+                                cache.as_deref(),
                             )
                             .await;
 
                             match result {
                                 Ok(bytes) => {
                                     let cf = completed_files.fetch_add(1, Ordering::Relaxed) + 1;
-                                    let db = downloaded_bytes.fetch_add(bytes, Ordering::Relaxed) + bytes;
+                                    let db = downloaded_bytes.fetch_add(bytes, Ordering::Relaxed)
+                                        + bytes;
                                     progress(DownloadProgress {
                                         batch_id: batch_id.clone(),
                                         completed_files: cf,
@@ -333,7 +366,9 @@ impl ConcurrentDownloadManager {
                                         downloaded_bytes: db,
                                         total_bytes,
                                         failed_files: failed_files.load(Ordering::Relaxed),
-                                        current_file: item.dest.file_name()
+                                        current_file: item
+                                            .dest
+                                            .file_name()
                                             .map(|n| n.to_string_lossy().to_string()),
                                     });
                                 }
@@ -417,6 +452,36 @@ impl ConcurrentDownloadManager {
     }
 }
 
+// P2-05：`DownloadManager` trait 落地——使 `ConcurrentDownloadManager` 可经
+// `Box<dyn DownloadManager>` / `Arc<dyn DownloadManager>` 注入与替换（便于 mock）。
+// 因 inherent 方法优先级高于 trait 方法，`self.*` 调用仍解析到 inherent 实现，无递归。
+#[async_trait::async_trait]
+impl DownloadManager for ConcurrentDownloadManager {
+    async fn download_batch(
+        &self,
+        items: Vec<DownloadItem>,
+        progress: ProgressCallback,
+    ) -> Result<DownloadHandle> {
+        self.download_batch(items, progress).await
+    }
+
+    async fn wait_for_batch(&self, batch_id: &str) {
+        self.wait_for_batch(batch_id).await;
+    }
+
+    fn cancel_batch(&self, batch_id: &str) {
+        self.cancel_batch(batch_id);
+    }
+
+    fn pause(&self, batch_id: &str) {
+        self.pause(batch_id);
+    }
+
+    fn resume(&self, batch_id: &str) {
+        self.resume(batch_id);
+    }
+}
+
 // ── Internal download logic ──
 
 /// Collect all URLs to try for an item: primary + candidates.
@@ -464,9 +529,7 @@ async fn download_with_retry(
         for attempt in 0..=max_retries {
             if attempt > 0 {
                 let delay = std::time::Duration::from_secs(2u64.pow(attempt - 1));
-                tracing::debug!(
-                    "Retry {attempt}/{max_retries} for {url} (candidate #{url_idx})"
-                );
+                tracing::debug!("Retry {attempt}/{max_retries} for {url} (candidate #{url_idx})");
                 tokio::time::sleep(delay).await;
             }
 
@@ -493,9 +556,7 @@ async fn download_with_retry(
                     return Ok(bytes);
                 }
                 Err(e) => {
-                    tracing::warn!(
-                        "Failed {url} (candidate #{url_idx}, attempt {attempt}): {e}"
-                    );
+                    tracing::warn!("Failed {url} (candidate #{url_idx}, attempt {attempt}): {e}");
                     if !e.is_retryable() || attempt == max_retries {
                         last_error = Some(e);
                         break; // Try next candidate
@@ -530,7 +591,10 @@ async fn download_single(
 
     // Check for partial file to resume
     let existing_size = if item.dest.exists() {
-        tokio::fs::metadata(&item.dest).await.map(|m| m.len()).unwrap_or(0)
+        tokio::fs::metadata(&item.dest)
+            .await
+            .map(|m| m.len())
+            .unwrap_or(0)
     } else {
         0
     };
@@ -541,7 +605,10 @@ async fn download_single(
         request = request.header("Range", format!("bytes={}-", existing_size));
     }
 
-    let response = request.send().await.map_err(|e| RmcccError::Network(e.to_string()))?;
+    let mut response = request
+        .send()
+        .await
+        .map_err(|e| RmcccError::Network(e.to_string()))?;
     let status = response.status();
     let is_resume = status.as_u16() == 206;
 
@@ -574,35 +641,70 @@ async fn download_single(
     if status.as_u16() == 416 && use_range {
         tracing::debug!("Range not supported for {url}, retrying full download");
         let _ = tokio::fs::remove_file(&item.dest).await;
-        let response = client.get(url).send().await
+        let mut response = client
+            .get(url)
+            .send()
+            .await
             .map_err(|e| RmcccError::Network(e.to_string()))?;
         let status = response.status();
         if !status.is_success() {
-            return Err(RmcccError::HttpStatus { status: status.as_u16(), url: url.to_string() });
+            return Err(RmcccError::HttpStatus {
+                status: status.as_u16(),
+                url: url.to_string(),
+            });
         }
-        let bytes = response.bytes().await.map_err(|e| RmcccError::Network(e.to_string()))?;
+        // P2-18：流式写入，避免整块读入内存
         let mut file = tokio::fs::File::create(&item.dest).await?;
-        file.write_all(&bytes).await?;
+        let mut downloaded: u64 = 0;
+        loop {
+            match response.chunk().await {
+                Ok(Some(chunk)) => {
+                    file.write_all(&chunk).await?;
+                    downloaded += chunk.len() as u64;
+                }
+                Ok(None) => break,
+                Err(e) => return Err(RmcccError::Network(e.to_string())),
+            }
+        }
         file.flush().await?;
-        return Ok(bytes.len() as u64);
+        return Ok(downloaded);
     }
 
     if !status.is_success() && !is_resume {
-        return Err(RmcccError::HttpStatus { status: status.as_u16(), url: url.to_string() });
+        return Err(RmcccError::HttpStatus {
+            status: status.as_u16(),
+            url: url.to_string(),
+        });
     }
 
-    let bytes = response.bytes().await.map_err(|e| RmcccError::Network(e.to_string()))?;
-
     let mut file = if is_resume {
-        tokio::fs::OpenOptions::new().append(true).open(&item.dest).await?
+        tokio::fs::OpenOptions::new()
+            .append(true)
+            .open(&item.dest)
+            .await?
     } else {
         tokio::fs::File::create(&item.dest).await?
     };
 
-    file.write_all(&bytes).await?;
+    // P2-18：流式写入（chunk），避免 assets 数百 MB 整块读入内存。
+    let mut downloaded: u64 = 0;
+    loop {
+        match response.chunk().await {
+            Ok(Some(chunk)) => {
+                file.write_all(&chunk).await?;
+                downloaded += chunk.len() as u64;
+            }
+            Ok(None) => break,
+            Err(e) => return Err(RmcccError::Network(e.to_string())),
+        }
+    }
     file.flush().await?;
 
-    Ok(if is_resume { existing_size + bytes.len() as u64 } else { bytes.len() as u64 })
+    Ok(if is_resume {
+        existing_size + downloaded
+    } else {
+        downloaded
+    })
 }
 
 async fn sha1_file(path: &Path) -> Result<String> {
@@ -616,7 +718,10 @@ async fn sha1_file(path: &Path) -> Result<String> {
 pub fn check_disk_space(dest: &Path, required_bytes: u64) -> Result<()> {
     let available = fs2::free_space(dest).map_err(|e| RmcccError::Other(e.to_string()))?;
     if available < required_bytes {
-        return Err(RmcccError::InsufficientDiskSpace { needed: required_bytes, available });
+        return Err(RmcccError::InsufficientDiskSpace {
+            needed: required_bytes,
+            available,
+        });
     }
     Ok(())
 }
@@ -628,10 +733,22 @@ mod tests {
     #[test]
     fn test_retry_delay() {
         let config = RetryConfig::default();
-        assert_eq!(config.delay_for_attempt(0), std::time::Duration::from_secs(1));
-        assert_eq!(config.delay_for_attempt(1), std::time::Duration::from_secs(2));
-        assert_eq!(config.delay_for_attempt(2), std::time::Duration::from_secs(4));
-        assert_eq!(config.delay_for_attempt(10), std::time::Duration::from_secs(30));
+        assert_eq!(
+            config.delay_for_attempt(0),
+            std::time::Duration::from_secs(1)
+        );
+        assert_eq!(
+            config.delay_for_attempt(1),
+            std::time::Duration::from_secs(2)
+        );
+        assert_eq!(
+            config.delay_for_attempt(2),
+            std::time::Duration::from_secs(4)
+        );
+        assert_eq!(
+            config.delay_for_attempt(10),
+            std::time::Duration::from_secs(30)
+        );
     }
 
     #[test]
