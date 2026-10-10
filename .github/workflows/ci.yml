@@ -1,0 +1,144 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+jobs:
+  # ── Fast checks: fmt + clippy + frontend typecheck ──
+  lint:
+    name: Lint & Typecheck
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Format check
+        run: cargo fmt --all -- --check
+
+      - name: Clippy (all targets)
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+      # P1-07：生产代码禁止 panic!/unwrap()，CI 硬门禁
+      - name: Clippy (production — panic/unwrap banned)
+        run: cargo clippy --workspace --lib --bins -- -D warnings -D clippy::panic -D clippy::unwrap_used
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install frontend deps
+        run: pnpm install --frozen-lockfile
+
+      - name: TypeScript typecheck
+        run: pnpm typecheck
+
+  # ── Cross-platform tests ──
+  test:
+    name: Test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    env:
+      # E2E 需 GUI/WebDriver，普通 test job 跳过（P2-23 由专用 e2e job 覆盖）
+      RMCCC_SKIP_E2E: "1"
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Install Linux system deps (Tauri)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
+
+      - name: Build check (workspace)
+        run: cargo check --workspace
+
+      - name: Run tests
+        run: cargo test --workspace
+
+      # P2-15：ts-rs 生成的 src/ipc/types.ts 必须与后端类型一致（字段变更后需重新生成并提交）
+      - name: Verify ts-rs bindings are up-to-date
+        run: |
+          cargo test -p rmccc --manifest-path src-tauri/Cargo.toml test_types_binding_up_to_date
+          if ! git diff --exit-code --quiet src/ipc/types.ts; then
+            echo "::error::src/ipc/types.ts 过期：字段/类型变更后需运行 ts-rs 导出并提交更新文件"
+            exit 1
+          fi
+
+      # P2-13：依赖漏洞扫描（cargo-audit）
+      - uses: taiki-e/install-action@cargo-audit
+      - name: Audit dependencies
+        run: cargo audit
+
+  # P2-23：E2E 冒烟测试（tauri-driver + WebDriver）。
+  # 需 GUI/WebDriver 环境，仅在 macos（原生带 Safari WebDriver 生态）运行；
+  # 无环境时由普通 test job 的 RMCCC_SKIP_E2E=1 兜底跳过。
+  e2e:
+    name: E2E (tauri-driver)
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - uses: Swatinem/rust-cache@v2
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install frontend deps
+        run: pnpm install --frozen-lockfile
+
+      - name: Build debug bundle
+        run: pnpm tauri build --debug
+
+      - name: Start tauri-driver (WebDriver server)
+        run: |
+          # 安装并后台启动 tauri-driver
+          cargo install tauri-driver --locked --version 2
+          nohup tauri-driver --port 4444 > /tmp/tauri-driver.log 2>&1 &
+          # 等待端口就绪
+          for i in $(seq 1 30); do
+            if curl -sf http://localhost:4444/status >/dev/null 2>&1; then break; fi
+            sleep 2
+          done
+
+      - name: Run E2E smoke test
+        run: |
+          cd src-tauri
+          cargo test --test e2e_smoke app_boots_and_serves_frontend
+        env:
+          TAURI_DRIVER_URL: "http://localhost:4444"
+          RMCCC_APP_URL: "http://localhost:1420"
+          RMCCC_RUN_E2E: "1"

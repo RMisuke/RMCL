@@ -34,15 +34,13 @@ sha2 = "0.10"
 aes-gcm = "0.10"
 rand = "0.8"
 base64 = "0.22"
-
-# Auth
-oauth2 = "5"
+md-5 = "0.10"
 
 # Archive
 zip = { version = "2", default-features = false, features = ["deflate"] }
 
 # Utilities
-uuid = { version = "1", features = ["v4", "v5"] }
+uuid = { version = "1", features = ["v3", "v4", "v5"] }
 chrono = { version = "0.4", features = ["serde"] }
 thiserror = "2"
 anyhow = "1"
@@ -66,8 +64,8 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 tracing-appender = "0.2"
 
-# Type bridge
-ts-rs = { version = "10", features = ["serde_json"] }
+# Type bridge (P2-15)：serde-json-impl + chrono-impl 用于 IPC 类型自动导出到前端 types.ts
+ts-rs = { version = "10", features = ["serde-json-impl", "chrono-impl"] }
 
 # Tauri
 tauri = { version = "2", features = ["tray-icon", "macos-private-api"] }
@@ -76,6 +74,7 @@ tauri-plugin-updater = "2"
 tauri-plugin-process = "2"
 tauri-plugin-window-state = "2"
 tauri-plugin-deep-link = "2"
+tauri-plugin-opener = "2"
 
 # Internal crates
 rmccc-error = { path = "crates/rmccc-error" }

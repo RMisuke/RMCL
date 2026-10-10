@@ -25,3 +25,6 @@ dist-ssr/
 *.swp
 *.swo
 *~
+
+# === 本地工具状态 ===
+.freebuff/

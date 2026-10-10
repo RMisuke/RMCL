@@ -1,0 +1,119 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  # P1-08 / P1-09：三平台打包 + macOS 签名/公证 + GitHub Release
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: macos-latest
+            args: --target aarch64-apple-darwin
+            name: macos-aarch64
+          - platform: macos-latest
+            args: --target x86_64-apple-darwin
+            name: macos-x86_64
+          - platform: ubuntu-22.04
+            args: ""
+            name: linux
+          - platform: windows-latest
+            args: ""
+            name: windows
+    runs-on: ${{ matrix.platform }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Add Rust targets (macOS cross)
+        if: startsWith(matrix.platform, 'macos')
+        run: rustup target add aarch64-apple-darwin x86_64-apple-darwin
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install Linux system deps (Tauri)
+        if: startsWith(matrix.platform, 'ubuntu')
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
+
+      - name: Install frontend deps
+        run: pnpm install --frozen-lockfile
+
+      # P1-09：macOS 由 TAURI_SIGNING_IDENTITY 自动签名（签名证书经 secrets 注入）
+      # P2-25：注入 updater 私钥路径，使产物带 updater 签名（tauri-action 生成 latest.json）
+      - name: Build bundle
+        run: pnpm tauri build ${{ matrix.args }}
+        env:
+          TAURI_SIGNING_IDENTITY: ${{ startsWith(matrix.platform, 'macos') && secrets.APPLE_SIGNING_IDENTITY || '' }}
+          TAURI_SIGNING_PRIVATE_KEY_PATH: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PATH || '/tmp/rmccc.key' }}
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: bundle-${{ matrix.name }}
+          path: src-tauri/target/release/bundle/**/*
+
+      # P1-09：macOS 公证（notarytool）并对 .app/.dmg 打 staple
+      - name: Notarize & staple (macOS)
+        if: startsWith(matrix.platform, 'macos')
+        shell: bash
+        env:
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          set -euo pipefail
+          bundle_dir="src-tauri/target/release/bundle"
+          if [ -d "$bundle_dir/macos" ]; then
+            # 公证 .app
+            for app in "$bundle_dir"/macos/*.app; do
+              [ -e "$app" ] || continue
+              zip_path="${app%.app}-notary.zip"
+              ditto -c -k --keepParent "$app" "$zip_path"
+              xcrun notarytool submit "$zip_path" \
+                --apple-id "$APPLE_ID" --password "$APPLE_PASSWORD" --team-id "$APPLE_TEAM_ID" \
+                --wait --timeout 20m
+              xcrun stapler staple "$app"
+              rm -f "$zip_path"
+            done
+            # 公证 .dmg
+            for dmg in "$bundle_dir"/macos/*.dmg; do
+              [ -e "$dmg" ] || continue
+              xcrun notarytool submit "$dmg" \
+                --apple-id "$APPLE_ID" --password "$APPLE_PASSWORD" --team-id "$APPLE_TEAM_ID" \
+                --wait --timeout 20m
+              xcrun stapler staple "$dmg"
+            done
+          fi
+
+      # P1-08：打 tag 自动发布 GitHub Release（tauri-action 上传全部 bundle）
+      # P2-25：注入 updater 私钥，使 tauri-action 生成带签名的 latest.json
+      - uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY_PATH: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PATH || '/tmp/rmccc.key' }}
+        with:
+          tagName: ${{ github.ref_name }}
+          releaseName: "RMCCC ${{ github.ref_name }}"
+          releaseBody: "RMCCC ${{ github.ref_name }} — 自动构建产物（macOS 已签名公证）"
+          releaseDraft: true
+          prerelease: false
