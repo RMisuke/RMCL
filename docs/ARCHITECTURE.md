@@ -1168,7 +1168,31 @@ pub mod events {
 // ts-rs exports them as TypeScript const enums for type safety.
 ```
 
-### 9.5 Virtual Scrolling
+### 9.5 Internationalisation
+
+界面文案全部经 `src/i18n/` 的 `t(key)` 取用，语言包在 `src/i18n/locales/`：
+
+| 文件 | 作用 |
+|------|------|
+| `locales/en.ts` | 参考语言包（`as const`）。`TranslationKey` 由它推导，因此其他语言包缺键/多键都会在 `pnpm typecheck` 时报错 |
+| `locales/zh-CN.ts` | 简体中文，类型为 `Messages = Record<TranslationKey, string>` |
+| `locales/index.ts` | 语言包注册表 + `normalizeLocale`（与 Rust 侧 `resolve_locale` 行为一致） |
+| `index.ts` | `t()`、`locale()`、`setLocale()`、`initI18n()`、系统语言探测 |
+
+**生效顺序**（`resolve_locale` 与 `normalizeLocale` 两侧同构）：
+
+1. `UserSettings.locale` 指定了语言 → 用它；
+2. 否则用 WebView 上报的系统语言（`navigator.languages`）；
+3. 系统语言不在支持列表内（如 `fr` / `ja`）→ 回退 `DEFAULT_LOCALE`（英语）。
+
+匹配按主语言子标签进行：`en-US` → `en`，`zh` / `zh-TW` / `zh-Hans-CN` → `zh-CN`。
+持久化值只会是 `None`（跟随系统）、`"en"` 或 `"zh-CN"`——后端 `settings_set_user`
+写入前会做规范化，未知标签降级为英语而不是报错。
+
+窗口 `visible: false`，`initI18n()` 在 `App.tsx` 里于 `show()` **之前**完成，
+所以首次绘制就是正确语言，不会闪一下英文。
+
+### 9.6 Virtual Scrolling
 
 Mod 搜索结果和下载列表使用虚拟滚动（前端可见行数固定，只渲染可视区域）：
 
@@ -1284,7 +1308,7 @@ User clicks "Launch" on a profile
 
 ## 11. IPC Command Table
 
-42 commands, all registered in `src-tauri/src/main.rs` `generate_handler!`.
+45 commands, all registered in `src-tauri/src/main.rs` `generate_handler!`.
 Definition count and registration count are verified equal (see
 `PROJECT_STATUS.md` §5.3).
 
@@ -1328,12 +1352,15 @@ Definition count and registration count are verified equal (see
 | `download_resume` | `download.rs` | Resume paused download batch |
 | `settings_get` | `settings.rs` | Get global settings |
 | `settings_set` | `settings.rs` | Update global settings (debounced `FileSaver` write) |
+| `settings_get_user` | `settings.rs` | Get user-level settings (UI language, update check) |
+| `settings_set_user` | `settings.rs` | Update user settings; `locale: ""` = follow the system |
+| `settings_supported_locales` | `settings.rs` | List shipped UI languages with their native names |
 | `java_detect` | `settings.rs` | Auto-detect Java installations |
 | `log_get` | `logs.rs` | Get recent launcher log lines |
 | `log_clear` | `logs.rs` | Clear/truncate log file |
 | `open_external_url` | `external.rs` | Open a URL in the system browser (deep-link) |
 
-> 前端现状：`src/ipc/api.ts` + 路由页共调用其中 33 个；`instance_*`（7 个）与
+> 前端现状：`src/ipc/api.ts` + 路由页共调用其中 36 个；`instance_*`（7 个）与
 > `modloader_*`（2 个）尚无 UI 入口。补齐前端见 `PROJECT_STATUS.md` §8 第 1 步。
 
 ## 12. Size Budget
