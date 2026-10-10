@@ -1,12 +1,16 @@
 [package]
 name = "rmccc-cli"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
-description = "RMCCC Command-Line Interface — Minecraft launcher CLI"
+description = "RMCCC Command-Line Interface — Minecraft launcher CLI (full backend surface)"
 
 [[bin]]
 name = "rmcli"
 path = "src/main.rs"
+
+[lib]
+name = "rmccc_cli"
+path = "src/lib.rs"
 
 [dependencies]
 rmccc-core = { workspace = true }
@@ -26,9 +30,18 @@ shlex = { workspace = true }
 tokio = { workspace = true }
 reqwest = { workspace = true }
 uuid = { workspace = true }
+serde = { workspace = true }
 serde_json = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 chrono = { workspace = true }
 anyhow = { workspace = true }
 sha1 = { workspace = true }
+dashmap = { workspace = true }
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+[dev-dependencies]
+# Local wiremock-style HTTP stub for mod/version flows without external network.
+# Implemented as a tiny std-only helper in tests/helpers to avoid extra deps.

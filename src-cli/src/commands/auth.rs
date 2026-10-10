@@ -1,100 +1,151 @@
-//! 认证命令处理。
+//! `auth` command handlers — Microsoft OAuth2 / offline account management.
 
+use crate::app::AuthAction;
 use crate::context::CliContext;
-use crate::AuthAction;
+use crate::error::{CliError, CliResult};
+use crate::output::Output;
+use rmccc_error::ErrorCode;
+use serde_json::{json, Value};
 
-pub async fn handle(ctx: CliContext, action: AuthAction) -> anyhow::Result<()> {
+pub async fn handle(ctx: &CliContext, out: &Output, action: AuthAction) -> CliResult<Value> {
     match action {
-        AuthAction::Login => login(ctx).await,
-        AuthAction::Logout => logout(ctx).await,
-        AuthAction::Refresh => refresh(ctx).await,
+        AuthAction::Login { ty, username } => login(ctx, out, &ty, username.as_deref()).await,
+        AuthAction::Logout { account } => logout(ctx, account.as_deref()).await,
+        AuthAction::Refresh { account } => refresh(ctx, account.as_deref()).await,
         AuthAction::Status => status(ctx).await,
+        AuthAction::List => list(ctx).await,
+        AuthAction::Select { account } => select(ctx, &account).await,
     }
 }
 
-async fn login(ctx: CliContext) -> anyhow::Result<()> {
-    use std::io::{self, Write};
-
-    println!("登录方式:");
-    println!("  1. Microsoft 正版登录（推荐）");
-    println!("  2. 离线登录");
-    print!("请选择 [1]: ");
-    io::stdout().flush()?;
-
-    let mut input = String::new();
-    io::stdin().read_line(&mut input)?;
-    let choice = input.trim();
-
-    match choice {
-        "2" => {
-            print!("用户名: ");
-            io::stdout().flush()?;
-            let mut username = String::new();
-            io::stdin().read_line(&mut username)?;
-            let username = username.trim();
-            if username.is_empty() {
-                anyhow::bail!("用户名不能为空");
-            }
-            let session = ctx.auth_login_offline(username).await?;
-            println!("✓ 已以离线模式登录: '{}'", session.username);
-            println!("  UUID: {}", session.uuid);
+async fn login(ctx: &CliContext, out: &Output, ty: &str, username: Option<&str>) -> CliResult<Value> {
+    match ty.to_ascii_lowercase().as_str() {
+        "offline" => {
+            let name = username
+                .filter(|n| !n.trim().is_empty())
+                .ok_or_else(|| {
+                    CliError::new(
+                        ErrorCode::ValidationError,
+                        "offline login requires --username <name>",
+                    )
+                })?;
+            let session = ctx.auth_login_offline(name).await?;
+            out.note(&format!("Logged in as offline player '{name}'"));
+            Ok(json!({
+                "provider": session.provider,
+                "username": session.username,
+                "uuid": session.uuid,
+                "account_id": session.account_id,
+            }))
         }
-        _ => {
-            println!("正在启动 Microsoft OAuth2 设备码登录流程...");
-            println!("浏览器将自动打开，请按照页面提示操作。");
-            let session = ctx.auth_login_microsoft().await?;
-            println!("✓ 已以 Microsoft 账户登录: '{}'", session.username);
-            println!("  UUID: {}", session.uuid);
-        }
-    }
-
-    Ok(())
-}
-
-async fn logout(ctx: CliContext) -> anyhow::Result<()> {
-    ctx.auth_logout().await?;
-    println!("✓ 已成功登出");
-    Ok(())
-}
-
-async fn refresh(ctx: CliContext) -> anyhow::Result<()> {
-    match ctx.auth_refresh().await? {
-        Some(session) => {
-            println!("✓ 令牌已刷新: '{}'", session.username);
-        }
-        None => {
-            println!("✗ 没有可刷新的活跃会话");
-        }
-    }
-    Ok(())
-}
-
-async fn status(ctx: CliContext) -> anyhow::Result<()> {
-    match ctx.auth_get_session().await? {
-        Some(session) => {
-            println!("登录方式:  {}", session.provider);
-            println!("用户名:    {}", session.username);
-            println!("UUID:      {}", session.uuid);
-            if let Some(exp) = session.expires_at {
-                let now = chrono::Utc::now();
-                if exp > now {
-                    let remaining = exp - now;
-                    println!(
-                        "过期时间:  {} (剩余 {} 小时 {} 分钟)",
-                        exp,
-                        remaining.num_hours(),
-                        remaining.num_minutes() % 60
-                    );
-                } else {
-                    println!("过期时间:  {} (已过期)", exp);
+        "microsoft" => {
+            out.note("Starting Microsoft OAuth2 device-code flow...");
+            let progress_out = out.clone();
+            let progress: rmccc_auth::ProgressCallback = Box::new(move |p| {
+                if let rmccc_auth::AuthProgress::DeviceCode {
+                    user_code,
+                    verification_uri,
+                } = p
+                {
+                    progress_out.note(&format!(
+                        "Open {} and enter the code {}",
+                        verification_uri, user_code
+                    ));
                 }
-            } else {
-                println!("过期时间:  永不过期（离线模式）");
-            }
+            });
+            let session = ctx.auth_login_microsoft(Some(progress)).await?;
+            out.note(&format!(
+                "Logged in as Microsoft account '{}'",
+                session.username
+            ));
+            Ok(json!({
+                "provider": session.provider,
+                "username": session.username,
+                "uuid": session.uuid,
+                "account_id": session.account_id,
+                "expires_at": session.expires_at,
+            }))
+        }
+        other => Err(CliError::new(
+            ErrorCode::ValidationError,
+            format!("Unknown login type '{other}' (expected 'microsoft' or 'offline')"),
+        )),
+    }
+}
+
+async fn logout(ctx: &CliContext, account: Option<&str>) -> CliResult<Value> {
+    match account {
+        Some(id) => {
+            ctx.auth_logout_account(id).await?;
+            Ok(json!({ "logged_out": id }))
         }
         None => {
-            println!("未登录");
+            let active = ctx.auth_status().await?;
+            match active {
+                Some(s) => {
+                    ctx.auth_logout().await?;
+                    Ok(json!({ "logged_out": s.account_id, "username": s.username }))
+                }
+                None => Ok(json!({ "logged_out": Value::Null, "note": "no active account" })),
+            }
         }
     }
-    Ok(())
+}
+
+async fn refresh(ctx: &CliContext, account: Option<&str>) -> CliResult<Value> {
+    let session = match account {
+        Some(id) => ctx.auth_refresh_account(id).await?,
+        None => ctx.auth_refresh().await?,
+    };
+    match session {
+        Some(s) => Ok(json!({
+            "refreshed": true,
+            "provider": s.provider,
+            "username": s.username,
+            "account_id": s.account_id,
+            "expires_at": s.expires_at,
+        })),
+        None => Ok(json!({ "refreshed": false, "reason": "no_active_session" })),
+    }
+}
+
+async fn status(ctx: &CliContext) -> CliResult<Value> {
+    match ctx.auth_status().await? {
+        Some(s) => Ok(json!({
+            "logged_in": true,
+            "provider": s.provider,
+            "username": s.username,
+            "uuid": s.uuid,
+            "account_id": s.account_id,
+            "expires_at": s.expires_at,
+        })),
+        None => Ok(json!({ "logged_in": false })),
+    }
+}
+
+async fn list(ctx: &CliContext) -> CliResult<Value> {
+    let accounts = ctx.auth_list().await?;
+    let active = ctx
+        .auth_status()
+        .await?
+        .map(|s| s.account_id)
+        .unwrap_or_default();
+    let items: Vec<Value> = accounts
+        .iter()
+        .map(|m| {
+            json!({
+                "account_id": m.account_id,
+                "provider": m.r#type,
+                "username": m.profile_name,
+                "uuid": m.profile_id,
+                "active": m.account_id == active,
+            })
+        })
+        .collect();
+    Ok(json!({ "accounts": items, "count": items.len() }))
+}
+
+async fn select(ctx: &CliContext, account: &str) -> CliResult<Value> {
+    ctx.auth_select(account).await?;
+    Ok(json!({ "selected": account }))
 }

@@ -43,8 +43,10 @@ async fn create(
     println!("  内存:           {} MB", profile.memory_mb);
     println!("  游戏目录:       {}", profile.game_dir.display());
     println!();
-    println!("提示: 运行 'rmcli resource download -i {} -v {}' 来下载游戏文件",
-             profile.id, profile.game_version);
+    println!(
+        "提示: 运行 'rmcli resource download -i {} -v {}' 来下载游戏文件",
+        profile.id, profile.game_version
+    );
 
     Ok(())
 }
@@ -59,7 +61,10 @@ async fn list(ctx: CliContext) -> anyhow::Result<()> {
     }
 
     println!("游戏实例列表:");
-    println!("{:<38} {:<20} {:<15} {:<12}", "ID", "名称", "版本", "最后游玩");
+    println!(
+        "{:<38} {:<20} {:<15} {:<12}",
+        "ID", "名称", "版本", "最后游玩"
+    );
     println!("{}", "-".repeat(90));
 
     for p in &profiles {
@@ -72,13 +77,16 @@ async fn list(ctx: CliContext) -> anyhow::Result<()> {
             .unwrap_or_else(|| "从未".to_string());
 
         let loader_info = match &p.mod_loader {
-            Some(ml) => ml.loader_type.clone(),
+            Some(ml) => ml.loader_type.library_id().to_string(),
             None => "原版".to_string(),
         };
 
         println!(
             "{:<38} {:<20} {:<15} {:<12}",
-            p.id, p.name, format!("{} ({})", p.game_version, loader_info), last_played
+            p.id,
+            p.name,
+            format!("{} ({})", p.game_version, loader_info),
+            last_played
         );
     }
 
