@@ -1,97 +1,90 @@
 //! Launch IPC commands.
+//!
+//! Orchestration only — the actual launch pipeline (command-line generation,
+//! native extraction, log4j, process spawning and monitoring) lives in
+//! [`rmccc_launch::DefaultLauncher`] (HMCL `DefaultLauncher`). This module:
+//! - resolves the profile + local launch manifest,
+//! - runs the pre-launch completeness check & auto-repair (HMCL
+//!   `checkGameCompletionAsync`),
+//! - builds a [`rmccc_launch::ProcessListener`] forwarding game events to the UI,
+//! - guards against duplicate / excessive concurrent launches.
 
 use crate::state::AppState;
+use rmccc_auth::Account;
 use rmccc_error::IpcError;
-use rmccc_launch::{find_java, LaunchArgBuilder};
-use rmccc_version::{libraries, MojangVersionProvider, VersionProvider};
+use rmccc_launch::{find_java, LaunchOptions};
+use rmccc_version::GameRepository as _;
+use rmccc_version::GameVersion;
+use std::path::PathBuf;
+use std::sync::Arc;
 use tauri::Emitter;
 
-/// Validate that the game directory and key files exist before launching.
-fn validate_launch_readiness(game_dir: &std::path::Path, version_id: &str) -> Result<(), IpcError> {
-    // Ensure game directory exists
-    if !game_dir.exists() {
-        return Err(IpcError {
-            code: rmccc_error::ErrorCode::ProfileNotFound,
-            message: format!(
-                "Game directory does not exist: {}. Install the version first.",
-                game_dir.display()
-            ),
-            retryable: false,
-        });
-    }
-
-    // Ensure client JAR exists
-    let client_jar = game_dir
-        .join("versions")
-        .join(version_id)
-        .join(format!("{version_id}.jar"));
-    if !client_jar.exists() {
-        return Err(IpcError {
-            code: rmccc_error::ErrorCode::DownloadFailed,
-            message: format!(
-                "Client JAR not found: {}. Install version {} first.",
-                client_jar.display(),
-                version_id
-            ),
-            retryable: false,
-        });
-    }
-
-    Ok(())
+/// Result of the profile + version resolution phase.
+struct ResolvedLaunch {
+    profile: rmccc_profile::Profile,
+    game_version: GameVersion,
+    required_java: u32,
 }
 
-#[tauri::command]
-#[tracing::instrument(skip(state))]
-pub async fn launch_start(
-    state: tauri::State<'_, AppState>,
-    profile_id: String,
-) -> Result<(), IpcError> {
-    // ── Check not already running FIRST (TOCTOU fix) ──
-    if state.running_games.contains_key(&profile_id) {
-        return Err(IpcError {
-            code: rmccc_error::ErrorCode::AlreadyRunning,
-            message: format!("Profile '{profile_id}' is already running"),
+/// Auth credentials extracted for the game launch.
+struct LaunchAuth {
+    username: String,
+    uuid: String,
+    access_token: String,
+    user_type: String,
+}
+
+/// Phase 1: Load profile from store and resolve game version metadata.
+///
+/// Resolves **locally** from the [`GameRepository`] (offline-capable) instead of
+/// the network `fetch_version` — the patched / inherited manifest written to
+/// disk is the source of truth for launching.
+async fn resolve_launch_profile(
+    state: &AppState,
+    profile_id: &str,
+) -> Result<ResolvedLaunch, IpcError> {
+    let core = state.core.read().await;
+    let profile = core
+        .profile_store
+        .get(profile_id)?
+        .ok_or_else(|| IpcError {
+            code: rmccc_error::ErrorCode::ProfileNotFound,
+            message: format!("Profile not found: {profile_id}"),
             retryable: false,
-        });
-    }
+        })?;
 
-    // ── Load profile (short lock) ──
-    let (profile, game_version, required_java) = {
-        let core = state.core.read().await;
-        let profile = core
-            .profile_store
-            .get(&profile_id)?
-            .ok_or_else(|| IpcError {
-                code: rmccc_error::ErrorCode::ProfileNotFound,
-                message: format!("Profile not found: {profile_id}"),
-                retryable: false,
-            })?;
-
-        // Fetch version metadata
-        let provider = MojangVersionProvider::new(state.http_client.clone());
-        let game_version = provider.fetch_version(&profile.game_version).await?;
-
-        let required_java = game_version
-            .java_version
-            .as_ref()
-            .map(|j| j.major_version)
-            .unwrap_or_else(|| rmccc_version::java_version_for_mc(&profile.game_version));
-
-        (profile, game_version, required_java)
+    // 从本地仓库解析（启动数据源 = 磁盘，而非网络）
+    let resolved = {
+        let repo = core
+            .game_repository
+            .read()
+            .map_err(|_| rmccc_error::RmcccError::Other("game repository lock poisoned".into()))?;
+        repo.get_resolved(&profile.game_version)
+            .map_err(|e| rmccc_error::RmcccError::Other(e.to_string()))?
     };
+    let game_version = resolved.launch;
 
-    // ── Validate launch readiness ──
-    validate_launch_readiness(&profile.game_dir, &profile.game_version)?;
+    let required_java = game_version
+        .java_version
+        .as_ref()
+        .map(|j| j.major_version)
+        .unwrap_or_else(|| rmccc_version::java_version_for_mc(&profile.game_version));
 
-    // ── Ensure game directories exist ──
-    for subdir in &["assets", "libraries", "versions"] {
-        std::fs::create_dir_all(profile.game_dir.join(subdir))?;
-    }
+    Ok(ResolvedLaunch {
+        profile,
+        game_version,
+        required_java,
+    })
+}
 
-    // ── Detect Java (no lock needed) ──
-    let java_install = match &profile.java_path {
+/// Phase 3: Detect Java installation (custom path or auto-detect).
+fn detect_java(
+    profile: &rmccc_profile::Profile,
+    required_java: u32,
+) -> Result<rmccc_launch::JavaInstallation, IpcError> {
+    match &profile.java_path {
         Some(java_home) => {
-            let home = std::path::PathBuf::from(java_home);
+            let home = PathBuf::from(java_home);
             let java_bin = if home.is_file() {
                 home.clone()
             } else {
@@ -104,16 +97,119 @@ pub async fn launch_start(
                     retryable: false,
                 });
             }
-            rmccc_launch::JavaInstallation {
+            Ok(rmccc_launch::JavaInstallation {
                 path: java_bin,
                 major_version: required_java,
                 vendor: String::new(),
                 is_64bit: true,
-            }
+            })
         }
-        None => find_java(required_java)?,
-    };
+        None => find_java(required_java).map_err(IpcError::from),
+    }
+}
 
+/// Phase 5: Load auth session with offline fallback.
+async fn resolve_auth_session(state: &AppState) -> Result<LaunchAuth, IpcError> {
+    let core = state.core.read().await;
+    // 统一经 Account::log_in() 获取 AuthInfo（提前窗口 + 刷新 + uuid 一致性校验）。
+    match core.log_in_active_account().await? {
+        Some(info) => Ok(LaunchAuth {
+            username: info.username,
+            uuid: info.uuid,
+            access_token: info.access_token,
+            user_type: info.user_type,
+        }),
+        // 无账户回退到默认离线账户（对齐 HMCL：msa + 随机 token）。
+        None => {
+            let info = rmccc_auth::OfflineAccount::new("Player").play_offline();
+            Ok(LaunchAuth {
+                username: info.username,
+                uuid: info.uuid,
+                access_token: info.access_token,
+                user_type: info.user_type,
+            })
+        }
+    }
+}
+
+/// Forwards game process events to the UI (HMCL `ProcessListener`).
+///
+/// `on_log` → `LAUNCH_OUTPUT`; `on_exit` → `LAUNCH_EXITED` (with exit type)
+/// and removes the profile from `running_games`.
+struct TauriProcessListener {
+    app_handle: tauri::AppHandle,
+    profile_id: String,
+    running_games: Arc<dashmap::DashMap<String, u32>>,
+}
+
+impl rmccc_launch::ProcessListener for TauriProcessListener {
+    fn on_log(&self, line: String, _is_stderr: bool) {
+        let _ = self.app_handle.emit(
+            crate::events::LAUNCH_OUTPUT,
+            serde_json::json!({ "profile_id": self.profile_id, "text": line }),
+        );
+    }
+
+    fn on_exit(&self, exit_code: i32, exit_type: rmccc_launch::ExitType) {
+        self.running_games.remove(&self.profile_id);
+        let _ = self.app_handle.emit(
+            crate::events::LAUNCH_EXITED,
+            serde_json::json!({
+                "profile_id": self.profile_id,
+                "exit_code": exit_code,
+                "exit_type": format!("{:?}", exit_type),
+            }),
+        );
+        tracing::info!(
+            profile_id = %self.profile_id,
+            exit_code = exit_code,
+            exit_type = ?exit_type,
+            "Game process exited"
+        );
+    }
+}
+
+#[tauri::command]
+#[tracing::instrument(skip(state), fields(request_id = %uuid::Uuid::new_v4()))]
+pub async fn launch_start(
+    state: tauri::State<'_, AppState>,
+    profile_id: String,
+) -> Result<(), IpcError> {
+    // ── Guard: prevent duplicate launch ──
+    if state.running_games.contains_key(&profile_id) {
+        return Err(IpcError {
+            code: rmccc_error::ErrorCode::AlreadyRunning,
+            message: format!("Profile '{profile_id}' is already running"),
+            retryable: false,
+        });
+    }
+
+    // ── Guard: concurrent launch limit ──
+    const MAX_CONCURRENT_GAMES: usize = 3;
+    if state.running_games.len() >= MAX_CONCURRENT_GAMES {
+        return Err(IpcError {
+            code: rmccc_error::ErrorCode::ValidationError,
+            message: format!(
+                "Already running {} game(s). Maximum {} concurrent launches allowed.",
+                state.running_games.len(),
+                MAX_CONCURRENT_GAMES
+            ),
+            retryable: false,
+        });
+    }
+
+    // ── Phase 1: Resolve profile & version (offline local) ──
+    let resolved = resolve_launch_profile(&state, &profile_id).await?;
+
+    // ── Phase 2: Pre-launch completeness check & auto-repair (L5) ──
+    {
+        let core = state.core.read().await;
+        let _repaired =
+            rmccc_core::pipeline::ensure_launch_ready(&core, &resolved.profile, None).await?;
+    }
+
+    // ── Phase 3: Detect Java ──
+    let java_install = detect_java(&resolved.profile, resolved.required_java)?;
     tracing::info!(
         profile_id = %profile_id,
         java_version = java_install.major_version,
@@ -121,196 +217,49 @@ pub async fn launch_start(
         "Launching Minecraft"
     );
 
-    // ── Build classpath ──
-    let libs_dir = profile.game_dir.join("libraries");
-    let mut classpath = libraries::collect_classpath(&game_version.libraries, &libs_dir);
-    let client_jar = profile
-        .game_dir
-        .join("versions")
-        .join(&profile.game_version)
-        .join(format!("{}.jar", profile.game_version));
-    classpath.push(client_jar);
-
-    // ── Load auth session with proper fallback ──
-    let (username, uuid, access_token, user_type) = {
-        let data_dir = {
-            let core = state.core.read().await;
-            core.config.resolved_data_dir()
-        };
-        let auth_path = data_dir.join("auth.json");
-        let vault = state.vault.lock().await;
-        match vault.load_session(&auth_path)? {
-            Some(session) => {
-                let ut = if session.provider == "microsoft" {
-                    "msa"
-                } else {
-                    "legacy"
-                };
-                (session.username, session.uuid, session.access_token, ut.to_string())
-            }
-            None => {
-                // No session at all — offline fallback
-                let name = "Player".to_string();
-                let uid = rmccc_auth::OfflineAuthProvider::uuid_from_username(&name);
-                // Minecraft expects "0" as the offline access token, not a random UUID
-                (name, uid, "0".to_string(), "legacy".to_string())
-            }
-        }
-    };
-
+    // ── Phase 4: Resolve auth ──
+    let auth = resolve_auth_session(&state).await?;
+    let auth_info = rmccc_launch::AuthInfo::new(
+        auth.username,
+        auth.uuid,
+        auth.access_token,
+        auth.user_type,
+    );
     tracing::info!(
-        username = %username,
-        uuid = %uuid,
-        user_type = %user_type,
+        username = %auth_info.username,
+        uuid = %auth_info.uuid,
+        user_type = %auth_info.user_type,
         "Using auth session for launch"
     );
 
-    // Determine version type string
-    let version_type = match game_version.release_type {
-        rmccc_version::ReleaseType::Release => "release",
-        rmccc_version::ReleaseType::Snapshot => "snapshot",
-        rmccc_version::ReleaseType::OldBeta => "old_beta",
-        rmccc_version::ReleaseType::OldAlpha => "old_alpha",
-    };
-
-    let natives_dir = profile.game_dir.join("versions").join(&profile.game_version).join("natives");
-    let jvm_args = LaunchArgBuilder::jvm_args(
-        &classpath,
-        profile.memory_mb,
-        &profile.jvm_args,
-        &[], // TODO: resolve version JSON JVM args
-        &natives_dir,
-        &profile.game_dir,
-        "RMCL",
-        env!("CARGO_PKG_VERSION"),
-        java_install.major_version,
-        java_install.is_64bit,
-    );
-    let game_args = LaunchArgBuilder::game_args(
-        &profile.game_version,
-        &profile.game_dir,
-        &username,
-        &uuid,
-        &access_token,
-        &user_type,
-        &game_version.asset_index.id,
-        version_type,
-        &profile.game_args,
+    // ── Phase 5: Build options + launcher (HMCL DefaultLauncher) ──
+    let options = LaunchOptions::from_profile(&resolved.profile, java_install.clone());
+    let listener: Arc<dyn rmccc_launch::ProcessListener> = Arc::new(TauriProcessListener {
+        app_handle: state.app_handle.clone(),
+        profile_id: profile_id.clone(),
+        running_games: state.running_games.clone(),
+    });
+    let launcher = rmccc_launch::DefaultLauncher::new(
+        resolved.profile.game_version.clone(),
+        resolved.profile.game_dir.clone(),
+        resolved.game_version,
+        auth_info,
+        options,
+        Some(listener),
     );
 
-    // ── Response file ──
-    let response_file = rmccc_launch::build_response_file(
-        &jvm_args,
-        &game_args,
-        &game_version.main_class,
-        &profile.game_dir,
-    )?;
+    // ── Phase 6: Launch (natives + log4j + spawn + monitors) ──
+    let managed = launcher
+        .launch()
+        .await
+        .map_err(|e| IpcError::from(rmccc_error::RmcccError::Other(e.to_string())))?;
 
-    // ── Spawn game process ──
-    let mut child = rmccc_launch::spawn_game(
-        &java_install.path,
-        &response_file,
-        &profile.game_dir,
-        None,
-    )
-    .await?;
-
-    let pid = child.id().unwrap_or(0);
-    let app_handle = state.app_handle.clone();
-    let profile_id_clone = profile_id.clone();
-    let running_games = state.running_games.clone();
-
-    // Track running game
-    running_games.insert(profile_id.clone(), pid);
-
-    // Emit launch started
-    let _ = app_handle.emit(
+    let pid = managed.pid();
+    state.running_games.insert(profile_id.clone(), pid);
+    let _ = state.app_handle.emit(
         crate::events::LAUNCH_STARTED,
         serde_json::json!({ "profile_id": profile_id, "pid": pid }),
     );
-
-    // ── Spawn output reader + process monitor (drains BOTH stdout and stderr) ──
-    tokio::spawn(async move {
-        use tokio::io::AsyncReadExt;
-
-        // Spawn stderr drainer
-        let app_handle_stderr = app_handle.clone();
-        let pid_stderr = profile_id_clone.clone();
-        let stderr_handle = if let Some(mut stderr) = child.stderr.take() {
-            Some(tokio::spawn(async move {
-                let mut buf = [0u8; 4096];
-                loop {
-                    match stderr.read(&mut buf).await {
-                        Ok(0) => break,
-                        Ok(n) => {
-                            let _ = app_handle_stderr.emit(
-                                crate::events::LAUNCH_OUTPUT,
-                                serde_json::json!({
-                                    "profile_id": pid_stderr,
-                                    "text": String::from_utf8_lossy(&buf[..n]),
-                                }),
-                            );
-                        }
-                        Err(_) => break,
-                    }
-                }
-            }))
-        } else {
-            None
-        };
-
-        // Read stdout
-        if let Some(mut stdout) = child.stdout.take() {
-            let mut buf = [0u8; 4096];
-            loop {
-                match stdout.read(&mut buf).await {
-                    Ok(0) => break,
-                    Ok(n) => {
-                        let _ = app_handle.emit(
-                            crate::events::LAUNCH_OUTPUT,
-                            serde_json::json!({
-                                "profile_id": profile_id_clone,
-                                "text": String::from_utf8_lossy(&buf[..n]),
-                            }),
-                        );
-                    }
-                    Err(e) => {
-                        tracing::error!("stdout read error: {e}");
-                        break;
-                    }
-                }
-            }
-        }
-
-        // Wait for stderr drainer
-        if let Some(handle) = stderr_handle {
-            handle.await.ok();
-        }
-
-        // Wait for process exit
-        let status = child.wait().await;
-        let exit_code = status.ok().and_then(|s| s.code()).unwrap_or(-1);
-
-        // Clean up running_games
-        running_games.remove(&profile_id_clone);
-
-        // Clean up response file
-        let _ = std::fs::remove_file(&response_file);
-
-        let _ = app_handle.emit(
-            crate::events::LAUNCH_EXITED,
-            serde_json::json!({
-                "profile_id": profile_id_clone,
-                "exit_code": exit_code,
-            }),
-        );
-
-        tracing::info!(
-            profile_id = %profile_id_clone,
-            exit_code = exit_code,
-            "Game process exited"
-        );
-    });
 
     // ── Update last_played ──
     let core = state.core.read().await;
@@ -330,10 +279,10 @@ pub async fn launch_kill(
         tracing::info!(profile_id = %profile_id, pid = pid, "Killing game process");
 
         #[cfg(unix)]
-        // SAFETY: kill(pid, SIGKILL) is well-defined for valid PIDs obtained from
-        // tokio::process::Child::id(), which returns the OS-allocated process ID.
+        // SAFETY: kill(-pid, SIGKILL) 向 pid 所在进程组发信号。进程组由
+        // spawn_game 的 process_group(0) 建立，可同时终止 Java 及其子进程树（P2-17）。
         unsafe {
-            libc::kill(pid as libc::pid_t, libc::SIGKILL);
+            libc::kill(-(pid as libc::pid_t), libc::SIGKILL);
         }
         #[cfg(windows)]
         {
@@ -348,9 +297,11 @@ pub async fn launch_kill(
 
 #[tauri::command]
 #[tracing::instrument(skip(state))]
-pub async fn launch_status(
-    state: tauri::State<'_, AppState>,
-) -> Result<Vec<String>, IpcError> {
-    let keys: Vec<String> = state.running_games.iter().map(|r| r.key().clone()).collect();
+pub async fn launch_status(state: tauri::State<'_, AppState>) -> Result<Vec<String>, IpcError> {
+    let keys: Vec<String> = state
+        .running_games
+        .iter()
+        .map(|r| r.key().clone())
+        .collect();
     Ok(keys)
 }

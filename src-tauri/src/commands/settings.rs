@@ -4,9 +4,11 @@ use crate::state::AppState;
 use rmccc_config::AppConfig;
 use rmccc_error::IpcError;
 use serde::{Deserialize, Serialize};
+use ts_rs::TS;
 
 /// Serializable Java installation info for the frontend.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, TS)]
+#[ts(export_to = "types.ts")]
 pub struct JavaInfo {
     pub path: String,
     pub major_version: u32,
@@ -15,7 +17,8 @@ pub struct JavaInfo {
 }
 
 /// Settings update payload from frontend.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, TS)]
+#[ts(export_to = "types.ts")]
 pub struct SettingsUpdate {
     pub game_root_dir: Option<String>,
     pub default_java_path: Option<String>,
@@ -27,9 +30,7 @@ pub struct SettingsUpdate {
 
 #[tauri::command]
 #[tracing::instrument(skip(state))]
-pub async fn settings_get(
-    state: tauri::State<'_, AppState>,
-) -> Result<AppConfig, IpcError> {
+pub async fn settings_get(state: tauri::State<'_, AppState>) -> Result<AppConfig, IpcError> {
     let core = state.core.read().await;
     Ok(core.config.clone())
 }
@@ -89,17 +90,18 @@ pub async fn settings_set(
         core.config.mirror_url = if m.is_empty() { None } else { Some(m) };
     }
 
+    // P4：经 FileSaver 防抖写盘（200ms 合并连续 settings_set），退出时统一 flush。
     let data_dir = core.config.resolved_data_dir();
-    core.config.save(&data_dir)?;
+    let path = rmccc_config::paths::launcher_settings_path(&data_dir);
+    let content = serde_json::to_string_pretty(&core.config)?;
+    core.file_saver.save(path, content);
 
     Ok(core.config.clone())
 }
 
 #[tauri::command]
 #[tracing::instrument(skip(_state))]
-pub async fn java_detect(
-    _state: tauri::State<'_, AppState>,
-) -> Result<Vec<JavaInfo>, IpcError> {
+pub async fn java_detect(_state: tauri::State<'_, AppState>) -> Result<Vec<JavaInfo>, IpcError> {
     let installations = rmccc_launch::detect_java_installations();
     let infos: Vec<JavaInfo> = installations
         .into_iter()

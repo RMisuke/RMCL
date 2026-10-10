@@ -4,8 +4,10 @@ use crate::state::AppState;
 use rmccc_error::IpcError;
 use rmccc_profile::Profile;
 use serde::Deserialize;
+use ts_rs::TS;
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, TS)]
+#[ts(export_to = "types.ts")]
 pub struct ProfileUpdateOpts {
     pub name: Option<String>,
     pub game_version: Option<String>,
@@ -18,9 +20,7 @@ pub struct ProfileUpdateOpts {
 
 #[tauri::command]
 #[tracing::instrument(skip(state))]
-pub async fn profile_list(
-    state: tauri::State<'_, AppState>,
-) -> Result<Vec<Profile>, IpcError> {
+pub async fn profile_list(state: tauri::State<'_, AppState>) -> Result<Vec<Profile>, IpcError> {
     let core = state.core.read().await;
     let profiles = core.profile_store.list()?;
     Ok(profiles)
@@ -33,24 +33,43 @@ pub async fn profile_create(
     name: String,
     game_version: String,
 ) -> Result<Profile, IpcError> {
+    if name.trim().is_empty() {
+        return Err(IpcError {
+            code: rmccc_error::ErrorCode::ValidationError,
+            message: "Profile name cannot be empty".into(),
+            retryable: false,
+        });
+    }
+    if name.len() > 64 {
+        return Err(IpcError {
+            code: rmccc_error::ErrorCode::ValidationError,
+            message: format!("Profile name too long (max 64, got {})", name.len()),
+            retryable: false,
+        });
+    }
+
     let id = uuid::Uuid::new_v4().to_string();
 
     let core = state.core.read().await;
     let game_dir = core.config.profile_game_dir(&id);
 
+    // P3-03：防御性校验 game_dir 必须位于 game_root 之下（防配置异常导致目录逃逸）。
+    let game_root = core.config.resolved_game_root();
+    if !game_dir.starts_with(&game_root) {
+        return Err(IpcError {
+            code: rmccc_error::ErrorCode::ValidationError,
+            message: format!("Profile game_dir {game_dir:?} escapes game_root {game_root:?}",),
+            retryable: false,
+        });
+    }
+
     let profile = Profile {
         id: id.clone(),
         name,
         game_version,
-        mod_loader: None,
-        java_path: None,
-        jvm_args: vec![],
-        game_args: vec![],
         memory_mb: 4096,
         game_dir,
-        created_at: chrono::Utc::now(),
-        last_played: None,
-        icon: None,
+        ..Default::default()
     };
 
     core.profile_store.save(&profile)?;
@@ -65,14 +84,11 @@ pub async fn profile_update(
     opts: ProfileUpdateOpts,
 ) -> Result<Profile, IpcError> {
     let core = state.core.read().await;
-    let mut profile = core
-        .profile_store
-        .get(&id)?
-        .ok_or_else(|| IpcError {
-            code: rmccc_error::ErrorCode::ProfileNotFound,
-            message: format!("Profile not found: {id}"),
-            retryable: false,
-        })?;
+    let mut profile = core.profile_store.get(&id)?.ok_or_else(|| IpcError {
+        code: rmccc_error::ErrorCode::ProfileNotFound,
+        message: format!("Profile not found: {id}"),
+        retryable: false,
+    })?;
 
     if let Some(name) = opts.name {
         profile.name = name;
@@ -81,7 +97,11 @@ pub async fn profile_update(
         profile.game_version = game_version;
     }
     if let Some(java_path) = opts.java_path {
-        profile.java_path = if java_path.is_empty() { None } else { Some(java_path) };
+        profile.java_path = if java_path.is_empty() {
+            None
+        } else {
+            Some(java_path)
+        };
     }
     if let Some(jvm_args) = opts.jvm_args {
         profile.jvm_args = jvm_args;
@@ -102,10 +122,7 @@ pub async fn profile_update(
 
 #[tauri::command]
 #[tracing::instrument(skip(state))]
-pub async fn profile_delete(
-    state: tauri::State<'_, AppState>,
-    id: String,
-) -> Result<(), IpcError> {
+pub async fn profile_delete(state: tauri::State<'_, AppState>, id: String) -> Result<(), IpcError> {
     let core = state.core.read().await;
     core.profile_store.delete(&id, false)?;
     Ok(())

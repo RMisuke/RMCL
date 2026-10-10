@@ -28,11 +28,21 @@ tracing = { workspace = true }
 chrono = { workspace = true }
 uuid = { workspace = true }
 reqwest = { workspace = true }
+ts-rs = { workspace = true }
 
 # Tauri
 tauri = { workspace = true }
 tauri-plugin-process = { workspace = true }
 tauri-plugin-window-state = { workspace = true }
+tauri-plugin-opener = { workspace = true }
+tauri-plugin-updater = { workspace = true }
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
+
+[dev-dependencies]
+# P2-23：E2E 测试（thirtyfour WebDriver client）。
+# 仅 dev 依赖，不影响 release 二进制体积。
+# tauri-driver（WebDriver server）为独立二进制，由 CI 用 `cargo install tauri-driver` 安装。
+thirtyfour = "0.32"
+serde_json = { workspace = true }

@@ -39,5 +39,13 @@
       "icons/icon.icns",
       "icons/icon.ico"
     ]
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDU5OEEwODEyQjJDMUQxQ0MKUldUTTBjR3lFZ2lLV1hlbUFsOFR2cGRqOXdqSE9Mb3h3WGtJbjNrR00vZXcyWGV6RWhkVXlhNmsK",
+      "endpoints": [
+        "https://github.com/<owner>/<repo>/releases/latest/download/latest.json"
+      ]
+    }
   }
 }
