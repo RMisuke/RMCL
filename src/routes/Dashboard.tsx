@@ -16,6 +16,7 @@ import {
   type AuthSession,
   type Profile,
   type VersionInfo,
+  type DownloadProgressPayload,
 } from "../ipc/api";
 import { showToast } from "../components/Toast";
 import { EVENTS } from "../ipc/events";
@@ -80,6 +81,14 @@ const Dashboard: Component = () => {
   const [gameLog, setGameLog] = createSignal<string[]>([]);
   const [showLog, setShowLog] = createSignal(false);
   let logContainerRef: HTMLDivElement | undefined;
+
+  // ── Download state (P0-04) ──
+  const [downloading, setDownloading] = createSignal(false);
+  const [downloadBatchId, setDownloadBatchId] = createSignal<string | null>(null);
+  const [downloadProgress, setDownloadProgress] = createSignal<{
+    percent: number;
+    current: string | null;
+  } | null>(null);
 
   // ── Event unlisteners ──
   let unlisteners: UnlistenFn[] = [];
@@ -197,6 +206,57 @@ const Dashboard: Component = () => {
         }
       );
       unlisteners.push(u3);
+
+      // Listen for download events (version install, P0-04)
+      const u4 = await listen<DownloadProgressPayload>(
+        EVENTS.DOWNLOAD_PROGRESS,
+        (event) => {
+          const p = event.payload;
+          setDownloading(true);
+          setDownloadBatchId(p.batch_id || null);
+          setDownloadProgress({
+            percent:
+              p.total_files > 0
+                ? Math.min(100, Math.round((p.completed_files / p.total_files) * 100))
+                : 0,
+            current: p.current_file,
+          });
+        }
+      );
+      unlisteners.push(u4);
+
+      const u5 = await listen<{
+        batch_id: string;
+        profile_id: string;
+        version: string;
+      }>(EVENTS.DOWNLOAD_COMPLETE, () => {
+        setDownloading(false);
+        setDownloadBatchId(null);
+        setDownloadProgress(null);
+        setInstallingVersion(null);
+        loadProfiles();
+        loadVersions();
+        showToast({ code: "ok", message: "Version installed", retryable: false });
+      });
+      unlisteners.push(u5);
+
+      const u6 = await listen<{
+        batch_id: string;
+        profile_id: string;
+        version: string;
+        error?: string;
+      }>(EVENTS.DOWNLOAD_ERROR, (event) => {
+        setDownloading(false);
+        setDownloadBatchId(null);
+        setDownloadProgress(null);
+        setInstallingVersion(null);
+        showToast({
+          code: "error",
+          message: event.payload.error ?? "Download failed",
+          retryable: false,
+        });
+      });
+      unlisteners.push(u6);
     } catch (e) {
       console.error("Failed to register event listeners:", e);
     }
@@ -253,22 +313,18 @@ const Dashboard: Component = () => {
     if (!profileId) return;
 
     setInstallingVersion(versionId);
+    setDownloading(true);
     const result = await safeInvoke<void>("version_install", {
       version: versionId,
       profileId,
     });
-    setInstallingVersion(null);
 
-    if (result.ok) {
-      // Update the profile's game_version in local state
-      setProfileList((prev) =>
-        prev.map((p) =>
-          p.id === profileId ? { ...p, game_version: versionId } : p
-        )
-      );
-    } else {
+    if (!result.ok) {
+      setInstallingVersion(null);
+      setDownloading(false);
       showToast(result.error);
     }
+    // 成功后 UI 更新依赖 download://complete 事件（P0-04 后台任务化）
   };
 
   const handleLaunch = async () => {
@@ -286,6 +342,15 @@ const Dashboard: Component = () => {
 
   const handleKill = async (profileId: string) => {
     const result = await safeInvoke<void>("launch_kill", { profileId });
+    if (!result.ok) {
+      showToast(result.error);
+    }
+  };
+
+  const handleCancelDownload = async () => {
+    const batchId = downloadBatchId();
+    if (!batchId) return;
+    const result = await safeInvoke<void>("download_cancel", { batchId });
     if (!result.ok) {
       showToast(result.error);
     }
@@ -493,6 +558,38 @@ const Dashboard: Component = () => {
                 </button>
               </Show>
             </div>
+  
+              {/* ── Download Progress (P0-04) ── */}
+              <Show when={downloading()}>
+                <div class="card" style="margin-top: 12px; padding: 12px;">
+                  <div
+                    style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;"
+                  >
+                    <span style="font-size: 13px; color: #a1a1aa;">
+                      Downloading version...
+                    </span>
+                    <button
+                      onClick={handleCancelDownload}
+                      style="font-size: 12px; padding: 4px 10px; border: 1px solid #3f3f46; border-radius: 6px; background: transparent; color: #d4d4d8; cursor: pointer;"
+                    >
+                      Cancel
+                    </button>
+                  </div>
+                  <div
+                    style="height: 6px; background: #27272a; border-radius: 999px; overflow: hidden;"
+                  >
+                    <div
+                      style={`height: 100%; width: ${downloadProgress()?.percent ?? 0}%; background: linear-gradient(90deg, #3b82f6, #22d3ee); transition: width 0.15s ease;`}
+                    />
+                  </div>
+                  <div
+                    style="display: flex; justify-content: space-between; margin-top: 6px; font-size: 11px; color: #71717a;"
+                  >
+                    <span>{downloadProgress()?.percent ?? 0}%</span>
+                    <span>{downloadProgress()?.current ?? ""}</span>
+                  </div>
+                </div>
+              </Show>
           </div>
 
           {/* ── Right Column: Versions ── */}

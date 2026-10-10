@@ -3,9 +3,14 @@ import type { IpcError } from "../ipc/api";
 
 // ── Toast store (global, wrapped in createRoot for clean HMR) ──
 
+/// Toast 输入：code 放宽为 string，既接受后端 ErrorCode，也接受前端
+/// 自定义成功/状态提示（如 "ok"/"error"/"success"）——P2-15 后 IpcError.code
+/// 为受限联合类型，故此处显式放宽。
+type ToastInput = Omit<IpcError, "code"> & { code: string };
+
 interface Toast {
   id: number;
-  error: IpcError;
+  error: ToastInput;
   timestamp: number;
 }
 
@@ -13,7 +18,7 @@ const { toasts, showToast, dismissToast } = createRoot(() => {
   const [toasts, setToasts] = createSignal<Toast[]>([]);
   let nextId = 0;
 
-  function showToast(error: IpcError) {
+  function showToast(error: ToastInput) {
     const id = nextId++;
     setToasts((prev) => [...prev, { id, error, timestamp: Date.now() }]);
 
