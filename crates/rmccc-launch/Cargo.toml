@@ -10,6 +10,7 @@ rmccc-profile = { workspace = true }
 rmccc-config = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
+thiserror = { workspace = true }
 tokio = { workspace = true }
 uuid = { workspace = true }
 tracing = { workspace = true }

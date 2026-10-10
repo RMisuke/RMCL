@@ -5,7 +5,9 @@
 //! directory before the game can load them.
 //!
 //! Following HMCL's [`decompressNatives()`] pattern:
+//! - Cleans the destination directory first (`cleanDirectoryQuietly`)
 //! - Skips files that already exist with matching size (idempotent via `replaceExistentFile=false`)
+//! - Applies each library's `extract.exclude` rules (`ExtractRules.shouldExtract`)
 //! - Filters out `.sha1`, `.git`, and other non-native files
 //! - Supports `useNativeGLFW` / `useNativeOpenAL` skip flags
 
@@ -30,6 +32,51 @@ pub fn is_native(lib: &rmccc_version::Library) -> bool {
     classifiers.iter().any(|c| name.contains(c))
 }
 
+/// Remove the contents of a directory without removing the directory itself
+/// (HMCL `FileUtils.cleanDirectoryQuietly`). Failures are logged, not fatal.
+pub fn clean_directory_quietly(dir: &Path) {
+    if !dir.exists() {
+        return;
+    }
+    if let Ok(entries) = std::fs::read_dir(dir) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            let result = if path.is_dir() {
+                std::fs::remove_dir_all(&path)
+            } else {
+                std::fs::remove_file(&path)
+            };
+            if let Err(e) = result {
+                tracing::warn!("Failed to clean {}: {e}", path.display());
+            }
+        }
+    }
+}
+
+/// Whether an entry should be extracted from a native JAR, honoring the
+/// library's `extract.exclude` list (HMCL `ExtractRules.shouldExtract`).
+///
+/// An entry is skipped when its relative path starts with (or equals) any
+/// exclude rule.
+fn should_extract(relative_path: &str, lib: &rmccc_version::Library) -> bool {
+    let Some(excludes) = lib.extract.as_ref().map(|e| &e.exclude) else {
+        return true;
+    };
+    for exclude in excludes {
+        // HMCL `ExtractRules.shouldExtract`: skip when the entry starts with
+        // (or equals) an exclude prefix, e.g. "META-INF/" skips "META-INF/versions/...".
+        if relative_path.starts_with(exclude) {
+            tracing::debug!(
+                entry = relative_path,
+                exclude = exclude,
+                "Entry excluded by ExtractRules"
+            );
+            return false;
+        }
+    }
+    true
+}
+
 /// Extract native library files from all native JARs into the natives directory.
 ///
 /// # Arguments
@@ -49,26 +96,22 @@ pub fn decompress_natives(
     skip_openal: bool,
 ) -> Result<u32> {
     std::fs::create_dir_all(natives_dir)?;
+    // HMCL cleanDirectoryQuietly — re-extract from a clean slate.
+    clean_directory_quietly(natives_dir);
 
     let mut count = 0u32;
 
     for lib in libraries.iter().filter(|l| is_native(l)) {
         let jar_path = resolve_library_path(&lib.name, libs_dir);
         if !jar_path.exists() {
-            tracing::warn!(
-                "Native library JAR not found: {}",
-                jar_path.display()
-            );
+            tracing::warn!("Native library JAR not found: {}", jar_path.display());
             continue;
         }
 
         let file = match std::fs::File::open(&jar_path) {
             Ok(f) => f,
             Err(e) => {
-                tracing::warn!(
-                    "Cannot open native library JAR {}: {e}",
-                    jar_path.display()
-                );
+                tracing::warn!("Cannot open native library JAR {}: {e}", jar_path.display());
                 continue;
             }
         };
@@ -76,10 +119,7 @@ pub fn decompress_natives(
         let mut archive = match zip::ZipArchive::new(file) {
             Ok(a) => a,
             Err(e) => {
-                tracing::warn!(
-                    "Cannot read native library JAR {}: {e}",
-                    jar_path.display()
-                );
+                tracing::warn!("Cannot read native library JAR {}: {e}", jar_path.display());
                 continue;
             }
         };
@@ -94,6 +134,11 @@ pub fn decompress_natives(
 
             // Skip directories, symlinks, non-native files
             if entry.is_dir() || entry.is_symlink() {
+                continue;
+            }
+
+            // HMCL ExtractRules: honor the library's exclude list.
+            if !should_extract(&entry_name, lib) {
                 continue;
             }
 
@@ -159,23 +204,11 @@ pub fn decompress_natives(
 ///
 /// Format: `group:artifact:version` or `group:artifact:version:classifier`
 /// Example: `org.lwjgl:lwjgl:3.3.1:natives-macos`
+///
+/// Delegates to [`rmccc_version::libraries::make_library_path`] so the path
+/// logic is shared with the download/classpath code (L14).
 fn resolve_library_path(name: &str, libs_dir: &Path) -> PathBuf {
-    let parts: Vec<&str> = name.split(':').collect();
-    if parts.len() < 3 {
-        return libs_dir.join(format!("{}.jar", name.replace(":", "-")));
-    }
-
-    let group = parts[0].replace('.', "/");
-    let artifact = parts[1];
-    let version = parts[2];
-    let classifier = parts.get(3);
-
-    let jar_name = match classifier {
-        Some(cls) => format!("{}-{}-{}.jar", artifact, version, cls),
-        None => format!("{}-{}.jar", artifact, version),
-    };
-
-    libs_dir.join(&group).join(artifact).join(version).join(&jar_name)
+    rmccc_version::libraries::make_library_path(name, libs_dir)
 }
 
 #[cfg(test)]
@@ -187,25 +220,20 @@ mod tests {
     fn test_is_native_detection() {
         let native_lib = Library {
             name: "org.lwjgl:lwjgl:3.3.1:natives-macos".into(),
-            downloads: None,
-            rules: None,
+            ..Default::default()
         };
         assert!(is_native(&native_lib));
 
         let normal_lib = Library {
             name: "com.google.guava:guava:31.1-jre".into(),
-            downloads: None,
-            rules: None,
+            ..Default::default()
         };
         assert!(!is_native(&normal_lib));
     }
 
     #[test]
     fn test_resolve_library_path_normal() {
-        let path = resolve_library_path(
-            "org.lwjgl:lwjgl:3.3.1",
-            Path::new("/libs"),
-        );
+        let path = resolve_library_path("org.lwjgl:lwjgl:3.3.1", Path::new("/libs"));
         assert_eq!(
             path,
             Path::new("/libs/org/lwjgl/lwjgl/3.3.1/lwjgl-3.3.1.jar")
@@ -214,10 +242,7 @@ mod tests {
 
     #[test]
     fn test_resolve_library_path_with_classifier() {
-        let path = resolve_library_path(
-            "org.lwjgl:lwjgl:3.3.1:natives-macos",
-            Path::new("/libs"),
-        );
+        let path = resolve_library_path("org.lwjgl:lwjgl:3.3.1:natives-macos", Path::new("/libs"));
         assert_eq!(
             path,
             Path::new("/libs/org/lwjgl/lwjgl/3.3.1/lwjgl-3.3.1-natives-macos.jar")
@@ -228,8 +253,7 @@ mod tests {
     fn test_is_native_windows() {
         let lib = Library {
             name: "org.lwjgl:lwjgl:3.3.1:natives-windows".into(),
-            downloads: None,
-            rules: None,
+            ..Default::default()
         };
         assert!(is_native(&lib));
     }
@@ -238,8 +262,7 @@ mod tests {
     fn test_is_native_linux() {
         let lib = Library {
             name: "org.lwjgl:lwjgl:3.3.1:natives-linux".into(),
-            downloads: None,
-            rules: None,
+            ..Default::default()
         };
         assert!(is_native(&lib));
     }
@@ -248,17 +271,16 @@ mod tests {
     fn test_is_native_unix() {
         let lib = Library {
             name: "org.lwjgl:lwjgl:3.3.1:natives-unix".into(),
-            downloads: None,
-            rules: None,
+            ..Default::default()
         };
         assert!(is_native(&lib));
     }
 
     #[test]
     fn test_resolve_library_path_minimal_parts() {
-        // Less than 3 parts: fallback to simple filename
+        // Less than 3 parts: shared `make_library_path` joins with a slash.
         let path = resolve_library_path("solo:artifact", Path::new("/libs"));
-        assert_eq!(path, Path::new("/libs/solo-artifact.jar"));
+        assert_eq!(path, Path::new("/libs/solo/artifact"));
     }
 
     #[test]
@@ -284,10 +306,44 @@ mod tests {
         for (name, expected) in tests {
             let lib = Library {
                 name: name.to_string(),
-                downloads: None,
-                rules: None,
+                ..Default::default()
             };
             assert_eq!(is_native(&lib), expected, "Failed for: {name}");
         }
+    }
+
+    #[test]
+    fn test_should_extract_excludes() {
+        // No extract rules → everything is extracted.
+        let lib = Library {
+            name: "org.lwjgl:lwjgl:3.3.1:natives-macos".into(),
+            ..Default::default()
+        };
+        assert!(should_extract("META-INF/native/libglfw.dylib", &lib));
+
+        // With exclude rules → matching entries are skipped.
+        let lib = Library {
+            name: "org.lwjgl:lwjgl:3.3.1:natives-macos".into(),
+            extract: Some(rmccc_version::ExtractRules {
+                exclude: vec!["META-INF/".to_string(), "org/lwjgl/glfw/GLFW.class".to_string()],
+            }),
+            ..Default::default()
+        };
+        assert!(!should_extract("META-INF/versions/9/module-info.class", &lib));
+        assert!(!should_extract("org/lwjgl/glfw/GLFW.class", &lib));
+        assert!(should_extract("libglfw.dylib", &lib));
+    }
+
+    #[test]
+    fn test_clean_directory_quietly() {
+        let dir = std::env::temp_dir().join(format!("rmcl-native-test-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(dir.join("sub")).unwrap();
+        std::fs::write(dir.join("a.so"), b"x").unwrap();
+        std::fs::write(dir.join("sub/b.dylib"), b"y").unwrap();
+        clean_directory_quietly(&dir);
+        assert!(!dir.join("a.so").exists());
+        assert!(!dir.join("sub").exists());
+        assert!(dir.exists());
+        let _ = std::fs::remove_dir(&dir);
     }
 }

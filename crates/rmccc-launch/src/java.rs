@@ -1,6 +1,6 @@
 //! Cross-platform Java detection.
 
-use rmccc_error::{RmcccError, Result};
+use rmccc_error::{Result, RmcccError};
 use std::path::PathBuf;
 use std::process::Command;
 
@@ -25,7 +25,7 @@ pub fn detect_java_installations() -> Vec<JavaInstallation> {
     detect_common_paths(&mut found);
 
     // Sort by version descending
-    found.sort_by(|a, b| b.major_version.cmp(&a.major_version));
+    found.sort_by_key(|a| std::cmp::Reverse(a.major_version));
     found.dedup_by(|a, b| a.path == b.path);
 
     found
@@ -39,7 +39,10 @@ pub fn find_java(required_version: u32) -> Result<JavaInstallation> {
     }
 
     // First: prefer exact match
-    if let Some(java) = installations.iter().find(|j| j.major_version == required_version) {
+    if let Some(java) = installations
+        .iter()
+        .find(|j| j.major_version == required_version)
+    {
         return Ok(java.clone());
     }
 
@@ -68,10 +71,7 @@ pub fn find_java(required_version: u32) -> Result<JavaInstallation> {
 #[cfg(target_os = "macos")]
 fn detect_platform_specific(found: &mut Vec<JavaInstallation>) {
     // /usr/libexec/java_home -V
-    if let Ok(output) = Command::new("/usr/libexec/java_home")
-        .arg("-V")
-        .output()
-    {
+    if let Ok(output) = Command::new("/usr/libexec/java_home").arg("-V").output() {
         // java_home writes to stderr
         let stderr = String::from_utf8_lossy(&output.stderr);
         for line in stderr.lines() {
@@ -211,11 +211,7 @@ fn scan_java_binary(path: &std::path::Path) -> Option<JavaInstallation> {
 
     let stdout = String::from_utf8_lossy(&output.stderr);
     // Also check stdout (version info can appear in either)
-    let combined = format!(
-        "{}\n{}",
-        stdout,
-        String::from_utf8_lossy(&output.stdout)
-    );
+    let combined = format!("{}\n{}", stdout, String::from_utf8_lossy(&output.stdout));
 
     // Parse java.version = X.Y.Z
     let major = combined

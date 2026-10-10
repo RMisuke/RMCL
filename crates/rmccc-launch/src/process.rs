@@ -3,7 +3,7 @@
 //! Following HMCL's [`CommandBuilder`] and [`DefaultLauncher.generateCommandLine()`]
 //! patterns for argument deduplication and pipeline construction.
 
-use rmccc_error::{RmcccError, Result};
+use rmccc_error::{Result, RmcccError};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
@@ -66,7 +66,7 @@ pub fn build_response_file(
 /// Fixes Bug #6: macOS paths containing spaces (e.g. "Application Support")
 /// were incorrectly escaped with `\"` causing `ClassNotFoundException`.
 fn java_argfile_escape(s: &str) -> String {
-    let cleaned = s.replace('\n', " ").replace('\r', " ");
+    let cleaned = s.replace(['\n', '\r'], " ");
     if cleaned.contains(char::is_whitespace) || cleaned.contains('"') {
         format!("\"{}\"", cleaned.replace('"', "\"\""))
     } else {
@@ -89,6 +89,10 @@ pub async fn spawn_game(
         .current_dir(game_dir)
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped());
+
+    // P2-17：Unix 下让游戏进程自成进程组，便于 killpg 统一终止进程树。
+    #[cfg(unix)]
+    cmd.process_group(0);
 
     // Inject environment variables
     if let Some(env) = extra_env {
@@ -172,9 +176,7 @@ impl CommandBuilder {
         // Check if any existing arg starts with this key
         for existing in &self.args {
             if existing.starts_with(key) {
-                tracing::info!(
-                    "Default option '{full}' is suppressed by '{existing}'"
-                );
+                tracing::info!("Default option '{full}' is suppressed by '{existing}'");
                 return Some(existing.clone());
             }
         }
@@ -192,10 +194,13 @@ impl CommandBuilder {
         };
         // Check existing -XX:+/-key patterns
         for existing in &self.args {
-            if existing.starts_with("-XX:+") || existing.starts_with("-XX:-") {
-                if existing.trim_start_matches("-XX:+").trim_start_matches("-XX:-") == key {
-                    return Some(existing.clone());
-                }
+            if (existing.starts_with("-XX:+") || existing.starts_with("-XX:-"))
+                && existing
+                    .trim_start_matches("-XX:+")
+                    .trim_start_matches("-XX:-")
+                    == key
+            {
+                return Some(existing.clone());
             }
         }
         self.args.push(flag);
@@ -224,7 +229,7 @@ impl CommandBuilder {
     pub fn add_all_default(&mut self, args: &[String]) -> &mut Self {
         for arg in args {
             if let Some((key, value)) = parse_d_option(arg) {
-                self.add_default(&key, &value);
+                self.add_default(key, value);
             } else if arg.starts_with("-XX:") {
                 if let Some(rest) = arg.strip_prefix("-XX:") {
                     if rest.starts_with('+') || rest.starts_with('-') {
@@ -327,8 +332,7 @@ fn parse_d_option(arg: &str) -> Option<(&str, &str)> {
 /// Parse an `-X` memory option.
 fn parse_x_option(arg: &str) -> Option<(&'static str, &str)> {
     for prefix in &["-Xmx", "-Xms", "-Xmn", "-Xss"] {
-        if arg.starts_with(prefix) {
-            let value = &arg[prefix.len()..];
+        if let Some(value) = arg.strip_prefix(prefix) {
             return Some((prefix, value));
         }
     }
@@ -370,18 +374,25 @@ struct VersionGate {
 
 impl VersionGate {
     /// Applicable when java_version >= v.
-    const fn at_least(v: u32) -> Self { Self { min: Some(v), max: None } }
+    const fn at_least(v: u32) -> Self {
+        Self {
+            min: Some(v),
+            max: None,
+        }
+    }
 
     fn matches(&self, version: u32) -> bool {
-        self.min.map_or(true, |m| version >= m)
-            && self.max.map_or(true, |m| version <= m)
+        self.min.is_none_or(|m| version >= m) && self.max.is_none_or(|m| version <= m)
     }
 }
 
 /// Add a version-gated `-XX:+/-Flag` boolean argument.
 fn add_gated_unstable_bool(
-    cmd: &mut CommandBuilder, key: &str, enabled: bool,
-    gate: VersionGate, java_version: u32,
+    cmd: &mut CommandBuilder,
+    key: &str,
+    enabled: bool,
+    gate: VersionGate,
+    java_version: u32,
 ) {
     if gate.matches(java_version) {
         cmd.add_unstable_bool(key, enabled);
@@ -390,8 +401,11 @@ fn add_gated_unstable_bool(
 
 /// Add a version-gated `-XX:Key=Value` argument.
 fn add_gated_unstable_value(
-    cmd: &mut CommandBuilder, key: &str, value: &str,
-    gate: VersionGate, java_version: u32,
+    cmd: &mut CommandBuilder,
+    key: &str,
+    value: &str,
+    gate: VersionGate,
+    java_version: u32,
 ) {
     if gate.matches(java_version) {
         cmd.add_unstable_value(key, value);
@@ -412,6 +426,7 @@ impl LaunchArgBuilder {
     /// JVM arguments are version-gated via [`VersionGate`] to ensure
     /// compatibility across Java 8 through Java 25. Arguments that are not
     /// applicable for the target Java version are silently skipped.
+    #[allow(clippy::too_many_arguments)]
     pub fn jvm_args(
         classpath: &[PathBuf],
         memory_mb: u32,
@@ -475,9 +490,17 @@ impl LaunchArgBuilder {
         // UseG1GC: default in Java 9+, but we enable it explicitly for Java 8
         // G1 tuning params: Java 8–25
         let gate_java8p = VersionGate::at_least(8);
-        add_gated_unstable_bool(&mut cmd, "UnlockExperimentalVMOptions", true, gate_java8p, jv);
+        add_gated_unstable_bool(
+            &mut cmd,
+            "UnlockExperimentalVMOptions",
+            true,
+            gate_java8p,
+            jv,
+        );
         add_gated_unstable_bool(&mut cmd, "UnlockDiagnosticVMOptions", true, gate_java8p, jv);
-        if gate_java8p.matches(jv) && cmd.none_match(|a| a.starts_with("-XX:+Use") && a != "-XX:+UseG1GC") {
+        if gate_java8p.matches(jv)
+            && cmd.none_match(|a| a.starts_with("-XX:+Use") && a != "-XX:+UseG1GC")
+        {
             cmd.add_unstable_bool("UseG1GC", true);
             add_gated_unstable_value(&mut cmd, "G1MixedGCCountTarget", "5", gate_java8p, jv);
             add_gated_unstable_value(&mut cmd, "G1NewSizePercent", "20", gate_java8p, jv);
@@ -485,7 +508,13 @@ impl LaunchArgBuilder {
             add_gated_unstable_value(&mut cmd, "MaxGCPauseMillis", "50", gate_java8p, jv);
             add_gated_unstable_value(&mut cmd, "G1HeapRegionSize", "32m", gate_java8p, jv);
         }
-        add_gated_unstable_bool(&mut cmd, "OmitStackTraceInFastThrow", false, gate_java8p, jv);
+        add_gated_unstable_bool(
+            &mut cmd,
+            "OmitStackTraceInFastThrow",
+            false,
+            gate_java8p,
+            jv,
+        );
 
         // ── Compiler / JIT tuning ──
         if is_64bit {
@@ -534,6 +563,7 @@ impl LaunchArgBuilder {
     /// If `version_args` is provided (new-style, 1.13+), those are used.
     /// Otherwise falls back to `minecraft_args` (legacy).
     /// If neither is available, uses the legacy flat argument format.
+    #[allow(clippy::too_many_arguments)]
     pub fn game_args(
         version_id: &str,
         game_dir: &Path,
@@ -572,7 +602,7 @@ impl LaunchArgBuilder {
 }
 
 /// Get the native charset name for the current platform.
-fn default_encoding() -> &'static str {
+pub(crate) fn default_encoding() -> &'static str {
     #[cfg(windows)]
     {
         // On Windows, try to detect the system code page
@@ -686,7 +716,7 @@ mod tests {
             &[PathBuf::from("/game/libraries/lib.jar")],
             2048,
             &["-Dfile.encoding=GBK".to_string()], // user override
-            &[], // no version JVM args
+            &[],                                  // no version JVM args
             Path::new("/game/natives"),
             Path::new("/game"),
             "RMCL",
@@ -705,7 +735,9 @@ mod tests {
         // Should have launcher brand
         assert!(args.iter().any(|a| a == "-Dminecraft.launcher.brand=RMCL"));
         // Should have launcher version
-        assert!(args.iter().any(|a| a.starts_with("-Dminecraft.launcher.version=")));
+        assert!(args
+            .iter()
+            .any(|a| a.starts_with("-Dminecraft.launcher.version=")));
         // Should have Xmx set
         assert!(args.iter().any(|a| a.starts_with("-Xmx")));
         // Should have Xms set
@@ -723,7 +755,7 @@ mod tests {
     fn test_jvm_args_zero_memory() {
         let args = LaunchArgBuilder::jvm_args(
             &[PathBuf::from("/game/lib.jar")],
-            0,  // no memory limit
+            0, // no memory limit
             &[],
             &[], // no version JVM args
             Path::new("/game/natives"),
@@ -749,7 +781,7 @@ mod tests {
             Path::new("/game"),
             "Test",
             "1.0",
-            8,   // Java 8
+            8,     // Java 8
             false, // 32-bit
         );
         // Java 8: should NOT have G1GC (needs java >= 8, but let's check the GC flag)
@@ -869,6 +901,28 @@ mod tests {
 
         // Cleanup
         let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_dir(&dir);
+    }
+
+    /// P1-03：启动后 response file 应立即删除，避免含 --accessToken 的文件残留磁盘。
+    #[test]
+    fn test_response_file_removed_after_create() {
+        let dir = std::env::temp_dir().join(format!("rmcl-test-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let path = build_response_file(
+            &["-Xmx2G".to_string()],
+            &["--accessToken".to_string(), "SECRET".to_string()],
+            "net.minecraft.client.main.Main",
+            &dir,
+        )
+        .unwrap();
+        assert!(path.exists());
+
+        // 模拟 launch_start 的清理行为：spawn 后立即删除
+        std::fs::remove_file(&path).unwrap();
+        assert!(!path.exists());
+
         let _ = std::fs::remove_dir(&dir);
     }
 }
