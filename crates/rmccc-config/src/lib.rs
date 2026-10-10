@@ -111,6 +111,38 @@ pub fn resolve_locale(requested: Option<&str>) -> &'static str {
         .unwrap_or(DEFAULT_LOCALE)
 }
 
+// ── Instance isolation ──
+
+/// Accepted `isolation` values, in picker order.
+///
+/// Mirrors HMCL `DefaultIsolationType`: `never` shares one `.minecraft`, `modded`
+/// isolates only instances that carry a mod loader, `always` isolates every one.
+pub const ISOLATION_VALUES: &[&str] = &["never", "modded", "always"];
+
+/// Isolation used when nothing is configured. HMCL's global default is `MODDED`.
+pub const DEFAULT_ISOLATION: &str = "modded";
+
+/// Normalises an isolation value, falling back to [`DEFAULT_ISOLATION`].
+pub fn resolve_isolation(requested: Option<&str>) -> &'static str {
+    let Some(value) = requested.map(str::trim).filter(|v| !v.is_empty()) else {
+        return DEFAULT_ISOLATION;
+    };
+    let lower = value.to_ascii_lowercase();
+    ISOLATION_VALUES
+        .iter()
+        .find(|candidate| **candidate == lower)
+        .copied()
+        .unwrap_or(DEFAULT_ISOLATION)
+}
+
+fn default_isolation() -> String {
+    DEFAULT_ISOLATION.to_string()
+}
+
+fn default_priority() -> String {
+    "normal".to_string()
+}
+
 // ── Launcher settings (AppConfig) ──
 
 /// Global application configuration (persisted as `config/launcher-settings.json`).
@@ -148,6 +180,41 @@ pub struct AppConfig {
     #[serde(default = "default_throttle")]
     #[ts(type = "number")]
     pub event_throttle_ms: u64,
+
+    // ── Global game defaults (HMCL `GameSettings` at the global level) ──
+    //
+    // Every one of these is a *fallback* for the matching per-instance field in
+    // `rmccc_profile::Profile`: an instance that leaves the field unset
+    // (`None`) uses the value here, exactly like HMCL's `InheritableProperty`.
+    /// Default JVM arguments, used by instances that override none.
+    #[serde(default)]
+    pub default_jvm_args: Vec<String>,
+    /// Default game (program) arguments.
+    #[serde(default)]
+    pub default_game_args: Vec<String>,
+    /// Default isolation strategy for instances that do not pick one
+    /// (`never` | `always` | `modded`).
+    ///
+    /// Kept as a normalised string rather than `rmccc_version::IsolationType`
+    /// because `rmccc-config` is a leaf crate and must not depend on the
+    /// version crate; [`resolve_isolation`] validates it.
+    #[serde(default = "default_isolation")]
+    pub default_isolation: String,
+    /// Default window width in pixels (`None` = the game's own default).
+    #[serde(default)]
+    pub default_window_width: Option<u32>,
+    /// Default window height in pixels (`None` = the game's own default).
+    #[serde(default)]
+    pub default_window_height: Option<u32>,
+    /// Default fullscreen flag.
+    #[serde(default)]
+    pub default_fullscreen: bool,
+    /// Default process priority label (`low` … `high`).
+    #[serde(default = "default_priority")]
+    pub default_process_priority: String,
+    /// Let the launcher pick the heap size instead of using the values above.
+    #[serde(default)]
+    pub auto_memory: bool,
     /// Unknown fields preserved verbatim (forward compatibility).
     #[serde(flatten, default, skip_serializing_if = "BTreeMap::is_empty")]
     #[ts(skip)]
@@ -191,6 +258,14 @@ impl Default for AppConfig {
             download_concurrency: 16,
             mirror_url: None,
             event_throttle_ms: 100,
+            default_jvm_args: Vec::new(),
+            default_game_args: Vec::new(),
+            default_isolation: default_isolation(),
+            default_window_width: None,
+            default_window_height: None,
+            default_fullscreen: false,
+            default_process_priority: default_priority(),
+            auto_memory: false,
             extra: BTreeMap::new(),
             savable: true,
             backup_on_next_save: false,
@@ -722,5 +797,20 @@ mod tests {
         );
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+    /// Isolation normalisation mirrors `resolve_locale`: known values pass
+    /// through, anything else (including unset) becomes the default.
+    #[test]
+    fn test_resolve_isolation() {
+        assert_eq!(resolve_isolation(None), "modded");
+        assert_eq!(resolve_isolation(Some("")), "modded");
+        assert_eq!(resolve_isolation(Some("NEVER")), "never");
+        assert_eq!(resolve_isolation(Some(" always ")), "always");
+        assert_eq!(resolve_isolation(Some("modded")), "modded");
+        // Unknown values must not be persisted verbatim.
+        assert_eq!(resolve_isolation(Some("sometimes")), "modded");
+        for value in ISOLATION_VALUES {
+            assert_eq!(resolve_isolation(Some(value)), *value);
+        }
     }
 }
