@@ -8,6 +8,46 @@
 
 ## 0. 更新记录
 
+**2026-10-10（第 6 轮）**：实现**每实例独立设置**（参考 HMCL），含实例卡片入口与全局/实例分层。
+
+**调研结论（修正了一个常见误解）**：HMCL 的"全局游戏设置"**不在 `LauncherSettings` 里**，而是可多套的
+"游戏设置预设"（`config/game-settings.json`），实例通过 `parent` 引用其一；40 个游戏字段全部是
+`InheritableProperty`（默认继承、可显式覆盖）。"继承 vs 覆盖"的唯一真相是
+`Instance.overrideProperties` **字段名集合**——值与该标志分开存，因此来回切换不会丢值。
+
+**落地设计**（三点，与 HMCL 一致或有据可循）：
+
+| 层 | 类型 | 存储 |
+|----|------|------|
+| 全局默认值 | `AppConfig`（新增 jvm/game args、isolation、窗口、优先级、auto_memory） | `config/launcher-settings.json` |
+| 实例值 + 覆盖名单 | `Profile`（新增 `override_properties`、`isolation`） | `profiles/{id}.json` |
+| 生效值 | `ResolvedInstanceSettings`（`Profile::resolve`） | 不落盘 |
+
+- **值不丢**：`override_properties` 不含某字段时该字段继承全局，但实例里已填的值仍留在磁盘上；
+  已有 profile JSON 无此字段 → 全部继承，且原值保留（新增测试覆盖）。
+- **隔离两层**：`isolation`（never/modded/always，默认 modded）决定**运行目录**；
+  共享游戏根（versions/libraries/assets）始终不变。`rmccc_launch::instance_run_dir` 是唯一推导入口，
+  启动与模组命令共用，杜绝"安装目录 ≠ 启动目录"重现。模组目录随运行目录走，隔离实例因此拥有独立 mods。
+- **与 HMCL 的差异（有意）**：只有一套全局默认值（不做多预设）；实例这半存在 `profiles/{id}.json`
+  而非 `{instance_root}/.hmcl/config/`——RMCCC 的实例注册表就是 ProfileStore，不扫描 `versions/`。
+
+**后端新增**：`instance_paths`（报告生效的游戏根/运行目录/模组目录）、`ModList{enabled,disabled,mods_dir}`
+（此前只返回启用的模组，禁用的一半看不见）、`ProfileUpdateOpts` 覆盖全部字段、
+`SettingsUpdate` 覆盖全部全局默认值、`LoaderVersion` 导出为 TS 类型。
+
+**前端**：实例卡片新增齿轮按钮 → 路由 `/instances/:id`；设置页新增"全局游戏默认值"分区；
+`api.ts` 去掉手写的 `SettingsUpdate`/`ProfileUpdateOpts`（它们此前**遮蔽**了 ts-rs 生成的同名类型，
+字段一变就报错——本次正是被它绊到），改为 `Partial<生成类型>`。
+
+| commit | 内容 |
+|--------|------|
+| `5ef603b` | feat(config,profile)：全局默认值 + 实例覆盖模型 |
+| `dfea619` | feat(launch,...)：消费生效值 + 共享根/运行目录分离 |
+| `79a0054` | feat(...)：每实例模组目录随运行目录 |
+| `d3e9a3c` | feat(tauri)：实例与全局设置的完整接口面 |
+| `883f985` | feat(tauri,ui)：实例设置入口接线 |
+| `4f92579` | test(launch)：隔离运行目录与生效值测试 + 文档 |
+
 **2026-10-10（第 5 轮）**：修复"能下载但打不开游戏"，并完成创建实例的版本选择闭环。
 
 用户实测症状：前端能创建实例、能下载，但打不开游戏。根因是**三个独立 bug 叠加**，全部修复并实机验证。
@@ -130,7 +170,7 @@ Game repository refreshed game_dir=.../instances instances=1        ← 修复 1
 | 编译 | `cargo check --workspace --all-targets` **通过**；clippy 无 warning |
 | 前端类型 | `pnpm typecheck` **通过** |
 | CI lint 三门禁 | `cargo fmt --check` / `clippy --all-targets -D warnings` / `clippy --lib --bins -D clippy::panic -D clippy::unwrap_used` **全部本地通过** |
-| 测试 | **292 passed / 0 failed**（修复 CLI 致命 bug 前为 256 / 28，见 §0/§3/§4） |
+| 测试 | **300 passed / 0 failed**（修复 CLI 致命 bug 前为 256 / 28，见 §0/§3/§4） |
 | 版本控制 | ✅ **已按主题提交为 10 个 commit**，工作区干净（原为 110 改 + 52 新增、零提交） |
 | 发布体积 | CLI release 二进制 5.74MB；手工 strip 后 **4.09MB**（`strip = true` 在本机失效，见 §7.3） |
 | 代码规模 | Rust 133 文件 / **29,284 行**（不含 `tests/` 为 28,431 行）；前端 12 文件 / 3,203 行 |

@@ -31,6 +31,8 @@ export type {
 } from "./types";
 
 import type {
+  SettingsUpdate as GeneratedSettingsUpdate,
+  ProfileUpdateOpts as GeneratedProfileUpdateOpts,
   AuthSession,
   AccountMetadata,
   Profile,
@@ -48,25 +50,11 @@ import type {
   LoaderVersion,
 } from "./types";
 
-// 输入型 DTO：允许部分更新（后端字段为 Option，未提供字段保持原值）
-export type SettingsUpdate = Partial<{
-  game_root_dir: string | null;
-  default_java_path: string | null;
-  default_min_memory_mb: number | null;
-  default_max_memory_mb: number | null;
-  download_concurrency: number | null;
-  mirror_url: string | null;
-}>;
-
-export type ProfileUpdateOpts = Partial<{
-  name: string;
-  game_version: string;
-  java_path: string;
-  jvm_args: string[];
-  game_args: string[];
-  memory_mb: number;
-  icon: string;
-}>;
+// Input DTOs: partial updates. The fields come from the ts-rs generated types
+// (so they can never drift from the Rust structs), wrapped in `Partial` because
+// the backend treats an omitted field as "leave unchanged".
+export type SettingsUpdate = Partial<GeneratedSettingsUpdate>;
+export type ProfileUpdateOpts = Partial<GeneratedProfileUpdateOpts>;
 
 // ── Safe invoke wrapper ──
 

@@ -164,6 +164,10 @@ export const en = {
   "instanceSettings.isolation.modded": "Modded only — own folder once a loader is installed",
   "instanceSettings.isolation.always": "Always — own folder",
 
+  "instanceSettings.isolation.inherit": "Follow the global default",
+  "instanceSettings.loader.loadVersions": "Load versions",
+  "instanceSettings.loader.stable": "Stable release",
+  "instanceSettings.loader.prerelease": "Pre-release",
   "instanceSettings.section.java": "Java",
   "instanceSettings.java.path": "Java executable",
   "instanceSettings.java.auto": "Auto-detect",

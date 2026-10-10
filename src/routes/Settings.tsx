@@ -17,6 +17,14 @@ import {
   nativeNameFor,
 } from "../i18n";
 
+/// Splits a textarea into individual arguments, one per line.
+function splitLines(text: string): string[] {
+  return text
+    .split("\n")
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0);
+}
+
 const Settings: Component = () => {
   const navigate = useNavigate();
 
@@ -33,6 +41,16 @@ const Settings: Component = () => {
   const [javaInstallations, setJavaInstallations] = createSignal<JavaInfo[]>([]);
   const [detectingJava, setDetectingJava] = createSignal(false);
 
+  // ── Global game defaults (fallbacks for instances that inherit) ──
+  const [defaultJvmArgs, setDefaultJvmArgs] = createSignal("");
+  const [defaultGameArgs, setDefaultGameArgs] = createSignal("");
+  const [defaultIsolation, setDefaultIsolation] = createSignal("modded");
+  const [defaultWidth, setDefaultWidth] = createSignal(0);
+  const [defaultHeight, setDefaultHeight] = createSignal(0);
+  const [defaultFullscreen, setDefaultFullscreen] = createSignal(false);
+  const [defaultPriority, setDefaultPriority] = createSignal("normal");
+  const [autoMemory, setAutoMemory] = createSignal(false);
+
   onMount(async () => {
     const result = await safeInvoke<AppConfig>("settings_get");
     if (result.ok) {
@@ -42,6 +60,14 @@ const Settings: Component = () => {
       setJavaPath(c.default_java_path ?? "");
       setMinMemory(c.default_min_memory_mb);
       setMaxMemory(c.default_max_memory_mb);
+      setDefaultJvmArgs(c.default_jvm_args.join("\n"));
+      setDefaultGameArgs(c.default_game_args.join("\n"));
+      setDefaultIsolation(c.default_isolation);
+      setDefaultWidth(c.default_window_width ?? 0);
+      setDefaultHeight(c.default_window_height ?? 0);
+      setDefaultFullscreen(c.default_fullscreen);
+      setDefaultPriority(c.default_process_priority);
+      setAutoMemory(c.auto_memory);
     } else {
       showToast(result.error);
     }
@@ -68,6 +94,14 @@ const Settings: Component = () => {
       default_java_path: javaPath().trim() || null,
       default_min_memory_mb: minMemory(),
       default_max_memory_mb: maxMemory(),
+      default_jvm_args: splitLines(defaultJvmArgs()),
+      default_game_args: splitLines(defaultGameArgs()),
+      default_isolation: defaultIsolation(),
+      default_window_width: defaultWidth(),
+      default_window_height: defaultHeight(),
+      default_fullscreen: defaultFullscreen(),
+      default_process_priority: defaultPriority(),
+      auto_memory: autoMemory(),
     };
 
     const result = await safeInvoke<AppConfig>("settings_set", {
@@ -244,6 +278,123 @@ const Settings: Component = () => {
                 onInput={(e) => setJavaPath(e.currentTarget.value)}
               />
             </div>
+          </div>
+
+          {/* ── Global game defaults ── */}
+          <div class="settings-section">
+            <h3 class="settings-section-title">{t("settings.globalGame.title")}</h3>
+            <p class="settings-section-desc">{t("settings.globalGame.desc")}</p>
+
+            <div class="settings-field">
+              <label class="settings-label">
+                {t("settings.globalGame.isolation")}
+                <span class="settings-hint">{t("instanceSettings.isolation.subtitle")}</span>
+              </label>
+              <select
+                class="settings-input"
+                onChange={(e) => setDefaultIsolation(e.currentTarget.value)}
+              >
+                <option value="never" selected={defaultIsolation() === "never"}>
+                  {t("instanceSettings.isolation.never")}
+                </option>
+                <option value="modded" selected={defaultIsolation() === "modded"}>
+                  {t("instanceSettings.isolation.modded")}
+                </option>
+                <option value="always" selected={defaultIsolation() === "always"}>
+                  {t("instanceSettings.isolation.always")}
+                </option>
+              </select>
+            </div>
+
+            <div class="settings-field">
+              <label class="settings-label">
+                {t("settings.globalGame.jvmArgs")}
+                <span class="settings-hint">{t("settings.globalGame.onePerLine")}</span>
+              </label>
+              <textarea
+                class="settings-input settings-input-mono"
+                rows="3"
+                value={defaultJvmArgs()}
+                onInput={(e) => setDefaultJvmArgs(e.currentTarget.value)}
+              />
+            </div>
+
+            <div class="settings-field">
+              <label class="settings-label">
+                {t("settings.globalGame.gameArgs")}
+                <span class="settings-hint">{t("settings.globalGame.onePerLine")}</span>
+              </label>
+              <textarea
+                class="settings-input settings-input-mono"
+                rows="3"
+                value={defaultGameArgs()}
+                onInput={(e) => setDefaultGameArgs(e.currentTarget.value)}
+              />
+            </div>
+
+            <div class="memory-row">
+              <div class="settings-field memory-field">
+                <label class="settings-label">{t("settings.globalGame.windowWidth")}</label>
+                <input
+                  type="number"
+                  class="settings-input"
+                  min="0"
+                  value={defaultWidth()}
+                  onInput={(e) => setDefaultWidth(Number(e.currentTarget.value))}
+                />
+              </div>
+              <div class="settings-field memory-field">
+                <label class="settings-label">{t("settings.globalGame.windowHeight")}</label>
+                <input
+                  type="number"
+                  class="settings-input"
+                  min="0"
+                  value={defaultHeight()}
+                  onInput={(e) => setDefaultHeight(Number(e.currentTarget.value))}
+                />
+              </div>
+            </div>
+
+            <div class="settings-field">
+              <label class="settings-label">{t("settings.globalGame.priority")}</label>
+              <select
+                class="settings-input"
+                onChange={(e) => setDefaultPriority(e.currentTarget.value)}
+              >
+                <option value="low" selected={defaultPriority() === "low"}>
+                  {t("instanceSettings.window.priority.low")}
+                </option>
+                <option value="below_normal" selected={defaultPriority() === "below_normal"}>
+                  {t("instanceSettings.window.priority.below_normal")}
+                </option>
+                <option value="normal" selected={defaultPriority() === "normal"}>
+                  {t("instanceSettings.window.priority.normal")}
+                </option>
+                <option value="above_normal" selected={defaultPriority() === "above_normal"}>
+                  {t("instanceSettings.window.priority.above_normal")}
+                </option>
+                <option value="high" selected={defaultPriority() === "high"}>
+                  {t("instanceSettings.window.priority.high")}
+                </option>
+              </select>
+            </div>
+
+            <label class="modal-checkbox">
+              <input
+                type="checkbox"
+                checked={defaultFullscreen()}
+                onChange={(e) => setDefaultFullscreen(e.currentTarget.checked)}
+              />
+              {t("settings.globalGame.fullscreen")}
+            </label>
+            <label class="modal-checkbox">
+              <input
+                type="checkbox"
+                checked={autoMemory()}
+                onChange={(e) => setAutoMemory(e.currentTarget.checked)}
+              />
+              {t("settings.globalGame.autoMemory")}
+            </label>
           </div>
 
           {/* ── Memory ── */}

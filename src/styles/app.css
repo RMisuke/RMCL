@@ -1348,6 +1348,43 @@ select.settings-input option {
   flex-shrink: 0;
 }
 
+/* ── Instance settings: inherit / override toggles ── */
+
+/* 🔓 = field inherits the launcher-wide default, 🎚 = overridden here. */
+.inherit-toggle {
+  flex-shrink: 0;
+  padding: 3px 7px;
+  background: var(--surface-input);
+  border: 1px solid var(--border-default);
+  border-radius: 5px;
+  color: var(--text-secondary);
+  font-size: 11px;
+  line-height: 1;
+  font-family: inherit;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.inherit-toggle:hover { border-color: var(--color-blue); }
+
+.inherit-toggle.overridden {
+  background: var(--color-blue-light);
+  border-color: var(--color-blue-border);
+  color: var(--color-blue);
+}
+
+/* Row holding a field label (or a checkbox) and its inherit toggle. */
+.inherit-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+
+.inherit-row .settings-label,
+.inherit-row .modal-checkbox { margin: 0; }
+
 /* ═══════════════════════════════════════════
    Dark Theme
    ═══════════════════════════════════════════ */

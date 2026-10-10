@@ -157,6 +157,10 @@ export const zhCN: Messages = {
   "instanceSettings.isolation.modded": "仅模组——装了模组加载器才独立",
   "instanceSettings.isolation.always": "始终——使用独立目录",
 
+  "instanceSettings.isolation.inherit": "跟随全局默认值",
+  "instanceSettings.loader.loadVersions": "加载版本",
+  "instanceSettings.loader.stable": "正式版",
+  "instanceSettings.loader.prerelease": "预发布版",
   "instanceSettings.section.java": "Java",
   "instanceSettings.java.path": "Java 可执行文件",
   "instanceSettings.java.auto": "自动检测",
