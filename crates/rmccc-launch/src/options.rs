@@ -115,14 +115,7 @@ impl LaunchOptions {
     ) -> Self {
         let resolved = profile.resolve(config);
         let game_dir = config.resolved_game_root();
-        let isolation =
-            rmccc_version::IsolationType::parse(&resolved.isolation).unwrap_or_default();
-        let run_dir = rmccc_version::isolation::run_directory(
-            &game_dir,
-            &profile.game_version,
-            isolation,
-            profile.mod_loader.is_some(),
-        );
+        let run_dir = instance_run_dir(config, profile);
 
         Self {
             java,
@@ -160,6 +153,37 @@ impl LaunchOptions {
             post_exit_command: resolved.post_exit_command.clone(),
         }
     }
+}
+
+/// The run directory (`--gameDir`) for an instance.
+///
+/// Equals the shared game root unless the instance's isolation setting gives it
+/// its own directory (HMCL `HMCLGameRepository.getRunDirectory`): `always`
+/// isolates every instance, `modded` only instances carrying a mod loader, and
+/// `never` shares one `.minecraft`.
+///
+/// Every consumer of per-instance runtime files (launch, mods, saves) must use
+/// this rather than `profile.game_dir`, which is the shared root.
+pub fn instance_run_dir(
+    config: &rmccc_config::AppConfig,
+    profile: &rmccc_profile::Profile,
+) -> std::path::PathBuf {
+    let isolation = rmccc_version::IsolationType::parse(&profile.effective_isolation(config))
+        .unwrap_or_default();
+    rmccc_version::isolation::run_directory(
+        &config.resolved_game_root(),
+        &profile.game_version,
+        isolation,
+        profile.mod_loader.is_some(),
+    )
+}
+
+/// The `mods/` directory for an instance, following its run directory.
+pub fn instance_mods_dir(
+    config: &rmccc_config::AppConfig,
+    profile: &rmccc_profile::Profile,
+) -> std::path::PathBuf {
+    instance_run_dir(config, profile).join("mods")
 }
 
 impl Default for LaunchOptions {

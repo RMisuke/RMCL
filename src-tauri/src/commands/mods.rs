@@ -97,7 +97,9 @@ pub async fn mod_list(
             retryable: false,
         })?;
 
-    let mods_dir = profile.game_dir.join("mods");
+    // Mods follow the instance run directory, so an isolated instance keeps
+    // its own mods (HMCL behaviour) instead of writing into the shared root.
+    let mods_dir = rmccc_launch::instance_mods_dir(&core.config, &profile);
     if !mods_dir.exists() {
         tracing::debug!(profile_id = %profile_id, "mods dir does not exist");
         return Ok(Vec::new());
@@ -136,7 +138,9 @@ pub async fn mod_toggle(
             retryable: false,
         })?;
 
-    let mods_dir = profile.game_dir.join("mods");
+    // Mods follow the instance run directory, so an isolated instance keeps
+    // its own mods (HMCL behaviour) instead of writing into the shared root.
+    let mods_dir = rmccc_launch::instance_mods_dir(&core.config, &profile);
     let disabled_dir = mods_dir.join("disabled");
     let src = if enabled {
         disabled_dir.join(&mod_filename)
@@ -220,7 +224,9 @@ pub async fn mod_install(
         retryable: false,
     })?;
 
-    let mods_dir = profile.game_dir.join("mods");
+    // Mods follow the instance run directory, so an isolated instance keeps
+    // its own mods (HMCL behaviour) instead of writing into the shared root.
+    let mods_dir = rmccc_launch::instance_mods_dir(&core.config, &profile);
     std::fs::create_dir_all(&mods_dir)?;
 
     let filename = version
@@ -266,7 +272,9 @@ pub async fn mod_remove(
             retryable: false,
         })?;
 
-    let mods_dir = profile.game_dir.join("mods");
+    // Mods follow the instance run directory, so an isolated instance keeps
+    // its own mods (HMCL behaviour) instead of writing into the shared root.
+    let mods_dir = rmccc_launch::instance_mods_dir(&core.config, &profile);
     let active = mods_dir.join(&mod_filename);
     let disabled = mods_dir.join("disabled").join(&mod_filename);
 

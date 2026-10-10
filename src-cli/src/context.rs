@@ -800,6 +800,13 @@ impl CliContext {
     /// container's `mod_sources` list is the canonical place where sources are
     /// registered; a fresh instance keeps the facade free of borrow problems
     /// while sharing the exact same HTTP client (connection pooling / proxy).
+    /// `mods/` directory for a profile: follows the instance's run directory so
+    /// isolated instances keep their own mods (HMCL behaviour).
+    async fn mods_dir(&self, profile: &rmccc_profile::Profile) -> PathBuf {
+        let core = self.core.read().await;
+        rmccc_launch::instance_mods_dir(&core.config, profile)
+    }
+
     fn mod_source(&self) -> Result<Box<dyn rmccc_mods::ModSource>> {
         let source: Box<dyn rmccc_mods::ModSource> = Box::new(
             rmccc_mods::modrinth::ModrinthSource::new(self.http_client.clone()),
@@ -839,7 +846,7 @@ impl CliContext {
 
     pub async fn mod_list(&self, profile_id: &str) -> Result<Value> {
         let profile = self.get_profile(profile_id).await?;
-        let mods_dir = profile.game_dir.join("mods");
+        let mods_dir = self.mods_dir(&profile).await;
         let mut active = Vec::new();
         let mut disabled = Vec::new();
         if let Ok(entries) = std::fs::read_dir(&mods_dir) {
@@ -887,7 +894,7 @@ impl CliContext {
     ) -> Result<String> {
         let profile = self.get_profile(profile_id).await?;
         let source = self.mod_source()?;
-        let mods_dir = profile.game_dir.join("mods");
+        let mods_dir = self.mods_dir(&profile).await;
         std::fs::create_dir_all(&mods_dir)?;
 
         let filename = version
@@ -932,7 +939,7 @@ impl CliContext {
         };
         validate_mod_filename(&filename)?;
 
-        let mods_dir = profile.game_dir.join("mods");
+        let mods_dir = self.mods_dir(&profile).await;
         std::fs::create_dir_all(&mods_dir)?;
         let dest = mods_dir.join(&filename);
         std::fs::copy(src, &dest)?;
@@ -943,7 +950,7 @@ impl CliContext {
     pub async fn mod_remove(&self, profile_id: &str, filename: &str) -> Result<()> {
         validate_mod_filename(filename)?;
         let profile = self.get_profile(profile_id).await?;
-        let mods_dir = profile.game_dir.join("mods");
+        let mods_dir = self.mods_dir(&profile).await;
         let active = mods_dir.join(filename);
         let disabled = mods_dir.join("disabled").join(filename);
         if active.exists() {
@@ -959,7 +966,7 @@ impl CliContext {
     pub async fn mod_toggle(&self, profile_id: &str, filename: &str, enabled: bool) -> Result<()> {
         validate_mod_filename(filename)?;
         let profile = self.get_profile(profile_id).await?;
-        let mods_dir = profile.game_dir.join("mods");
+        let mods_dir = self.mods_dir(&profile).await;
         let disabled_dir = mods_dir.join("disabled");
         let (src, dst) = if enabled {
             (disabled_dir.join(filename), mods_dir.join(filename))

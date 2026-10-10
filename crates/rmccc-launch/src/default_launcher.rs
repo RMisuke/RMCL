@@ -611,6 +611,12 @@ impl DefaultLauncher {
                 .map_err(|e| LaunchError::Other(format!("Pre-launch command failed: {e}")))?;
         }
 
+        // The run directory may not exist yet — an isolated instance gets its own
+        // (e.g. `versions/{id}/`) and nothing has created it so far. It is also
+        // the process working directory, so spawning without it fails.
+        std::fs::create_dir_all(&self.run_dir)
+            .map_err(|e| LaunchError::Other(format!("Cannot create run directory: {e}")))?;
+
         // Response file keeps --accessToken out of `ps aux` (P1-03).
         // Drop leftovers from a previous crashed run first (only stale ones, so
         // a concurrently launching instance cannot lose its own file).

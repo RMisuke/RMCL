@@ -26,7 +26,7 @@ pub use launcher::{LaunchError, Launcher};
 pub use log4j::{extract_log4j_configuration_file, log4j_config_file, mc_version_before};
 pub use managed::{spawn_managed, ManagedProcess};
 pub use natives::{clean_directory_quietly, decompress_natives, is_native};
-pub use options::{LaunchOptions, ProcessPriority};
+pub use options::{instance_mods_dir, instance_run_dir, LaunchOptions, ProcessPriority};
 pub use process::{
     build_game_env, build_response_file, spawn_game, CommandBuilder, LaunchArgBuilder,
 };
