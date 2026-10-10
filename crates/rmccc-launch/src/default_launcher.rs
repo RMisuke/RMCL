@@ -72,9 +72,15 @@ impl DefaultLauncher {
         listener: Option<Arc<dyn ProcessListener>>,
     ) -> Self {
         // Both directories live on `LaunchOptions`; reading them from there keeps
-        // a single source of truth for "shared root" vs "run directory".
+        // a single source of truth for "shared root" vs "run directory". An unset
+        // run directory means "not isolated", i.e. the shared root — never an
+        // empty path, which would make the process working directory the CWD.
         let game_dir = options.game_dir.clone();
-        let run_dir = options.run_dir.clone();
+        let run_dir = if options.run_dir.as_os_str().is_empty() {
+            game_dir.clone()
+        } else {
+            options.run_dir.clone()
+        };
         Self {
             instance_id,
             game_dir,

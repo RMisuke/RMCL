@@ -393,7 +393,40 @@ pub struct ModpackEntry {
 }
 ```
 
-### 3.4 Rust Dependencies (Size-Optimized)
+### 3.4 Settings Model: Global Defaults + Per-Instance Overrides
+
+设置分三层，对齐 HMCL 的"全局 / 实例"分离；**启动时只消费合并后的生效值**。
+
+| 层 | 类型 | 存储 | 作用 |
+|----|------|------|------|
+| 全局默认值 | `rmccc_config::AppConfig` | `config/launcher-settings.json` | 所有可继承字段的回退值；`config` 是叶子 crate，不依赖 version |
+| 实例值 + 覆盖名单 | `rmccc_profile::Profile` | `profiles/{id}.json` | `override_properties` 列出真正采用实例值的字段；其余字段继承全局 |
+| 启动生效值 | `rmccc_profile::ResolvedInstanceSettings` | 不落盘 | `Profile::resolve(&AppConfig)` 的产物，`LaunchOptions::from_profile` 的唯一输入 |
+
+**关键取舍（照抄 HMCL `overrideProperties`）**：字段的"值"与"是否覆盖"分开存。
+`override_properties` 不含某字段时该字段继承全局，但实例里已填的值**仍然保留在磁盘上**，
+因此用户在实例设置页来回切换"继承/独立"不会丢掉已输入的内容。
+`rmccc_profile::fields::ALL` 用常量列出全部可覆盖字段名，供后端校验、UI 与测试共用，
+避免三处各写一份字符串。
+
+> 与 HMCL 的差异：HMCL 把实例这半放在 `{instance_root}/.hmcl/config/instance-game-settings.json`，
+> 且全局侧是**可多套的"游戏设置预设"**（实例用 `parent` 引用其一）。RMCCC 目前只有一套全局默认值，
+> 实例这半存在 `profiles/{id}.json`——因为 RMCCC 的实例注册表就是 ProfileStore，而不是扫描 `versions/`；
+> 设置随实例复制/删除的语义不变。多预设是后续可选扩展。
+
+**隔离（"独立实例文件夹"）**：`isolation` 取 `never` / `modded` / `always`（默认 `modded`，同 HMCL）。
+它决定**运行目录**，而共享游戏根不变：
+
+| 目录 | 内容 | 何时不同 |
+|------|------|----------|
+| `game_dir`（共享游戏根） | `versions/`、`libraries/`、`assets/`、natives、实例根 | 始终共享 |
+| `run_dir`（运行目录） | `--gameDir`、进程工作目录、`${game_directory}`、`INST_MC_DIR`、`mods/`、`saves/`、`options.txt` | 实例被隔离时 = `versions/{id}` |
+
+`rmccc_launch::instance_run_dir` / `instance_mods_dir` 是唯一的推导入口，
+`LaunchOptions::from_profile` 与模组命令都经它，避免"安装目录与启动目录不一致"这类事故重现。
+详见 §15.1 的目录布局。
+
+### 3.5 Rust Dependencies (Size-Optimized)
 
 ```toml
 # Core dependencies (chosen for size)
@@ -1015,9 +1048,10 @@ per-file cancel command.
 当前实现（`src/main.tsx`）：
 
 ```
-/         → Dashboard (accounts, profiles, version install, launch/stop)
-/login    → Login (Microsoft device code / offline)
-/settings → Settings (launcher settings, Java detection)
+/              → Dashboard (accounts, profiles, version install, launch/stop)
+/login         → Login (Microsoft device code / offline)
+/settings      → Settings (launcher settings, language, Java detection, global game defaults)
+/instances/:id → InstanceSettings (per-instance overrides, isolation, Java, args, loader, mods)
 ```
 
 规划中但尚未实现（Phase 3/4 前端缺口，见 `PROJECT_STATUS.md` §8）：
@@ -1313,7 +1347,7 @@ User clicks "Launch" on a profile
 
 ## 11. IPC Command Table
 
-45 commands, all registered in `src-tauri/src/main.rs` `generate_handler!`.
+48 commands, all registered in `src-tauri/src/main.rs` `generate_handler!`.
 Definition count and registration count are verified equal (see
 `PROJECT_STATUS.md` §5.3).
 
@@ -1338,6 +1372,7 @@ Definition count and registration count are verified equal (see
 | `instance_remove` | `instance.rs` | Remove an instance |
 | `instance_check_completion` | `instance.rs` | Report missing files |
 | `instance_repair` | `instance.rs` | Download missing files |
+| `instance_paths` | `instance.rs` | Effective game root / run dir / mods dir (depends on isolation) |
 | `version_list` | `version.rs` | List available MC versions (with cache) |
 | `version_install` | `version.rs` | Install MC version; returns a real `batch_id` |
 | `modloader_list` | `modloader.rs` | List loader versions (`loader_type` param) |
@@ -1365,8 +1400,8 @@ Definition count and registration count are verified equal (see
 | `log_clear` | `logs.rs` | Clear/truncate log file |
 | `open_external_url` | `external.rs` | Open a URL in the system browser (deep-link) |
 
-> 前端现状：`src/ipc/api.ts` + 路由页共调用其中 36 个；`instance_*`（7 个）与
-> `modloader_*`（2 个）尚无 UI 入口。补齐前端见 `PROJECT_STATUS.md` §8 第 1 步。
+> 前端现状：`src/ipc/api.ts` + 路由页共调用其中 41 个；`instance_paths` 与实例设置页
+> `/instances/:id` 见 §9.1。
 
 ## 12. Size Budget
 

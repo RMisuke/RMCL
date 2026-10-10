@@ -243,4 +243,122 @@ mod tests {
         assert!(o.jvm_args.is_empty());
         assert_eq!(o.process_priority, ProcessPriority::Normal);
     }
+    fn isolation_config(default_isolation: &str) -> rmccc_config::AppConfig {
+        rmccc_config::AppConfig {
+            game_root_dir: Some(std::path::PathBuf::from("/g")),
+            default_isolation: default_isolation.to_string(),
+            ..Default::default()
+        }
+    }
+
+    /// Built through serde so the test does not need a direct dependency on the
+    /// modloader crate just to name its enum.
+    fn loader() -> rmccc_profile::ModLoaderConfig {
+        serde_json::from_value(serde_json::json!({
+            "loader_type": "fabric",
+            "loader_version": "0.16.9"
+        }))
+        .expect("valid ModLoaderConfig")
+    }
+
+    /// The run directory is what isolation actually controls: `always` isolates
+    /// everything, `modded` only instances carrying a loader, `never` shares the
+    /// game root — and an instance's own value beats the global default.
+    #[test]
+    fn test_instance_run_dir_follows_isolation() {
+        let modded_default = isolation_config("modded");
+        let always_default = isolation_config("always");
+        let never_default = isolation_config("never");
+
+        // modded + loader → own directory
+        let with_loader = rmccc_profile::Profile {
+            game_version: "1.20.4-fabric-0.16.9".into(),
+            mod_loader: Some(loader()),
+            ..Default::default()
+        };
+        assert_eq!(
+            instance_run_dir(&modded_default, &with_loader),
+            std::path::PathBuf::from("/g/versions/1.20.4-fabric-0.16.9")
+        );
+        assert_eq!(
+            instance_mods_dir(&modded_default, &with_loader),
+            std::path::PathBuf::from("/g/versions/1.20.4-fabric-0.16.9/mods")
+        );
+
+        // modded without a loader → shared root (libraries/assets stay shared)
+        let vanilla = rmccc_profile::Profile {
+            game_version: "1.20.4".into(),
+            ..Default::default()
+        };
+        assert_eq!(
+            instance_run_dir(&modded_default, &vanilla),
+            std::path::PathBuf::from("/g")
+        );
+
+        // always → isolated even without a loader
+        assert_eq!(
+            instance_run_dir(&always_default, &vanilla),
+            std::path::PathBuf::from("/g/versions/1.20.4")
+        );
+
+        // never → shared even with a loader
+        assert_eq!(
+            instance_run_dir(&never_default, &with_loader),
+            std::path::PathBuf::from("/g")
+        );
+
+        // an instance-level value overrides the global default
+        let pinned_never = rmccc_profile::Profile {
+            isolation: Some("never".into()),
+            ..with_loader.clone()
+        };
+        assert_eq!(
+            instance_run_dir(&modded_default, &pinned_never),
+            std::path::PathBuf::from("/g")
+        );
+        let pinned_always = rmccc_profile::Profile {
+            isolation: Some("always".into()),
+            ..vanilla.clone()
+        };
+        assert_eq!(
+            instance_run_dir(&never_default, &pinned_always),
+            std::path::PathBuf::from("/g/versions/1.20.4")
+        );
+    }
+
+    /// `from_profile` must feed the resolved values (not the raw profile) and use
+    /// the same two directories as `instance_run_dir`.
+    #[test]
+    fn test_from_profile_uses_resolved_values_and_dirs() {
+        let config = rmccc_config::AppConfig {
+            game_root_dir: Some(std::path::PathBuf::from("/g")),
+            default_isolation: "always".into(),
+            default_max_memory_mb: 3072,
+            default_jvm_args: vec!["-Dglobal=1".into()],
+            ..Default::default()
+        };
+        let profile = rmccc_profile::Profile {
+            game_version: "1.20.4".into(),
+            memory_mb: 8192, // ignored: not in override_properties
+            ..Default::default()
+        };
+
+        let options = LaunchOptions::from_profile(
+            &profile,
+            &config,
+            JavaInstallation {
+                path: std::path::PathBuf::from("/java"),
+                major_version: 21,
+                vendor: String::new(),
+                is_64bit: true,
+            },
+        );
+        assert_eq!(options.max_memory, 3072, "inherits the global default");
+        assert_eq!(options.jvm_args, vec!["-Dglobal=1"]);
+        assert_eq!(options.game_dir, std::path::PathBuf::from("/g"));
+        assert_eq!(
+            options.run_dir,
+            std::path::PathBuf::from("/g/versions/1.20.4")
+        );
+    }
 }
