@@ -1,7 +1,7 @@
 //! JSON schema versioning & compatibility state machine.
 //!
 //! Mirrors HMCL's [`JsonSchema`]: every settings file carries a `$schema` marker
-//! (a URL like `https://hmcl.huangyuhui.net/json/schema/<id>/<version>`). On
+//! (a URL like `https://rmcl.snowebsite.top/json/schema/<id>/<version>`). On
 //! load the marker is compared against the schema the current code understands,
 //! producing one of eight compatibility states that drive read/save behavior:
 //! older files are readable & upgradable, same-minor files keep their marker,
@@ -12,8 +12,17 @@
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::fmt;
 
-/// Prefix of every RMCCC/HMCL JSON schema URL.
-pub const SCHEMA_URL_PREFIX: &str = "https://hmcl.huangyuhui.net/json/schema/";
+/// Canonical prefix of every RMCCC JSON schema URL.
+pub const SCHEMA_URL_PREFIX: &str = "https://rmcl.snowebsite.top/json/schema/";
+
+/// Prefixes accepted on read for backward compatibility.
+///
+/// RMCCC originally copied HMCL's schema URL verbatim, so every settings file
+/// written before the namespace change carries the HMCL domain. Those files stay
+/// readable, and a same-minor legacy file is reported as `ReadWrite` rather than
+/// `ReadWritePreserveSchema`, which makes the loader replace the marker with
+/// [`SCHEMA_URL_PREFIX`] on the next save.
+pub const LEGACY_SCHEMA_URL_PREFIXES: &[&str] = &["https://hmcl.huangyuhui.net/json/schema/"];
 
 /// Semantic version of a serialized JSON schema (`major.minor.patch`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -67,6 +76,14 @@ pub struct ConfigSchema {
     pub version: SchemaVersion,
 }
 
+/// Parsed `$schema` marker.
+struct ParsedSchema {
+    id: String,
+    version: SchemaVersion,
+    /// True when the marker used a legacy (pre-rename) prefix.
+    legacy: bool,
+}
+
 impl ConfigSchema {
     pub fn new(id: impl Into<String>, version: SchemaVersion) -> Self {
         Self {
@@ -75,7 +92,8 @@ impl ConfigSchema {
         }
     }
 
-    /// Canonical schema URL, e.g. `https://hmcl.huangyuhui.net/json/schema/launcher-settings/1.0.0`.
+    /// Canonical schema URL, e.g.
+    /// `https://rmcl.snowebsite.top/json/schema/launcher-settings/1.0.0`.
     pub fn url(&self) -> String {
         format!("{SCHEMA_URL_PREFIX}{}/{}", self.id, self.version)
     }
@@ -96,9 +114,12 @@ impl Serialize for ConfigSchema {
 impl<'de> Deserialize<'de> for ConfigSchema {
     fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
         let s = String::deserialize(deserializer)?;
-        let (id, version) = parse_schema_url(&s)
+        let parsed = parse_schema_url(&s)
             .ok_or_else(|| serde::de::Error::custom(format!("Invalid schema URL: {s}")))?;
-        Ok(ConfigSchema { id, version })
+        Ok(ConfigSchema {
+            id: parsed.id,
+            version: parsed.version,
+        })
     }
 }
 
@@ -177,10 +198,19 @@ impl CompatibilityResult {
     }
 }
 
-/// Parses an RMCCC/HMCL schema URL, returning `(id, version)` or `None` when
-/// the string is not a valid schema URL.
-fn parse_schema_url(value: &str) -> Option<(String, SchemaVersion)> {
-    let path = value.strip_prefix(SCHEMA_URL_PREFIX)?;
+/// Parses an RMCCC schema URL (or a legacy one), returning the id, version and
+/// whether a legacy prefix was used. `None` when the string is not a valid
+/// schema URL.
+fn parse_schema_url(value: &str) -> Option<ParsedSchema> {
+    let (path, legacy) = if let Some(rest) = value.strip_prefix(SCHEMA_URL_PREFIX) {
+        (rest, false)
+    } else {
+        let rest = LEGACY_SCHEMA_URL_PREFIXES
+            .iter()
+            .find_map(|prefix| value.strip_prefix(prefix))?;
+        (rest, true)
+    };
+
     let slash = path.find('/')?;
     if slash == 0 || slash != path.rfind('/')? || slash == path.len() - 1 {
         return None;
@@ -194,7 +224,11 @@ fn parse_schema_url(value: &str) -> Option<(String, SchemaVersion)> {
     if !is_accepted_version_string(version_str, version) {
         return None;
     }
-    Some((id.to_string(), version))
+    Some(ParsedSchema {
+        id: id.to_string(),
+        version,
+        legacy,
+    })
 }
 
 fn is_valid_id(id: &str) -> bool {
@@ -233,29 +267,35 @@ pub fn check_schema(root: &serde_json::Value, expected: &ConfigSchema) -> Compat
             },
         };
     };
-    let Some((actual_id, actual_version)) = parse_schema_url(value) else {
+    let Some(parsed) = parse_schema_url(value) else {
         return CompatibilityResult {
             status: SchemaStatus::Unparseable,
         };
     };
-    if actual_id != expected.id {
+    if parsed.id != expected.id {
         return CompatibilityResult {
             status: SchemaStatus::UnexpectedId,
         };
     }
-    if actual_version.major != expected.version.major {
+    if parsed.version.major != expected.version.major {
         return CompatibilityResult {
             status: SchemaStatus::UnsupportedMajor,
         };
     }
-    if actual_version.minor > expected.version.minor {
+    if parsed.version.minor > expected.version.minor {
         return CompatibilityResult {
             status: SchemaStatus::ReadOnlyPreserveSchema,
         };
     }
-    if actual_version.minor == expected.version.minor {
+    if parsed.version.minor == expected.version.minor {
+        // A legacy marker is reported as an upgrade rather than "preserve", so
+        // the loader swaps it for the canonical namespace on the next save.
         return CompatibilityResult {
-            status: SchemaStatus::ReadWritePreserveSchema,
+            status: if parsed.legacy {
+                SchemaStatus::ReadWrite
+            } else {
+                SchemaStatus::ReadWritePreserveSchema
+            },
         };
     }
     CompatibilityResult {
@@ -283,7 +323,7 @@ mod tests {
     fn test_read_write_for_older_minor() {
         let r = check_schema(
             &root(Some(
-                "https://hmcl.huangyuhui.net/json/schema/launcher-settings/1.1.0",
+                "https://rmcl.snowebsite.top/json/schema/launcher-settings/1.1.0",
             )),
             &expected(),
         );
@@ -295,7 +335,7 @@ mod tests {
     fn test_read_write_preserve_for_same_minor() {
         let r = check_schema(
             &root(Some(
-                "https://hmcl.huangyuhui.net/json/schema/launcher-settings/1.2.5",
+                "https://rmcl.snowebsite.top/json/schema/launcher-settings/1.2.5",
             )),
             &expected(),
         );
@@ -307,7 +347,7 @@ mod tests {
     fn test_read_only_preserve_for_newer_minor() {
         let r = check_schema(
             &root(Some(
-                "https://hmcl.huangyuhui.net/json/schema/launcher-settings/1.3.0",
+                "https://rmcl.snowebsite.top/json/schema/launcher-settings/1.3.0",
             )),
             &expected(),
         );
@@ -345,7 +385,7 @@ mod tests {
     fn test_unparseable_malformed_version() {
         let r = check_schema(
             &root(Some(
-                "https://hmcl.huangyuhui.net/json/schema/launcher-settings/abc",
+                "https://rmcl.snowebsite.top/json/schema/launcher-settings/abc",
             )),
             &expected(),
         );
@@ -356,7 +396,7 @@ mod tests {
     fn test_unexpected_id() {
         let r = check_schema(
             &root(Some(
-                "https://hmcl.huangyuhui.net/json/schema/user-settings/1.0.0",
+                "https://rmcl.snowebsite.top/json/schema/user-settings/1.0.0",
             )),
             &expected(),
         );
@@ -368,7 +408,7 @@ mod tests {
     fn test_unsupported_major() {
         let r = check_schema(
             &root(Some(
-                "https://hmcl.huangyuhui.net/json/schema/launcher-settings/2.0.0",
+                "https://rmcl.snowebsite.top/json/schema/launcher-settings/2.0.0",
             )),
             &expected(),
         );
@@ -386,12 +426,59 @@ mod tests {
         assert!(SchemaVersion::parse("x.2.3").is_none());
     }
 
+    /// Files written before the namespace change still parse and, at the same
+    /// minor, are reported as an upgrade so the marker gets rewritten.
+    #[test]
+    fn test_legacy_namespace_is_readable_and_upgraded() {
+        let r = check_schema(
+            &root(Some(
+                "https://hmcl.huangyuhui.net/json/schema/launcher-settings/1.2.0",
+            )),
+            &expected(),
+        );
+        assert_eq!(r.status, SchemaStatus::ReadWrite);
+        assert!(r.readable() && r.allow_save());
+        assert!(
+            !r.preserve_schema(),
+            "legacy markers must be rewritten in the new namespace"
+        );
+    }
+
+    /// A legacy marker from a *newer* minor stays read-only.
+    #[test]
+    fn test_legacy_newer_minor_stays_read_only() {
+        let r = check_schema(
+            &root(Some(
+                "https://hmcl.huangyuhui.net/json/schema/launcher-settings/1.9.0",
+            )),
+            &expected(),
+        );
+        assert_eq!(r.status, SchemaStatus::ReadOnlyPreserveSchema);
+        assert!(r.readable() && !r.allow_save());
+    }
+
+    /// Deserializing a legacy `$schema` yields the canonical schema, so a
+    /// round-trip through the current code emits the new namespace.
+    #[test]
+    fn test_legacy_schema_deserializes_to_canonical() {
+        let parsed: ConfigSchema = serde_json::from_str(
+            "\"https://hmcl.huangyuhui.net/json/schema/launcher-settings/1.0.0\"",
+        )
+        .unwrap();
+        assert_eq!(parsed.id, "launcher-settings");
+        assert_eq!(parsed.version, SchemaVersion::new(1, 0, 0));
+        assert_eq!(
+            parsed.url(),
+            format!("{SCHEMA_URL_PREFIX}launcher-settings/1.0.0")
+        );
+    }
+
     #[test]
     fn test_config_schema_url() {
         let s = ConfigSchema::new("launcher-settings", SchemaVersion::new(1, 0, 0));
         assert_eq!(
             s.url(),
-            "https://hmcl.huangyuhui.net/json/schema/launcher-settings/1.0.0"
+            "https://rmcl.snowebsite.top/json/schema/launcher-settings/1.0.0"
         );
     }
 }
