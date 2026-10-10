@@ -52,9 +52,11 @@ mod tests {
 
     #[test]
     fn test_validate_ok() {
-        let mut launch = GameVersion::default();
-        launch.inherits_from = None;
-        launch.patches = vec![];
+        let launch = GameVersion {
+            inherits_from: None,
+            patches: vec![],
+            ..Default::default()
+        };
         let resolved = ResolvedVersion {
             unresolved: GameVersion::default(),
             launch,
@@ -65,8 +67,10 @@ mod tests {
 
     #[test]
     fn test_validate_rejects_inheritance() {
-        let mut launch = GameVersion::default();
-        launch.inherits_from = Some("1.20.4".into());
+        let launch = GameVersion {
+            inherits_from: Some("1.20.4".into()),
+            ..Default::default()
+        };
         let resolved = ResolvedVersion {
             unresolved: GameVersion::default(),
             launch,

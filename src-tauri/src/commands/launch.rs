@@ -219,12 +219,8 @@ pub async fn launch_start(
 
     // ── Phase 4: Resolve auth ──
     let auth = resolve_auth_session(&state).await?;
-    let auth_info = rmccc_launch::AuthInfo::new(
-        auth.username,
-        auth.uuid,
-        auth.access_token,
-        auth.user_type,
-    );
+    let auth_info =
+        rmccc_launch::AuthInfo::new(auth.username, auth.uuid, auth.access_token, auth.user_type);
     tracing::info!(
         username = %auth_info.username,
         uuid = %auth_info.uuid,

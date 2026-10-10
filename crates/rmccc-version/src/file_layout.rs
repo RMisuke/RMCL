@@ -122,12 +122,17 @@ pub fn assets_dir(game_dir: &Path) -> PathBuf {
 
 /// `{game_dir}/assets/indexes/{asset_id}.json`.
 pub fn asset_index_file(game_dir: &Path, asset_id: &str) -> PathBuf {
-    assets_dir(game_dir).join("indexes").join(format!("{asset_id}.json"))
+    assets_dir(game_dir)
+        .join("indexes")
+        .join(format!("{asset_id}.json"))
 }
 
 /// `{game_dir}/assets/objects/{hash[0:2]}/{hash}`.
 pub fn asset_object(game_dir: &Path, hash: &str) -> PathBuf {
-    assets_dir(game_dir).join("objects").join(&hash[..2]).join(hash)
+    assets_dir(game_dir)
+        .join("objects")
+        .join(&hash[..2])
+        .join(hash)
 }
 
 /// `{game_dir}/assets/virtual/legacy` — pre-1.6 resource compatibility.
@@ -186,7 +191,9 @@ mod tests {
     fn test_library_file() {
         assert_eq!(
             library_file(gd(), "com.mojang:logging:1.0.0"),
-            Path::new("/tmp/rmccc-layout/game/libraries/com/mojang/logging/1.0.0/logging-1.0.0.jar")
+            Path::new(
+                "/tmp/rmccc-layout/game/libraries/com/mojang/logging/1.0.0/logging-1.0.0.jar"
+            )
         );
         assert_eq!(
             library_file(gd(), "org.lwjgl:lwjgl:3.3.1:natives-macos"),
@@ -199,7 +206,7 @@ mod tests {
     #[test]
     fn test_native_dir_naming() {
         let dir = native_dir(gd(), "1.20.4");
-        assert!(dir.ends_with(&format!("natives-{}", platform_classifier())));
+        assert!(dir.ends_with(format!("natives-{}", platform_classifier())));
         assert_eq!(
             native_dir_legacy(gd(), "1.20.4"),
             Path::new("/tmp/rmccc-layout/game/versions/1.20.4/natives")

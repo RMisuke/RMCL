@@ -193,11 +193,17 @@ mod tests {
     fn test_last_match_wins() {
         let current = current_os_name();
         // allow on current, then disallow on current → last wins → disallowed
-        let rules = vec![rule("allow", Some(current)), rule("disallow", Some(current))];
+        let rules = vec![
+            rule("allow", Some(current)),
+            rule("disallow", Some(current)),
+        ];
         assert!(!rules_allow(&rules, &HashMap::new()));
 
         // disallow then allow → allowed
-        let rules = vec![rule("disallow", Some(current)), rule("allow", Some(current))];
+        let rules = vec![
+            rule("disallow", Some(current)),
+            rule("allow", Some(current)),
+        ];
         assert!(rules_allow(&rules, &HashMap::new()));
     }
 
@@ -208,7 +214,10 @@ mod tests {
             os: None,
             features: Some(HashMap::from([("has_custom_resolution".into(), true)])),
         }];
-        assert!(rules_allow(&rules, &HashMap::from([("has_custom_resolution".into(), true)])));
+        assert!(rules_allow(
+            &rules,
+            &HashMap::from([("has_custom_resolution".into(), true)])
+        ));
         // last-match-wins: no matching rule → default allow
         assert!(rules_allow(&rules, &HashMap::new()));
     }

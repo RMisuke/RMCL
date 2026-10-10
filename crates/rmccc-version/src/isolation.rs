@@ -9,20 +9,15 @@ use std::path::{Path, PathBuf};
 use super::file_layout;
 
 /// Instance isolation type.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum IsolationType {
     /// Never isolate — share libraries / assets / saves in the game directory.
+    #[default]
     Never,
     /// Always isolate — the instance root is the run directory.
     Always,
     /// Isolate only modded instances (those with patches).
     Modded,
-}
-
-impl Default for IsolationType {
-    fn default() -> Self {
-        Self::Never
-    }
 }
 
 /// Select the effective run directory for an instance.

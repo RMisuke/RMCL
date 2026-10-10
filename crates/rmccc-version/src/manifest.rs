@@ -333,18 +333,23 @@ pub(crate) fn parse_version_json(id: &str, json: &str) -> Result<GameVersion> {
                         }
                     },
                     libraries: parse_patch_libraries(&p["libraries"]),
-                    asset_index: p["assetIndex"].as_object().map(|_| super::types::AssetIndex {
-                        id: p["assetIndex"]["id"].as_str().unwrap_or("").to_string(),
-                        url: p["assetIndex"]["url"].as_str().unwrap_or("").to_string(),
-                        sha1: p["assetIndex"]["sha1"].as_str().unwrap_or("").to_string(),
-                        size: p["assetIndex"]["size"].as_u64().unwrap_or(0),
-                        total_size: p["assetIndex"]["totalSize"].as_u64().unwrap_or(0),
-                    }),
-                    java_version: p["javaVersion"].as_object().map(|_| super::types::JavaRequirement {
-                        major_version: p["javaVersion"]["majorVersion"].as_u64().unwrap_or(8) as u32,
-                        component: p["javaVersion"]["component"]
-                            .as_str()
-                            .map(|s| s.to_string()),
+                    asset_index: p["assetIndex"]
+                        .as_object()
+                        .map(|_| super::types::AssetIndex {
+                            id: p["assetIndex"]["id"].as_str().unwrap_or("").to_string(),
+                            url: p["assetIndex"]["url"].as_str().unwrap_or("").to_string(),
+                            sha1: p["assetIndex"]["sha1"].as_str().unwrap_or("").to_string(),
+                            size: p["assetIndex"]["size"].as_u64().unwrap_or(0),
+                            total_size: p["assetIndex"]["totalSize"].as_u64().unwrap_or(0),
+                        }),
+                    java_version: p["javaVersion"].as_object().map(|_| {
+                        super::types::JavaRequirement {
+                            major_version: p["javaVersion"]["majorVersion"].as_u64().unwrap_or(8)
+                                as u32,
+                            component: p["javaVersion"]["component"]
+                                .as_str()
+                                .map(|s| s.to_string()),
+                        }
                     }),
                     inherits_from: p["inheritsFrom"].as_str().map(|s| s.to_string()),
                     compatibility_rules: p["compatibilityRules"]
@@ -389,8 +394,12 @@ fn parse_compatibility_rules(arr: &[serde_json::Value]) -> Vec<super::types::Com
         .map(|rule| super::types::CompatibilityRule {
             action: rule["action"].as_str().unwrap_or("allow").to_string(),
             os: rule["os"].as_object().map(|os| super::types::OsCondition {
-                name: os.get("name").and_then(|n| n.as_str().map(|s| s.to_string())),
-                arch: os.get("arch").and_then(|a| a.as_str().map(|s| s.to_string())),
+                name: os
+                    .get("name")
+                    .and_then(|n| n.as_str().map(|s| s.to_string())),
+                arch: os
+                    .get("arch")
+                    .and_then(|a| a.as_str().map(|s| s.to_string())),
                 version: os
                     .get("version")
                     .and_then(|v| v.as_str().map(|s| s.to_string())),
@@ -414,8 +423,7 @@ fn parse_patch_libraries(value: &serde_json::Value) -> Vec<super::types::Library
         .map(|arr| {
             arr.iter()
                 .map(|lib| {
-                    serde_json::from_value::<super::types::Library>(lib.clone())
-                        .unwrap_or_default()
+                    serde_json::from_value::<super::types::Library>(lib.clone()).unwrap_or_default()
                 })
                 .collect()
         })
@@ -459,14 +467,13 @@ fn parse_version_arguments(arr: &[serde_json::Value]) -> Vec<super::types::Versi
 
                 let value = if let Some(val) = v["value"].as_str() {
                     super::types::ArgumentValue::Single(val.to_string())
-                } else if let Some(arr) = v["value"].as_array() {
+                } else {
+                    let arr = v["value"].as_array()?;
                     super::types::ArgumentValue::Multiple(
                         arr.iter()
                             .filter_map(|e| e.as_str().map(|s| s.to_string()))
                             .collect(),
                     )
-                } else {
-                    return None;
                 };
 
                 Some(super::types::VersionArgument::Ruled { rules, value })

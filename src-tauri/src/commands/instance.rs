@@ -48,7 +48,9 @@ fn locked_error() -> IpcError {
 
 #[tauri::command]
 #[tracing::instrument(skip(state))]
-pub async fn instance_list(state: tauri::State<'_, AppState>) -> Result<Vec<InstanceInfo>, IpcError> {
+pub async fn instance_list(
+    state: tauri::State<'_, AppState>,
+) -> Result<Vec<InstanceInfo>, IpcError> {
     let core = state.core.read().await;
     let repo = core.game_repository.read().map_err(|_| locked_error())?;
     let game_root = repo.game_dir().to_path_buf();
@@ -224,12 +226,9 @@ pub async fn instance_repair(
         (game_root, resolved, core.http_client.clone())
     };
 
-    let items = rmccc_version::completion::build_completion_downloads(
-        &http_client,
-        &game_root,
-        &resolved,
-    )
-    .await?;
+    let items =
+        rmccc_version::completion::build_completion_downloads(&http_client, &game_root, &resolved)
+            .await?;
 
     if items.is_empty() {
         tracing::info!(id = %id, "Instance is complete — nothing to repair");

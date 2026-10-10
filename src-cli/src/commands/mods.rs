@@ -72,15 +72,17 @@ pub async fn handle(ctx: &CliContext, out: &Output, action: ModAction) -> CliRes
             mod_id,
             version_id,
             file,
-        } => install(
-            ctx,
-            out,
-            &profile,
-            mod_id.as_deref(),
-            version_id.as_deref(),
-            file.as_deref(),
-        )
-        .await,
+        } => {
+            install(
+                ctx,
+                out,
+                &profile,
+                mod_id.as_deref(),
+                version_id.as_deref(),
+                file.as_deref(),
+            )
+            .await
+        }
         ModAction::List { profile } => ctx.mod_list(&profile).await.map_err(Into::into),
         ModAction::Remove { profile, file } => {
             ctx.mod_remove(&profile, &file).await?;
@@ -124,7 +126,10 @@ async fn install(
                 )
             })?;
             let filename = ctx.mod_install(profile, version).await?;
-            out.note(&format!("Installed '{}' into profile '{}'", filename, profile));
+            out.note(&format!(
+                "Installed '{}' into profile '{}'",
+                filename, profile
+            ));
             Ok(json!({ "installed": filename, "profile": profile, "source": "modrinth" }))
         }
         (None, None, Some(path)) => {

@@ -286,7 +286,9 @@ impl CliContext {
         memory_mb: Option<u32>,
     ) -> Result<rmccc_profile::Profile> {
         if name.trim().is_empty() {
-            return Err(RmcccError::Other("Profile name cannot be empty".to_string()));
+            return Err(RmcccError::Other(
+                "Profile name cannot be empty".to_string(),
+            ));
         }
         if name.chars().count() > 64 {
             return Err(RmcccError::Other(format!(
@@ -294,12 +296,12 @@ impl CliContext {
                 name.chars().count()
             )));
         }
-        let mod_loader = loader.and_then(rmccc_modloader::ModLoaderType::from_str).map(
-            |lt| rmccc_profile::ModLoaderConfig {
+        let mod_loader = loader
+            .and_then(rmccc_modloader::ModLoaderType::from_str)
+            .map(|lt| rmccc_profile::ModLoaderConfig {
                 loader_type: lt,
                 loader_version: String::new(),
-            },
-        );
+            });
         let core = self.core.write().await;
         let id = uuid::Uuid::new_v4().to_string();
         let game_dir = core.config.profile_game_dir(&id);
@@ -341,7 +343,11 @@ impl CliContext {
             profile.game_version = gv.to_string();
         }
         if let Some(jp) = java_path {
-            profile.java_path = if jp.is_empty() { None } else { Some(jp.to_string()) };
+            profile.java_path = if jp.is_empty() {
+                None
+            } else {
+                Some(jp.to_string())
+            };
         }
         if let Some(args) = jvm_args {
             profile.jvm_args = args;
@@ -353,7 +359,11 @@ impl CliContext {
             profile.memory_mb = mem;
         }
         if let Some(icon) = icon {
-            profile.icon = if icon.is_empty() { None } else { Some(icon.to_string()) };
+            profile.icon = if icon.is_empty() {
+                None
+            } else {
+                Some(icon.to_string())
+            };
         }
         core.profile_store.save(&profile)?;
         Ok(profile)
@@ -390,10 +400,8 @@ impl CliContext {
                 Ok(v) => v,
                 Err(e) if e.is_retryable() && !refresh => {
                     tracing::warn!("Network error fetching versions, using cache: {e}");
-                    let cache = rmccc_version::cache::VersionCache::new(
-                        &self.data_dir.join("cache"),
-                        3600,
-                    );
+                    let cache =
+                        rmccc_version::cache::VersionCache::new(&self.data_dir.join("cache"), 3600);
                     cache.read()?.unwrap_or_default()
                 }
                 Err(e) => return Err(e),
@@ -476,9 +484,9 @@ impl CliContext {
             .game_repository
             .read()
             .map_err(|_| RmcccError::Other("game repository lock poisoned".to_string()))?;
-        repo.get_manifest(id).cloned().ok_or_else(|| {
-            RmcccError::Other(format!("Local version '{id}' is not installed"))
-        })
+        repo.get_manifest(id)
+            .cloned()
+            .ok_or_else(|| RmcccError::Other(format!("Local version '{id}' is not installed")))
     }
 
     pub async fn version_local_delete(&self, id: &str) -> Result<()> {
@@ -703,10 +711,7 @@ impl CliContext {
                 p.game_version = version_id.clone();
                 let _ = core.profile_store.save(p);
             }
-            let _ = core
-                .game_repository
-                .write()
-                .map(|mut r| r.refresh());
+            let _ = core.game_repository.write().map(|mut r| r.refresh());
         }
         let _ = progress;
         Ok(version_id)
@@ -761,8 +766,7 @@ impl CliContext {
     pub async fn modloader_analyze(&self, version_id: &str) -> Result<Value> {
         use rmccc_modloader::LibraryType;
         let game_version = self.version_local_get(version_id).await?;
-        let analyzer =
-            rmccc_modloader::LibraryAnalyzer::analyze(&game_version, &game_version.id);
+        let analyzer = rmccc_modloader::LibraryAnalyzer::analyze(&game_version, &game_version.id);
         let mut detected: Vec<Value> = Vec::new();
         for ty in [
             LibraryType::Fabric,
@@ -839,9 +843,7 @@ impl CliContext {
         if let Ok(entries) = std::fs::read_dir(&mods_dir) {
             for entry in entries.flatten() {
                 let path = entry.path();
-                if path.is_file()
-                    && path.extension().is_some_and(|e| e == "jar")
-                {
+                if path.is_file() && path.extension().is_some_and(|e| e == "jar") {
                     active.push(
                         path.file_name()
                             .unwrap_or_default()
@@ -947,9 +949,7 @@ impl CliContext {
         } else if disabled.exists() {
             std::fs::remove_file(&disabled)?;
         } else {
-            return Err(RmcccError::Other(format!(
-                "Mod file not found: {filename}"
-            )));
+            return Err(RmcccError::Other(format!("Mod file not found: {filename}")));
         }
         Ok(())
     }
@@ -984,11 +984,7 @@ impl CliContext {
     /// state-syncing [`ProcessListener`]. The process is registered in
     /// [`Self::running_games`] and its exit code is published to the exit
     /// signal channel so `launch status` / `launch wait` can observe it.
-    pub async fn launch_start(
-        &self,
-        profile_id: &str,
-        opts: &LaunchStartOptions,
-    ) -> Result<u32> {
+    pub async fn launch_start(&self, profile_id: &str, opts: &LaunchStartOptions) -> Result<u32> {
         // Guard: duplicate launch.
         if self.running_games.contains_key(profile_id) {
             return Err(RmcccError::Other(format!(
@@ -1007,7 +1003,11 @@ impl CliContext {
             let resolved = repo
                 .get_resolved(&profile.game_version)
                 .map_err(|e| RmcccError::Other(e.to_string()))?;
-            (repo.game_dir().to_path_buf(), resolved, core.http_client.clone())
+            (
+                repo.game_dir().to_path_buf(),
+                resolved,
+                core.http_client.clone(),
+            )
         };
         let game_version = resolved.launch;
 
@@ -1030,7 +1030,11 @@ impl CliContext {
         let java_install = match &profile.java_path {
             Some(jh) => {
                 let home = PathBuf::from(jh);
-                let bin = if home.is_file() { home } else { home.join("bin").join("java") };
+                let bin = if home.is_file() {
+                    home
+                } else {
+                    home.join("bin").join("java")
+                };
                 if !bin.exists() {
                     return Err(RmcccError::JavaNotFound);
                 }
@@ -1060,8 +1064,7 @@ impl CliContext {
 
         // Phase 5: state-syncing process listener.
         let (exit_tx, exit_rx) = tokio::sync::watch::channel(None);
-        self.exit_signals
-            .insert(profile_id.to_string(), exit_rx);
+        self.exit_signals.insert(profile_id.to_string(), exit_rx);
         let listener: Arc<dyn rmccc_launch::ProcessListener> = Arc::new(CliProcessListener {
             profile_id: profile_id.to_string(),
             running_games: self.running_games.clone(),
@@ -1175,7 +1178,11 @@ impl CliContext {
         let java_install = match &profile.java_path {
             Some(jh) => {
                 let home = PathBuf::from(jh);
-                let bin = if home.is_file() { home } else { home.join("bin").join("java") };
+                let bin = if home.is_file() {
+                    home
+                } else {
+                    home.join("bin").join("java")
+                };
                 rmccc_launch::JavaInstallation {
                     path: bin,
                     major_version: required_java,
@@ -1327,7 +1334,11 @@ fn sanitize_filename(name: &str) -> String {
 
 /// Reject path traversal / invalid characters in user-supplied filenames.
 fn validate_mod_filename(name: &str) -> Result<()> {
-    if name.is_empty() || name.contains('/') || name.contains('\\') || name.contains("..") || name.contains('\0')
+    if name.is_empty()
+        || name.contains('/')
+        || name.contains('\\')
+        || name.contains("..")
+        || name.contains('\0')
     {
         return Err(RmcccError::Other(format!("Invalid mod filename: {name}")));
     }
@@ -1454,14 +1465,22 @@ mod tests {
     async fn config_set_get_roundtrip() {
         let dir = temp_dir("config");
         let ctx = CliContext::new(&dir).unwrap();
-        ctx.config_set("default_max_memory_mb", "8192").await.unwrap();
+        ctx.config_set("default_max_memory_mb", "8192")
+            .await
+            .unwrap();
         let v = ctx.config_get(Some("default_max_memory_mb")).await.unwrap();
         assert_eq!(v, json!(8192));
         assert!(ctx.config_set("no_such_field", "1").await.is_err());
-        assert!(ctx.config_set("default_max_memory_mb", "abc").await.is_err());
+        assert!(ctx
+            .config_set("default_max_memory_mb", "abc")
+            .await
+            .is_err());
 
         let paths = ctx.config_paths().await.unwrap();
-        assert_eq!(paths["game_root_dir"], dir.join("instances").display().to_string());
+        assert_eq!(
+            paths["game_root_dir"],
+            dir.join("instances").display().to_string()
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -1487,10 +1506,7 @@ mod tests {
     async fn state_and_user_settings() {
         let dir = temp_dir("state");
         let ctx = CliContext::new(&dir).unwrap();
-        let profile = ctx
-            .profile_create("p", "1.21", None, None)
-            .await
-            .unwrap();
+        let profile = ctx.profile_create("p", "1.21", None, None).await.unwrap();
         ctx.profile_select(&profile.id).await.unwrap();
         let state = ctx.state_get(None).await.unwrap();
         assert_eq!(state["selected_profile_id"], profile.id);

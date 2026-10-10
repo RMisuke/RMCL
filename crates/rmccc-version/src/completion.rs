@@ -82,7 +82,11 @@ pub fn check_completion(game_dir: &Path, resolved: &ResolvedVersion) -> Vec<Miss
     }
 
     // 3. Libraries (platform-filtered) + natives.
-    for lib in launch.libraries.iter().filter(|l| libraries::library_applies(l)) {
+    for lib in launch
+        .libraries
+        .iter()
+        .filter(|l| libraries::library_applies(l))
+    {
         let lib_path = lib
             .downloads
             .as_ref()
@@ -201,7 +205,10 @@ pub async fn build_completion_downloads(
                         url: launch.asset_index.url.clone(),
                     });
                 }
-                let body = resp.bytes().await.map_err(|e| RmcccError::Network(e.to_string()))?;
+                let body = resp
+                    .bytes()
+                    .await
+                    .map_err(|e| RmcccError::Network(e.to_string()))?;
                 let content: AssetIndexContent =
                     serde_json::from_slice(&body).map_err(RmcccError::Json)?;
                 std::fs::create_dir_all(idx_path.parent().unwrap_or(game_dir))?;
@@ -229,7 +236,11 @@ pub async fn build_completion_downloads(
     }
 
     // Libraries + natives.
-    for lib in launch.libraries.iter().filter(|l| libraries::library_applies(l)) {
+    for lib in launch
+        .libraries
+        .iter()
+        .filter(|l| libraries::library_applies(l))
+    {
         let lib_path = lib
             .downloads
             .as_ref()
@@ -273,7 +284,10 @@ pub async fn build_completion_downloads(
                         .as_ref()
                         .map(|p| file_layout::libraries_dir(game_dir).join(p))
                         .unwrap_or_else(|| {
-                            file_layout::library_file(game_dir, &format!("{}:{}", lib.name, classifier))
+                            file_layout::library_file(
+                                game_dir,
+                                &format!("{}:{}", lib.name, classifier),
+                            )
                         });
                     if !native_path.exists() {
                         items.push(DownloadItem {
@@ -301,8 +315,10 @@ mod tests {
     #[test]
     fn test_check_completion_reports_missing_jar() {
         let game_dir = Path::new("/tmp/rmccc-completion/game");
-        let mut launch = GameVersion::default();
-        launch.id = "1.20.4".to_string();
+        let mut launch = GameVersion {
+            id: "1.20.4".to_string(),
+            ..Default::default()
+        };
         launch.downloads.insert(
             "client".to_string(),
             crate::types::DownloadEntry {

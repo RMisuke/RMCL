@@ -4,8 +4,8 @@ use crate::state::AppState;
 use rmccc_download::provider::DownloadProvider;
 use rmccc_download::{DownloadItem, DownloadProgress};
 use rmccc_error::IpcError;
-use rmccc_version::VersionInfo;
 use rmccc_version::GameRepository as _;
+use rmccc_version::VersionInfo;
 use std::sync::Arc;
 use tauri::Emitter;
 
@@ -282,9 +282,7 @@ async fn run_install_background(
         // (launch now resolves from disk, not the network — G1).
         core.game_repository
             .write()
-            .map_err(|_| {
-                rmccc_error::RmcccError::Other("game repository lock poisoned".into())
-            })?
+            .map_err(|_| rmccc_error::RmcccError::Other("game repository lock poisoned".into()))?
             .refresh()?;
     }
 

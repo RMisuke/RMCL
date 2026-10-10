@@ -87,7 +87,10 @@ async fn create(
     memory: Option<u32>,
 ) -> CliResult<Value> {
     let profile = ctx.profile_create(name, version, loader, memory).await?;
-    out.note(&format!("Created instance '{}' (id: {})", profile.name, profile.id));
+    out.note(&format!(
+        "Created instance '{}' (id: {})",
+        profile.name, profile.id
+    ));
     Ok(profile_to_json(&profile))
 }
 

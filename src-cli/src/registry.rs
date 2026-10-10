@@ -40,22 +40,54 @@ pub const COMMANDS: &[CommandSpec] = &[
         name: "auth",
         about: "Authentication: Microsoft OAuth2 / offline accounts",
         subcommands: &[
-            sub!("login", "Log in (microsoft device flow or offline)", "auth login -t microsoft|offline [--username <name>]"),
-            sub!("logout", "Log out the active (or --account) account", "auth logout [--account <id>]"),
-            sub!("refresh", "Refresh an expired token", "auth refresh [--account <id>]"),
+            sub!(
+                "login",
+                "Log in (microsoft device flow or offline)",
+                "auth login -t microsoft|offline [--username <name>]"
+            ),
+            sub!(
+                "logout",
+                "Log out the active (or --account) account",
+                "auth logout [--account <id>]"
+            ),
+            sub!(
+                "refresh",
+                "Refresh an expired token",
+                "auth refresh [--account <id>]"
+            ),
             sub!("status", "Show the active session", "auth status"),
-            sub!("list", "List persisted accounts (public metadata)", "auth list"),
-            sub!("select", "Select an account as active", "auth select --account <id>"),
+            sub!(
+                "list",
+                "List persisted accounts (public metadata)",
+                "auth list"
+            ),
+            sub!(
+                "select",
+                "Select an account as active",
+                "auth select --account <id>"
+            ),
         ],
     },
     CommandSpec {
         name: "config",
         about: "Launcher settings, runtime state and user preferences",
         subcommands: &[
-            sub!("get", "Read a settings field or the full document", "config get [<key>]"),
-            sub!("set", "Update a structured settings field", "config set <field> <value>"),
+            sub!(
+                "get",
+                "Read a settings field or the full document",
+                "config get [<key>]"
+            ),
+            sub!(
+                "set",
+                "Update a structured settings field",
+                "config set <field> <value>"
+            ),
             sub!("path", "Show resolved data dir / game root", "config path"),
-            sub!("state", "Runtime state (loss-tolerant)", "config state get|set ..."),
+            sub!(
+                "state",
+                "Runtime state (loss-tolerant)",
+                "config state get|set ..."
+            ),
             sub!("user", "User preferences", "config user get|set ..."),
         ],
     },
@@ -65,10 +97,26 @@ pub const COMMANDS: &[CommandSpec] = &[
         subcommands: &[
             sub!("list", "List all game instances", "profile list"),
             sub!("get", "Show one instance", "profile get --id <id>"),
-            sub!("create", "Create a new game instance", "profile create -n <name> [-v <mc>] [-l <loader>] [--memory <mb>]"),
-            sub!("update", "Update instance fields", "profile update --id <id> [--name] [--memory] ..."),
-            sub!("delete", "Delete an instance", "profile delete --id <id> [--cleanup]"),
-            sub!("select", "Set the active instance", "profile select --id <id>"),
+            sub!(
+                "create",
+                "Create a new game instance",
+                "profile create -n <name> [-v <mc>] [-l <loader>] [--memory <mb>]"
+            ),
+            sub!(
+                "update",
+                "Update instance fields",
+                "profile update --id <id> [--name] [--memory] ..."
+            ),
+            sub!(
+                "delete",
+                "Delete an instance",
+                "profile delete --id <id> [--cleanup]"
+            ),
+            sub!(
+                "select",
+                "Set the active instance",
+                "profile select --id <id>"
+            ),
             sub!("active", "Show the active instance", "profile active"),
         ],
     },
@@ -76,20 +124,48 @@ pub const COMMANDS: &[CommandSpec] = &[
         name: "version",
         about: "Version management (remote manifest + local repository)",
         subcommands: &[
-            sub!("list", "List remote Minecraft versions", "version list [--refresh]"),
+            sub!(
+                "list",
+                "List remote Minecraft versions",
+                "version list [--refresh]"
+            ),
             sub!("get", "Show remote version metadata", "version get <id>"),
-            sub!("install", "Install a version into a profile", "version install --profile <id> -v <mc>"),
-            sub!("local", "Local repository operations", "version local list|get|delete ..."),
+            sub!(
+                "install",
+                "Install a version into a profile",
+                "version install --profile <id> -v <mc>"
+            ),
+            sub!(
+                "local",
+                "Local repository operations",
+                "version local list|get|delete ..."
+            ),
         ],
     },
     CommandSpec {
         name: "resource",
         about: "Game resource install / check / repair / verify",
         subcommands: &[
-            sub!("install", "Install game resources for a profile", "resource install --profile <id> -v <mc>"),
-            sub!("check", "Check completeness of installed files", "resource check --profile <id>"),
-            sub!("repair", "Auto-download missing / corrupted files", "resource repair --profile <id>"),
-            sub!("verify", "Verify SHA1 integrity", "resource verify --profile <id>"),
+            sub!(
+                "install",
+                "Install game resources for a profile",
+                "resource install --profile <id> -v <mc>"
+            ),
+            sub!(
+                "check",
+                "Check completeness of installed files",
+                "resource check --profile <id>"
+            ),
+            sub!(
+                "repair",
+                "Auto-download missing / corrupted files",
+                "resource repair --profile <id>"
+            ),
+            sub!(
+                "verify",
+                "Verify SHA1 integrity",
+                "resource verify --profile <id>"
+            ),
             sub!("status", "Download engine status", "resource status"),
         ],
     },
@@ -97,35 +173,91 @@ pub const COMMANDS: &[CommandSpec] = &[
         name: "modloader",
         about: "Mod loader discovery, install and analysis",
         subcommands: &[
-            sub!("list", "List available loader versions", "modloader list -t <loader> -v <mc>"),
-            sub!("install", "Install a loader into a profile", "modloader install -p <profile> -t <loader> -v <version>"),
-            sub!("remove", "Remove the installed loader", "modloader remove -p <profile>"),
-            sub!("analyze", "Analyze installed loaders in a version", "modloader analyze -v <version>"),
+            sub!(
+                "list",
+                "List available loader versions",
+                "modloader list -t <loader> -v <mc>"
+            ),
+            sub!(
+                "install",
+                "Install a loader into a profile",
+                "modloader install -p <profile> -t <loader> -v <version>"
+            ),
+            sub!(
+                "remove",
+                "Remove the installed loader",
+                "modloader remove -p <profile>"
+            ),
+            sub!(
+                "analyze",
+                "Analyze installed loaders in a version",
+                "modloader analyze -v <version>"
+            ),
         ],
     },
     CommandSpec {
         name: "mod",
         about: "Mod management (Modrinth search / install / local files)",
         subcommands: &[
-            sub!("search", "Search Modrinth for mods", "mod search -q <query> [--game-version] [--loader]"),
-            sub!("versions", "List versions of a mod", "mod versions --id <mod-id>"),
-            sub!("install", "Install a mod (remote or local file)", "mod install --profile <id> (--version-id <vid> | --file <path>)"),
+            sub!(
+                "search",
+                "Search Modrinth for mods",
+                "mod search -q <query> [--game-version] [--loader]"
+            ),
+            sub!(
+                "versions",
+                "List versions of a mod",
+                "mod versions --id <mod-id>"
+            ),
+            sub!(
+                "install",
+                "Install a mod (remote or local file)",
+                "mod install --profile <id> (--version-id <vid> | --file <path>)"
+            ),
             sub!("list", "List installed mods", "mod list --profile <id>"),
-            sub!("remove", "Remove an installed mod", "mod remove --profile <id> --file <name>"),
-            sub!("toggle", "Enable / disable a mod", "mod toggle --profile <id> --file <name> --enabled <bool>"),
-            sub!("download-url", "Resolve a version's download URL", "mod download-url --version-id <vid>"),
+            sub!(
+                "remove",
+                "Remove an installed mod",
+                "mod remove --profile <id> --file <name>"
+            ),
+            sub!(
+                "toggle",
+                "Enable / disable a mod",
+                "mod toggle --profile <id> --file <name> --enabled <bool>"
+            ),
+            sub!(
+                "download-url",
+                "Resolve a version's download URL",
+                "mod download-url --version-id <vid>"
+            ),
         ],
     },
     CommandSpec {
         name: "launch",
         about: "Launch games, observe processes, dry-run commands",
         subcommands: &[
-            sub!("run", "Launch a game (blocks until exit by default)", "launch run -p <profile> [--no-wait] [--no-repair]"),
+            sub!(
+                "run",
+                "Launch a game (blocks until exit by default)",
+                "launch run -p <profile> [--no-wait] [--no-repair]"
+            ),
             sub!("status", "List running game processes", "launch status"),
-            sub!("stop", "Terminate a running game", "launch stop -p <profile>"),
-            sub!("wait", "Block until a game exits", "launch wait -p <profile>"),
+            sub!(
+                "stop",
+                "Terminate a running game",
+                "launch stop -p <profile>"
+            ),
+            sub!(
+                "wait",
+                "Block until a game exits",
+                "launch wait -p <profile>"
+            ),
             sub!("java", "Detect Java installations", "launch java"),
-            sub!("command", "Dry-run: print the generated command line", "launch command -p <profile>"),
+            sub!(
+                "command",
+                "Dry-run: print the generated command line",
+                "launch command -p <profile>"
+            ),
         ],
     },
     CommandSpec {
@@ -181,7 +313,9 @@ pub fn render_help(path: &[String]) -> String {
             }
         }
         out.push_str("\nGlobal options: -d/--data-dir <dir>  -o/--output <auto|plain|json>  --event-stream  -i/--interactive\n");
-        out.push_str("\nUse `help <command> [<subcommand>]` for details, or `rmcli <command> --help`.\n");
+        out.push_str(
+            "\nUse `help <command> [<subcommand>]` for details, or `rmcli <command> --help`.\n",
+        );
         return out;
     }
 
@@ -240,7 +374,10 @@ pub fn render_completions(shell: &str) -> String {
         }
         "fish" => {
             for name in &names {
-                out.push_str(&format!("complete -c rmcli -n \"__fish_use_subcommand\" -a '{}'\n", name));
+                out.push_str(&format!(
+                    "complete -c rmcli -n \"__fish_use_subcommand\" -a '{}'\n",
+                    name
+                ));
             }
         }
         "powershell" => {
@@ -259,7 +396,9 @@ pub fn render_completions(shell: &str) -> String {
             ));
         }
         _ => {
-            out.push_str(&format!("Unsupported shell '{shell}'. Supported: bash, zsh, fish, powershell, elvish\n"));
+            out.push_str(&format!(
+                "Unsupported shell '{shell}'. Supported: bash, zsh, fish, powershell, elvish\n"
+            ));
         }
     }
     out

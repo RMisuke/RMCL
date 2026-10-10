@@ -20,9 +20,7 @@ pub async fn handle(ctx: &CliContext, out: &Output, action: LaunchAction) -> Cli
         LaunchAction::Stop { profile } => stop(ctx, &profile).await,
         LaunchAction::Wait { profile } => wait(ctx, &profile).await,
         LaunchAction::Java => java(ctx).await,
-        LaunchAction::Command { profile } => {
-            ctx.launch_command(&profile).await.map_err(Into::into)
-        }
+        LaunchAction::Command { profile } => ctx.launch_command(&profile).await.map_err(Into::into),
     }
 }
 

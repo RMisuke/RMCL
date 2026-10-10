@@ -171,32 +171,36 @@ impl DefaultLauncher {
 
     /// Feature flags for rule-gated arguments (HMCL `getFeatures`).
     pub fn get_features(&self) -> HashMap<String, bool> {
-        let custom_resolution = self.options.width.is_some_and(|w| w > 0)
-            && self.options.height.is_some_and(|h| h > 0);
+        let custom_resolution =
+            self.options.width.is_some_and(|w| w > 0) && self.options.height.is_some_and(|h| h > 0);
         let mut features = HashMap::new();
         features.insert("has_custom_resolution".to_string(), custom_resolution);
         features
     }
 
     /// Template variables for `${...}` substitution (HMCL `getConfigurations`).
-    pub fn get_configurations(&self, classpath: &str, natives_var: &str) -> HashMap<String, String> {
+    pub fn get_configurations(
+        &self,
+        classpath: &str,
+        natives_var: &str,
+    ) -> HashMap<String, String> {
         let version_name = self
             .options
             .version_name
             .clone()
             .unwrap_or_else(|| self.game_version.id.clone());
-        let version_type = self
-            .options
-            .version_type
-            .clone()
-            .unwrap_or_else(|| match self.game_version.release_type {
+        let version_type = self.options.version_type.clone().unwrap_or_else(|| {
+            match self.game_version.release_type {
                 ReleaseType::Release => "release",
                 ReleaseType::Snapshot => "snapshot",
                 ReleaseType::OldBeta => "old_beta",
                 ReleaseType::OldAlpha => "old_alpha",
             }
-            .to_string());
-        let assets_dir = file_layout::assets_dir(&self.game_dir).display().to_string();
+            .to_string()
+        });
+        let assets_dir = file_layout::assets_dir(&self.game_dir)
+            .display()
+            .to_string();
 
         let mut vars_map = build_template_vars(
             &self.auth.username,
@@ -221,16 +225,16 @@ impl DefaultLauncher {
                 .clone()
                 .unwrap_or_else(|| "Minecraft".to_string())
         });
-        vars_map.insert(vars::USER_PROPERTIES.to_string(), self.auth.user_properties.clone());
+        vars_map.insert(
+            vars::USER_PROPERTIES.to_string(),
+            self.auth.user_properties.clone(),
+        );
 
         // HMCL extras not covered by build_template_vars.
         vars_map.insert("game_assets".to_string(), assets_dir.clone());
         vars_map.insert("assets_root".to_string(), assets_dir);
         let primary_jar = self.client_jar_path();
-        vars_map.insert(
-            "primary_jar".to_string(),
-            primary_jar.display().to_string(),
-        );
+        vars_map.insert("primary_jar".to_string(), primary_jar.display().to_string());
         vars_map.insert(
             "primary_jar_name".to_string(),
             primary_jar
@@ -240,7 +244,9 @@ impl DefaultLauncher {
         );
         vars_map.insert(
             "libraries_directory".to_string(),
-            file_layout::libraries_dir(&self.game_dir).display().to_string(),
+            file_layout::libraries_dir(&self.game_dir)
+                .display()
+                .to_string(),
         );
         let sep = if cfg!(windows) { "\\" } else { "/" };
         vars_map.insert("file_separator".to_string(), sep.to_string());
@@ -289,7 +295,9 @@ impl DefaultLauncher {
 
         let client_jar = self.client_jar_path();
         if !client_jar.is_file() {
-            return Err(LaunchError::MissingClientJar(client_jar.display().to_string()));
+            return Err(LaunchError::MissingClientJar(
+                client_jar.display().to_string(),
+            ));
         }
         classpath.push(client_jar);
         Ok(classpath)
@@ -326,8 +334,7 @@ impl DefaultLauncher {
             cmd.add_default("-Xmx", &format!("{}m", self.options.max_memory));
         }
         if self.options.min_memory > 0
-            && (self.options.max_memory == 0
-                || self.options.min_memory <= self.options.max_memory)
+            && (self.options.max_memory == 0 || self.options.min_memory <= self.options.max_memory)
         {
             cmd.add_default("-Xms", &format!("{}m", self.options.min_memory));
         }
@@ -335,7 +342,10 @@ impl DefaultLauncher {
             if jv < 8 {
                 cmd.add_default("-XX:PermSize=", &format!("{}m", self.options.metaspace));
             } else {
-                cmd.add_default("-XX:MetaspaceSize=", &format!("{}m", self.options.metaspace));
+                cmd.add_default(
+                    "-XX:MetaspaceSize=",
+                    &format!("{}m", self.options.metaspace),
+                );
             }
         }
 
@@ -377,10 +387,7 @@ impl DefaultLauncher {
 
             // -Dminecraft.client.jar with the real path (L12).
             let client_jar = self.client_jar_path();
-            cmd.add_default(
-                "-Dminecraft.client.jar=",
-                &client_jar.display().to_string(),
-            );
+            cmd.add_default("-Dminecraft.client.jar=", &client_jar.display().to_string());
 
             #[cfg(target_os = "macos")]
             {
@@ -463,10 +470,8 @@ impl DefaultLauncher {
         {
             let native_str = java_native_folder.display().to_string();
             if !native_str.is_ascii() && log4j::mc_version_before(&self.mc_version(), 19) {
-                let temp = PathBuf::from("/tmp").join(format!(
-                    "hmcl-natives-{}",
-                    uuid::Uuid::new_v4()
-                ));
+                let temp =
+                    PathBuf::from("/tmp").join(format!("hmcl-natives-{}", uuid::Uuid::new_v4()));
                 natives_var = format!("{}:{}", temp.display(), native_str);
                 temp_native_folder = Some(temp);
             } else {
@@ -597,9 +602,14 @@ impl DefaultLauncher {
 
         let env = self.get_env_vars();
 
-        let child = spawn_game(&self.options.java.path, &response_file, &self.game_dir, Some(env))
-            .await
-            .map_err(LaunchError::from)?;
+        let child = spawn_game(
+            &self.options.java.path,
+            &response_file,
+            &self.game_dir,
+            Some(env),
+        )
+        .await
+        .map_err(LaunchError::from)?;
 
         // Remove the response file immediately after spawn.
         if let Err(e) = std::fs::remove_file(&response_file) {
@@ -616,11 +626,7 @@ impl DefaultLauncher {
             let _ = std::fs::remove_file(temp);
         }
 
-        let managed = Arc::new(ManagedProcess::new(
-            self.instance_id.clone(),
-            child,
-            2000,
-        ));
+        let managed = Arc::new(ManagedProcess::new(self.instance_id.clone(), child, 2000));
         let listener = self.wrap_listener();
         if let Some(l) = listener {
             managed.add_listener(l);
@@ -782,7 +788,10 @@ fn shell_script(
         s.push_str(&format!("{}\n", post));
     }
     if let Some(temp) = temp_native_folder {
-        s.push_str(&format!("rm {}\n", shell_quote(&temp.display().to_string())));
+        s.push_str(&format!(
+            "rm {}\n",
+            shell_quote(&temp.display().to_string())
+        ));
     }
     s
 }
@@ -875,9 +884,8 @@ fn add_optimizing_jvm_args(cmd: &mut CommandBuilder, jv: u32, is_64bit: bool) {
         cmd.add_unstable_bool("UnlockDiagnosticVMOptions", true);
     }
     if jv >= 8
-        && cmd.none_match(|a| {
-            a.starts_with("-XX:+Use") && a != "-XX:+UseG1GC" || a == "-XX:-UseG1GC"
-        })
+        && cmd
+            .none_match(|a| a.starts_with("-XX:+Use") && a != "-XX:+UseG1GC" || a == "-XX:-UseG1GC")
     {
         cmd.add_unstable_bool("UseG1GC", true);
         cmd.add_unstable_value("G1MixedGCCountTarget", "5");
@@ -920,7 +928,10 @@ fn default_game_arguments(
         "--assetIndex".to_string(),
         game_version.asset_index.id.clone(),
         "--uuid".to_string(),
-        configurations.get(vars::AUTH_UUID).cloned().unwrap_or_default(),
+        configurations
+            .get(vars::AUTH_UUID)
+            .cloned()
+            .unwrap_or_default(),
         "--accessToken".to_string(),
         configurations
             .get(vars::AUTH_ACCESS_TOKEN)
@@ -932,7 +943,10 @@ fn default_game_arguments(
             .cloned()
             .unwrap_or_else(|| auth.user_type.clone()),
         "--versionType".to_string(),
-        configurations.get(vars::VERSION_TYPE).cloned().unwrap_or_default(),
+        configurations
+            .get(vars::VERSION_TYPE)
+            .cloned()
+            .unwrap_or_default(),
     ];
     raw
 }
@@ -1042,15 +1056,19 @@ mod tests {
     use super::*;
 
     fn test_launcher() -> DefaultLauncher {
-        let mut gv = GameVersion::default();
-        gv.id = "1.20.4".to_string();
-        gv.main_class = "net.minecraft.client.main.Main".to_string();
+        let mut gv = GameVersion {
+            id: "1.20.4".to_string(),
+            main_class: "net.minecraft.client.main.Main".to_string(),
+            ..Default::default()
+        };
         gv.asset_index.id = "17".to_string();
-        let mut options = LaunchOptions::default();
+        let mut options = LaunchOptions {
+            max_memory: 2048,
+            game_dir: PathBuf::from("/game"),
+            ..Default::default()
+        };
         options.java.major_version = 17;
         options.java.is_64bit = true;
-        options.max_memory = 2048;
-        options.game_dir = PathBuf::from("/game");
         DefaultLauncher::new(
             "1.20.4".to_string(),
             PathBuf::from("/game"),
@@ -1130,16 +1148,20 @@ mod tests {
         std::fs::write(jar_dir.join("1.20.4.jar"), b"fake-jar").unwrap();
         std::fs::write(jar_dir.join("1.20.4.json"), b"{}").unwrap();
 
-        let mut gv = GameVersion::default();
-        gv.id = "1.20.4".to_string();
-        gv.main_class = "net.minecraft.client.main.Main".to_string();
+        let mut gv = GameVersion {
+            id: "1.20.4".to_string(),
+            main_class: "net.minecraft.client.main.Main".to_string(),
+            ..Default::default()
+        };
         gv.asset_index.id = "17".to_string();
 
-        let mut options = LaunchOptions::default();
+        let mut options = LaunchOptions {
+            max_memory: 2048,
+            game_dir: game_dir.clone(),
+            ..Default::default()
+        };
         options.java.major_version = 17;
         options.java.is_64bit = true;
-        options.max_memory = 2048;
-        options.game_dir = game_dir.clone();
 
         let l = DefaultLauncher::new(
             "1.20.4".to_string(),
@@ -1162,16 +1184,15 @@ mod tests {
         // Memory args.
         assert!(command.jvm_args.iter().any(|a| a.starts_with("-Xmx")));
         // Classpath contains the client JAR (L12 real path).
-        assert!(
-            command
-                .jvm_args
-                .iter()
-                .any(|a| a.ends_with("/versions/1.20.4/1.20.4.jar"))
-        );
+        assert!(command
+            .jvm_args
+            .iter()
+            .any(|a| a.ends_with("/versions/1.20.4/1.20.4.jar")));
         // -Dminecraft.client.jar uses the real path.
-        assert!(command.jvm_args.iter().any(|a| {
-            a.starts_with("-Dminecraft.client.jar=") && a.contains("1.20.4.jar")
-        }));
+        assert!(command
+            .jvm_args
+            .iter()
+            .any(|a| { a.starts_with("-Dminecraft.client.jar=") && a.contains("1.20.4.jar") }));
         // Launcher metadata injected.
         assert!(command
             .jvm_args

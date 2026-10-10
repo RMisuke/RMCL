@@ -31,9 +31,9 @@ pub use repository::resolve_version;
 pub use resolved::ResolvedVersion;
 pub use types::{
     ArgumentRule, ArgumentValue, AssetIndex, CompatibilityRule, DownloadEntry, ExtractRules,
-    GamePatch, GameVersion, JavaRequirement, Library, LibraryDownloads, LibraryRule,
-    LoggingInfo, OsCondition, OsRule, ReleaseType, VersionArgument, VersionArguments,
-    VersionInfo, VersionProvider,
+    GamePatch, GameVersion, JavaRequirement, Library, LibraryDownloads, LibraryRule, LoggingInfo,
+    OsCondition, OsRule, ReleaseType, VersionArgument, VersionArguments, VersionInfo,
+    VersionProvider,
 };
 
 /// Map MC version string to minimum Java major version.

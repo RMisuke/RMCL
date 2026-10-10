@@ -640,6 +640,22 @@ impl MicrosoftAccount {
     fn auth_info_from(&self, session: &AuthSession) -> AuthInfo {
         AuthInfo::from_session(session)
     }
+
+    /// Locks the session mutex, recovering from poisoning.
+    ///
+    /// The session is a plain value object, so a poisoned lock carries no extra
+    /// information — and `unwrap()` is banned in production code by the CI
+    /// clippy gate (`-D clippy::unwrap_used`).
+    fn session_lock(&self) -> std::sync::MutexGuard<'_, AuthSession> {
+        self.session
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
+    /// Cloned snapshot of the current session.
+    fn session_snapshot(&self) -> AuthSession {
+        self.session_lock().clone()
+    }
 }
 
 #[async_trait::async_trait]
@@ -653,17 +669,17 @@ impl Account for MicrosoftAccount {
     }
 
     fn profile_name(&self) -> String {
-        let session = self.session.lock().unwrap();
+        let session = self.session_lock();
         session.username.clone()
     }
 
     fn profile_id(&self) -> String {
-        let session = self.session.lock().unwrap();
+        let session = self.session_lock();
         session.uuid.clone()
     }
 
     async fn log_in(&self) -> Result<AuthInfo> {
-        let session = self.session.lock().unwrap().clone();
+        let session = self.session_snapshot();
 
         // Advance-refresh window: if the token is still far from expiring, use
         // it as-is without any network round-trip.
@@ -698,7 +714,7 @@ impl Account for MicrosoftAccount {
             });
         }
 
-        *self.session.lock().unwrap() = refreshed.clone();
+        *self.session_lock() = refreshed.clone();
         Ok(self.auth_info_from(&refreshed))
     }
 
@@ -709,7 +725,7 @@ impl Account for MicrosoftAccount {
         // 完整重新授权（device code），更新为新的会话；账户记录 ID 保持不变。
         let mut new_session = self.provider.authenticate(progress).await?;
         new_session.account_id = self.account_id.to_string();
-        *self.session.lock().unwrap() = new_session.clone();
+        *self.session_lock() = new_session.clone();
         tracing::info!(
             username = %new_session.username,
             "Re-authorized Microsoft account"
@@ -718,7 +734,7 @@ impl Account for MicrosoftAccount {
     }
 
     fn play_offline(&self) -> AuthInfo {
-        let session = self.session.lock().unwrap().clone();
+        let session = self.session_snapshot();
         AuthInfo::new(
             session.username,
             session.uuid,
@@ -729,7 +745,7 @@ impl Account for MicrosoftAccount {
     }
 
     fn write_metadata(&self) -> serde_json::Value {
-        let session = self.session.lock().unwrap().clone();
+        let session = self.session_snapshot();
         serde_json::json!({
             "type": "microsoft",
             "account_id": self.account_id.to_string(),
@@ -739,7 +755,7 @@ impl Account for MicrosoftAccount {
     }
 
     fn write_private_data(&self) -> serde_json::Value {
-        let session = self.session.lock().unwrap().clone();
+        let session = self.session_snapshot();
         serde_json::json!({
             "access_token": &session.access_token,
             "refresh_token": &session.refresh_token,
@@ -748,7 +764,7 @@ impl Account for MicrosoftAccount {
     }
 
     fn to_session(&self) -> AuthSession {
-        self.session.lock().unwrap().clone()
+        self.session_snapshot()
     }
 }
 

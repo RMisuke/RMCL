@@ -142,13 +142,11 @@ impl CoreContext {
         // re-run after every install via `refresh()`.
         let game_root = config.resolved_game_root();
         std::fs::create_dir_all(&game_root)?;
-        let mut game_repository =
-            rmccc_version::DefaultGameRepository::new(game_root.clone());
+        let mut game_repository = rmccc_version::DefaultGameRepository::new(game_root.clone());
         if let Err(e) = game_repository.refresh() {
             tracing::warn!(error = %e, game_root = %game_root.display(), "Initial game repository refresh failed");
         }
-        let game_repository =
-            std::sync::Arc::new(std::sync::RwLock::new(game_repository));
+        let game_repository = std::sync::Arc::new(std::sync::RwLock::new(game_repository));
 
         let version_provider = Box::new(rmccc_version::MojangVersionProvider::new(
             http_client.clone(),

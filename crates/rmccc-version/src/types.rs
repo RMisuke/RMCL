@@ -83,16 +83,28 @@ pub struct GameVersion {
     #[serde(default, skip_serializing_if = "is_false")]
     pub hidden: bool,
     /// Oldest launcher version able to parse this manifest.
-    #[serde(default, rename = "minimumLauncherVersion", skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        rename = "minimumLauncherVersion",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub minimum_launcher_version: Option<u32>,
     /// Forge/MC compliance level.
-    #[serde(default, rename = "complianceLevel", skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        rename = "complianceLevel",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub compliance_level: Option<u32>,
     /// Version publish time.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub time: Option<String>,
     /// Version release time.
-    #[serde(default, rename = "releaseTime", skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        rename = "releaseTime",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub release_time: Option<String>,
     /// Original Mojang JSON content, preserved for exact re-serialization.
     /// Fixes Bug #7: Tauri `version_install` must save original camelCase JSON,
@@ -231,27 +243,47 @@ pub struct GamePatch {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub libraries: Vec<Library>,
     /// Asset index override (usually None).
-    #[serde(default, rename = "assetIndex", skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        rename = "assetIndex",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub asset_index: Option<AssetIndex>,
     /// Java version requirement override.
-    #[serde(default, rename = "javaVersion", skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        rename = "javaVersion",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub java_version: Option<JavaRequirement>,
     /// Parent version to inherit from (used by Fabric/Quilt profile JSON).
-    #[serde(default, rename = "inheritsFrom", skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        rename = "inheritsFrom",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub inherits_from: Option<String>,
     /// Compatibility rules for this patch.
-    #[serde(default, rename = "compatibilityRules", skip_serializing_if = "Vec::is_empty")]
+    #[serde(
+        default,
+        rename = "compatibilityRules",
+        skip_serializing_if = "Vec::is_empty"
+    )]
     pub compatibility_rules: Vec<CompatibilityRule>,
     /// Whether this patch is hidden from the user.
     #[serde(default, skip_serializing_if = "is_false")]
     pub hidden: bool,
     /// Legacy minecraftArguments string (1.12 and earlier).
-    #[serde(default, rename = "minecraftArguments", skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        rename = "minecraftArguments",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub minecraft_arguments: Option<String>,
 }
 
 /// Asset index reference.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct AssetIndex {
     pub id: String,
     pub url: String,
@@ -260,20 +292,8 @@ pub struct AssetIndex {
     pub total_size: u64,
 }
 
-impl Default for AssetIndex {
-    fn default() -> Self {
-        Self {
-            id: String::new(),
-            url: String::new(),
-            sha1: String::new(),
-            size: 0,
-            total_size: 0,
-        }
-    }
-}
-
 /// A downloadable entry (client JAR, server JAR, etc.).
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct DownloadEntry {
     pub url: String,
     pub sha1: String,
@@ -282,23 +302,12 @@ pub struct DownloadEntry {
     pub path: Option<String>,
 }
 
-impl Default for DownloadEntry {
-    fn default() -> Self {
-        Self {
-            url: String::new(),
-            sha1: String::new(),
-            size: 0,
-            path: None,
-        }
-    }
-}
-
 /// Library dependency.
 ///
 /// Carries the full Mojang field set: `downloads`, `rules`, and the less
 /// common `extract` / `natives` / `checksums` / `MMC-hint` / `MMC-filename`
 /// fields used by older versions and third-party manifests.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Library {
     pub name: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -318,23 +327,12 @@ pub struct Library {
     #[serde(default, rename = "MMC-hint", skip_serializing_if = "Option::is_none")]
     pub hint: Option<String>,
     /// MMC-filename override (HMCL `Library.filename`).
-    #[serde(default, rename = "MMC-filename", skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        rename = "MMC-filename",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub filename: Option<String>,
-}
-
-impl Default for Library {
-    fn default() -> Self {
-        Self {
-            name: String::new(),
-            downloads: None,
-            rules: None,
-            extract: None,
-            natives: None,
-            checksums: None,
-            hint: None,
-            filename: None,
-        }
-    }
 }
 
 /// Files to exclude when extracting a native library JAR.

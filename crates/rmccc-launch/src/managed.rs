@@ -105,7 +105,9 @@ impl ManagedProcess {
             let lines = self.lines.clone();
             let max_lines = self.max_lines;
             let listeners = listeners.clone();
-            Some(tokio::spawn(read_lines(stdout, lines, max_lines, false, listeners)))
+            Some(tokio::spawn(read_lines(
+                stdout, lines, max_lines, false, listeners,
+            )))
         } else {
             None
         };
@@ -131,9 +133,7 @@ impl ManagedProcess {
         // Signal that the process has fully exited.
         self.running.store(false, Ordering::SeqCst);
 
-        let exit_code = exit_status
-            .map(|s| s.code().unwrap_or(-1))
-            .unwrap_or(-1);
+        let exit_code = exit_status.map(|s| s.code().unwrap_or(-1)).unwrap_or(-1);
         let exit_type = if exit_code == 0 {
             ExitType::Normal
         } else {
@@ -301,8 +301,11 @@ mod tests {
     fn test_managed_process_streams_and_exit() {
         let rt = tokio::runtime::Runtime::new().unwrap();
         rt.block_on(async {
-            let managed =
-                Arc::new(ManagedProcess::new("test".into(), spawn_child("echo hello; echo err >&2; exit 0"), 500));
+            let managed = Arc::new(ManagedProcess::new(
+                "test".into(),
+                spawn_child("echo hello; echo err >&2; exit 0"),
+                500,
+            ));
             let recorder = Arc::new(Recorder {
                 logs: Arc::new(StdMutex::new(Vec::new())),
                 exits: Arc::new(StdMutex::new(Vec::new())),

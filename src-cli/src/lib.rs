@@ -37,11 +37,7 @@ pub const CLI_VERSION: &str = env!("CARGO_PKG_VERSION");
 /// Returns the process exit code (see [`crate::error::exit_code_for`]).
 /// `stdin_is_terminal` / `stdout_is_terminal` drive interactive / output-mode
 /// auto-detection and are injectable for tests.
-pub fn run(
-    raw_args: Vec<String>,
-    stdin_is_terminal: bool,
-    stdout_is_terminal: bool,
-) -> i32 {
+pub fn run(raw_args: Vec<String>, stdin_is_terminal: bool, stdout_is_terminal: bool) -> i32 {
     let cli = match Cli::try_parse_from(&raw_args) {
         Ok(cli) => cli,
         Err(e) => {
@@ -66,7 +62,10 @@ pub fn run(
             let out = Output::new(OutputMode::Plain, false, stdout_is_terminal);
             out.render_clap_error(&clap::Error::raw(
                 clap::error::ErrorKind::InvalidValue,
-                format!("invalid --output value '{}' (auto | plain | json)", cli.output),
+                format!(
+                    "invalid --output value '{}' (auto | plain | json)",
+                    cli.output
+                ),
             ));
             return 3;
         }
@@ -138,11 +137,7 @@ pub fn run(
 ///
 /// Global options in the line are ignored (the context / output sink are fixed
 /// for the session). Returns the process exit code.
-pub async fn execute_line(
-    ctx: &CliContext,
-    out: &Output,
-    line_args: &[String],
-) -> i32 {
+pub async fn execute_line(ctx: &CliContext, out: &Output, line_args: &[String]) -> i32 {
     let full: Vec<String> = std::iter::once("rmcli".to_string())
         .chain(line_args.iter().cloned())
         .collect();

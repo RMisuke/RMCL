@@ -13,7 +13,8 @@ pub async fn handle(ctx: &CliContext, out: &Output, action: ResourceAction) -> C
         ResourceAction::Install { profile, version } => {
             let out_cb = out.clone();
             let progress: ProgressCb = Arc::new(move |msg| out_cb.progress(msg));
-            ctx.resource_install(&profile, &version, Some(&progress)).await?;
+            ctx.resource_install(&profile, &version, Some(&progress))
+                .await?;
             Ok(json!({ "installed": true, "profile": profile, "version": version }))
         }
         ResourceAction::Check { profile } => ctx.resource_check(&profile).await.map_err(Into::into),

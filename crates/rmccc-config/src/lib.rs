@@ -459,8 +459,10 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
 
-        let mut config = AppConfig::default();
-        config.default_max_memory_mb = 8192;
+        let mut config = AppConfig {
+            default_max_memory_mb: 8192,
+            ..Default::default()
+        };
         // 模拟未来版本写入的未知字段，验证向前兼容保留。
         config
             .extra
@@ -541,8 +543,10 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
 
-        let mut state = LauncherState::default();
-        state.selected_profile_id = Some("prof-1".into());
+        let state = LauncherState {
+            selected_profile_id: Some("prof-1".into()),
+            ..Default::default()
+        };
         state.save(&dir).unwrap();
         let loaded = LauncherState::load(&dir).unwrap();
         assert_eq!(loaded.selected_profile_id.as_deref(), Some("prof-1"));
@@ -562,9 +566,11 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
 
-        let mut settings = UserSettings::default();
-        settings.locale = Some("zh-CN".into());
-        settings.check_updates = false;
+        let settings = UserSettings {
+            locale: Some("zh-CN".into()),
+            check_updates: false,
+            ..Default::default()
+        };
         settings.save(&dir).unwrap();
         let loaded = UserSettings::load(&dir).unwrap();
         assert_eq!(loaded.locale.as_deref(), Some("zh-CN"));

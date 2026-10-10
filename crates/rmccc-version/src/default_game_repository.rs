@@ -73,8 +73,7 @@ impl DefaultGameRepository {
     /// fields override the parent's; libraries accumulate (deduped by name).
     fn merge_child_into_parent(parent: &mut GameVersion, child: &GameVersion) {
         // Libraries — append child libs not already present.
-        let existing: HashSet<String> =
-            parent.libraries.iter().map(|l| l.name.clone()).collect();
+        let existing: HashSet<String> = parent.libraries.iter().map(|l| l.name.clone()).collect();
         for lib in &child.libraries {
             if !existing.contains(&lib.name) {
                 parent.libraries.push(lib.clone());
@@ -108,7 +107,10 @@ impl DefaultGameRepository {
                 merged.jvm.get_or_insert_with(Vec::new).extend(jvm.clone());
             }
             if let Some(game) = &child_args.game {
-                merged.game.get_or_insert_with(Vec::new).extend(game.clone());
+                merged
+                    .game
+                    .get_or_insert_with(Vec::new)
+                    .extend(game.clone());
             }
             parent.arguments = Some(merged);
         }
@@ -119,7 +121,9 @@ impl DefaultGameRepository {
         }
 
         // compatibilityRules — accumulate.
-        parent.compatibility_rules.extend(child.compatibility_rules.clone());
+        parent
+            .compatibility_rules
+            .extend(child.compatibility_rules.clone());
 
         // complianceLevel / root / hidden / time / releaseTime — child overrides.
         if let Some(cl) = child.compliance_level {
@@ -140,7 +144,9 @@ impl DefaultGameRepository {
 
         // downloads — child's client overrides.
         if let Some(client) = child.downloads.get("client") {
-            parent.downloads.insert("client".to_string(), client.clone());
+            parent
+                .downloads
+                .insert("client".to_string(), client.clone());
         }
 
         // logging — child overrides.
@@ -175,14 +181,19 @@ impl DefaultGameRepository {
                 merged.jvm.get_or_insert_with(Vec::new).extend(jvm.clone());
             }
             if let Some(game) = &pa.game {
-                merged.game.get_or_insert_with(Vec::new).extend(game.clone());
+                merged
+                    .game
+                    .get_or_insert_with(Vec::new)
+                    .extend(game.clone());
             }
             version.arguments = Some(merged);
         }
         if let Some(ma) = &patch.minecraft_arguments {
             version.minecraft_arguments = Some(ma.clone());
         }
-        version.compatibility_rules.extend(patch.compatibility_rules.clone());
+        version
+            .compatibility_rules
+            .extend(patch.compatibility_rules.clone());
     }
 
     /// Recursively resolve an instance along its `inheritsFrom` chain.
@@ -343,13 +354,11 @@ impl GameRepository for DefaultGameRepository {
                 }
             } else {
                 // Tolerate a mismatched JSON filename: use the single *.json in the folder.
-                let fallback = std::fs::read_dir(&path)
-                    .ok()
-                    .and_then(|rd| {
-                        rd.flatten()
-                            .map(|e| e.path())
-                            .find(|p| p.extension().and_then(|e| e.to_str()) == Some("json"))
-                    });
+                let fallback = std::fs::read_dir(&path).ok().and_then(|rd| {
+                    rd.flatten()
+                        .map(|e| e.path())
+                        .find(|p| p.extension().and_then(|e| e.to_str()) == Some("json"))
+                });
                 match fallback {
                     Some(fb) => match Self::read_instance_manifest(&fb, &folder_id) {
                         Ok(m) => m,
@@ -384,8 +393,7 @@ impl GameRepository for DefaultGameRepository {
             })
             .cloned()
             .collect();
-        self.manifests
-            .retain(|id, _| resolvable.contains(id));
+        self.manifests.retain(|id, _| resolvable.contains(id));
 
         tracing::info!(
             game_dir = %self.base_directory.display(),
@@ -454,14 +462,19 @@ impl GameRepository for DefaultGameRepository {
 
     fn get_mods_directory(&self, id: &str) -> PathBuf {
         // Mods always live in the run directory; default to shared mods dir.
-        self.get_run_directory(id, IsolationType::Never).join("mods")
+        self.get_run_directory(id, IsolationType::Never)
+            .join("mods")
     }
 
     fn get_game_version(&self, id: &str) -> String {
         let mut current = id.to_string();
         let mut visited = HashSet::new();
         while visited.insert(current.clone()) {
-            match self.manifests.get(&current).and_then(|m| m.inherits_from.clone()) {
+            match self
+                .manifests
+                .get(&current)
+                .and_then(|m| m.inherits_from.clone())
+            {
                 Some(parent) => current = parent,
                 None => break,
             }
@@ -618,7 +631,7 @@ mod tests {
         write_version(
             &dir,
             "1.20.4-fabric",
-            &r#"{
+            r#"{
                 "id": "1.20.4-fabric",
                 "type": "release",
                 "inheritsFrom": "1.20.4",
@@ -629,23 +642,33 @@ mod tests {
                     "mainClass": "net.fabricmc.loader.impl.launch.knot.KnotClient",
                     "libraries": [{"name": "net.fabricmc:fabric-loader:0.16.9"}]
                 }]
-            }"#
-            .to_string(),
+            }"#,
         );
         let mut repo = DefaultGameRepository::new(dir.clone());
         repo.refresh().unwrap();
 
         let resolved = repo.get_resolved("1.20.4-fabric").unwrap();
         resolved.validate().unwrap();
-        assert_eq!(resolved.launch.main_class, "net.fabricmc.loader.impl.launch.knot.KnotClient");
+        assert_eq!(
+            resolved.launch.main_class,
+            "net.fabricmc.loader.impl.launch.knot.KnotClient"
+        );
         assert_eq!(resolved.launch.inherits_from, None);
         assert_eq!(resolved.launch.patches.len(), 0);
         // parent library + patch library both present
-        let names: Vec<&str> = resolved.launch.libraries.iter().map(|l| l.name.as_str()).collect();
+        let names: Vec<&str> = resolved
+            .launch
+            .libraries
+            .iter()
+            .map(|l| l.name.as_str())
+            .collect();
         assert!(names.contains(&"com.mojang:test:1.0"));
         assert!(names.contains(&"net.fabricmc:fabric-loader:0.16.9"));
         // javaVersion inherited
-        assert_eq!(resolved.launch.java_version.as_ref().unwrap().major_version, 21);
+        assert_eq!(
+            resolved.launch.java_version.as_ref().unwrap().major_version,
+            21
+        );
         // standalone keeps the patch list
         assert_eq!(resolved.standalone.patches.len(), 1);
         // base MC version resolution
@@ -659,12 +682,12 @@ mod tests {
         write_version(
             &dir,
             "a",
-            &r#"{"id":"a","type":"release","inheritsFrom":"b"}"#.to_string(),
+            r#"{"id":"a","type":"release","inheritsFrom":"b"}"#,
         );
         write_version(
             &dir,
             "b",
-            &r#"{"id":"b","type":"release","inheritsFrom":"a"}"#.to_string(),
+            r#"{"id":"b","type":"release","inheritsFrom":"a"}"#,
         );
         let mut repo = DefaultGameRepository::new(dir.clone());
         repo.refresh().unwrap();
@@ -685,7 +708,8 @@ mod tests {
         assert!(repo.has_instance("1.20.4-copy"));
         assert!(!repo.has_instance("1.20.4"));
 
-        repo.duplicate_instance("1.20.4-copy", "1.20.4-dup").unwrap();
+        repo.duplicate_instance("1.20.4-copy", "1.20.4-dup")
+            .unwrap();
         assert!(repo.has_instance("1.20.4-dup"));
 
         repo.remove_instance("1.20.4-dup").unwrap();
@@ -700,19 +724,13 @@ mod tests {
         let mut repo = DefaultGameRepository::new(dir.clone());
         repo.refresh().unwrap();
 
-        assert_eq!(
-            repo.get_run_directory("1.20.4", IsolationType::Never),
-            dir
-        );
+        assert_eq!(repo.get_run_directory("1.20.4", IsolationType::Never), dir);
         assert_eq!(
             repo.get_run_directory("1.20.4", IsolationType::Always),
             dir.join("versions").join("1.20.4")
         );
         // vanilla (no patches) → Modded does not isolate
-        assert_eq!(
-            repo.get_run_directory("1.20.4", IsolationType::Modded),
-            dir
-        );
+        assert_eq!(repo.get_run_directory("1.20.4", IsolationType::Modded), dir);
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -723,7 +741,7 @@ mod tests {
         write_version(
             &dir,
             "1.20.4-modded",
-            &r#"{
+            r#"{
                 "id": "1.20.4-modded",
                 "type": "release",
                 "inheritsFrom": "1.20.4",
@@ -731,8 +749,7 @@ mod tests {
                     {"id": "high", "priority": 60000, "mainClass": "com.high.Main", "libraries": [{"name": "com.high:lib:1.0"}]},
                     {"id": "low", "priority": 10000, "mainClass": "com.low.Main", "libraries": [{"name": "com.low:lib:1.0"}]}
                 ]
-            }"#
-            .to_string(),
+            }"#,
         );
         let mut repo = DefaultGameRepository::new(dir.clone());
         repo.refresh().unwrap();

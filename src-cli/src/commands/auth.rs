@@ -18,17 +18,20 @@ pub async fn handle(ctx: &CliContext, out: &Output, action: AuthAction) -> CliRe
     }
 }
 
-async fn login(ctx: &CliContext, out: &Output, ty: &str, username: Option<&str>) -> CliResult<Value> {
+async fn login(
+    ctx: &CliContext,
+    out: &Output,
+    ty: &str,
+    username: Option<&str>,
+) -> CliResult<Value> {
     match ty.to_ascii_lowercase().as_str() {
         "offline" => {
-            let name = username
-                .filter(|n| !n.trim().is_empty())
-                .ok_or_else(|| {
-                    CliError::new(
-                        ErrorCode::ValidationError,
-                        "offline login requires --username <name>",
-                    )
-                })?;
+            let name = username.filter(|n| !n.trim().is_empty()).ok_or_else(|| {
+                CliError::new(
+                    ErrorCode::ValidationError,
+                    "offline login requires --username <name>",
+                )
+            })?;
             let session = ctx.auth_login_offline(name).await?;
             out.note(&format!("Logged in as offline player '{name}'"));
             Ok(json!({

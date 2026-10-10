@@ -91,7 +91,9 @@ fn e2e_error_exit_codes() {
     assert_eq!(r.status, 2);
 
     // ProfileNotFound → 4.
-    let r = run(&["-d", d, "--output", "json", "profile", "get", "--id", "nope"]);
+    let r = run(&[
+        "-d", d, "--output", "json", "profile", "get", "--id", "nope",
+    ]);
     assert_eq!(r.status, 4);
     assert_eq!(last_json(&r)["error"]["code"], "profile_not_found");
 
@@ -109,7 +111,16 @@ fn e2e_auth_offline_flow() {
     let d = dir.to_str().unwrap();
 
     let login = run(&[
-        "-d", d, "--output", "json", "auth", "login", "-t", "offline", "--username", "E2EPlayer",
+        "-d",
+        d,
+        "--output",
+        "json",
+        "auth",
+        "login",
+        "-t",
+        "offline",
+        "--username",
+        "E2EPlayer",
     ]);
     assert_eq!(login.status, 0);
     assert_eq!(last_json(&login)["data"]["username"], "E2EPlayer");

@@ -28,84 +28,117 @@ RMCL/
 │   └── DEVELOPMENT_PLAN.md
 ├── crates/                       # Rust business logic crates
 │   ├── rmccc-error/              # Unified error types (leaf)
-│   │   └── src/lib.rs
+│   │   └── src/lib.rs            # RmcccError + ErrorCode (snake_case wire form)
 │   ├── rmccc-config/             # Configuration, paths, logging (leaf)
 │   │   └── src/
-│   │       ├── lib.rs            # AppConfig + Schema versioning
+│   │       ├── lib.rs            # AppConfig / LauncherState / UserSettings
+│   │       ├── schema.rs         # ConfigSchema + SchemaStatus state machine
+│   │       ├── setting_file.rs   # JsonSetting trait + SettingFile<T>
+│   │       ├── file_saver.rs     # Debounced background writer (200ms)
+│   │       ├── file_utils.rs     # Atomic write + backup_invalid_config
 │   │       ├── paths.rs          # Platform-specific paths
 │   │       └── logging.rs        # tracing init + span strategy
 │   ├── rmccc-auth/               # Authentication
 │   │   └── src/
 │   │       ├── lib.rs
+│   │       ├── account.rs        # Account trait (log_in / play_offline)
+│   │       ├── account_id.rs     # AccountID ("account:<uuid>")
+│   │       ├── auth_info.rs      # AuthInfo launch value object
+│   │       ├── factory.rs        # AccountFactory trait (create / from_storage)
 │   │       ├── microsoft.rs      # Microsoft OAuth2 device flow
-│   │       ├── offline.rs        # Offline auth (UUID v5)
+│   │       ├── offline.rs        # Offline auth (official UUID v3 / MD5)
+│   │       ├── repository.rs     # AccountRepository (plaintext + encrypted split)
 │   │       ├── types.rs          # AuthSession, AuthProvider trait
 │   │       └── vault.rs          # AES-256-GCM token encryption
 │   ├── rmccc-download/           # Download engine
-│   │   └── src/lib.rs            # ConcurrentDownloadManager + retry
+│   │   └── src/
+│   │       ├── lib.rs            # ConcurrentDownloadManager + retry + SHA1 cache
+│   │       └── provider.rs       # DownloadProvider (Mojang / BMCLAPI)
 │   ├── rmccc-version/            # Version & asset management
 │   │   └── src/
 │   │       ├── lib.rs
+│   │       ├── game_repository.rs         # GameRepository trait
+│   │       ├── default_game_repository.rs # versions/ index + offline resolve
+│   │       ├── resolved.rs                # unresolved/launch/standalone views
+│   │       ├── file_layout.rs             # .minecraft layout path helpers
+│   │       ├── isolation.rs               # Never / Always / Modded
+│   │       ├── compatibility.rs           # Unified OS/arch/features rules
+│   │       ├── completion.rs              # Completeness check / repair plan
 │   │       ├── manifest.rs       # MojangVersionProvider
 │   │       ├── assets.rs         # AssetIndex resolution
 │   │       ├── libraries.rs      # Library resolution + classpath
+│   │       ├── arguments.rs      # Template vars + argument resolution
 │   │       ├── types.rs          # GameVersion, Library, etc.
 │   │       └── cache.rs          # Offline version list cache
 │   ├── rmccc-launch/             # Game launcher
 │   │   └── src/
 │   │       ├── lib.rs
+│   │       ├── launcher.rs       # Launcher trait
+│   │       ├── default_launcher.rs # DefaultLauncher (20-step command line)
+│   │       ├── options.rs        # LaunchOptions (builder) + ProcessPriority
+│   │       ├── command.rs        # Command { args, native folders }
+│   │       ├── process_listener.rs # ProcessListener + ExitType
+│   │       ├── log4j.rs          # log4j2.xml extraction (RCE mitigations)
 │   │       ├── java.rs           # JVM detection + version mapping
+│   │       ├── natives.rs        # ExtractRules-aware natives extraction
+│   │       ├── managed.rs        # ManagedProcess + stdout/stderr pumps
 │   │       └── process.rs        # Response file + process spawning
-│   ├── rmccc-modloader/          # Mod loader installation (stubs)
+│   ├── rmccc-modloader/          # Mod loader installation
 │   │   └── src/
-│   │       ├── lib.rs            # ModLoaderProvider trait
-│   │       ├── forge.rs
-│   │       ├── fabric.rs
-│   │       └── neoforge.rs
-│   ├── rmccc-mods/               # Mod management (types only)
-│   │   └── src/lib.rs            # ModSource trait + data types
+│   │       ├── lib.rs            # ModLoaderProvider + DependencyManager
+│   │       ├── analyzer.rs       # Loader detection from libraries
+│   │       ├── patch.rs          # Shared GameInstancePatch type
+│   │       ├── fabric/  forge/  neoforge/  quilt/
+│   │       └── liteloader/  optifine/  cleanroom/  legacyfabric/
+│   ├── rmccc-mods/               # Mod management (Modrinth implemented)
+│   │   └── src/
+│   │       ├── lib.rs            # ModSource trait + data types
+│   │       └── modrinth.rs       # Modrinth search / versions / download
 │   ├── rmccc-profile/            # Profile/instance management
-│   │   └── src/lib.rs            # ProfileStore JSON CRUD
+│   │   └── src/lib.rs            # ProfileStore JSON CRUD + launch options
 │   └── rmccc-core/               # Core orchestrator + DI container
-│       └── src/lib.rs            # CoreContext, re-exports
-├── src-cli/                      # CLI binary crate
+│       └── src/
+│           ├── lib.rs            # CoreContext, re-exports
+│           └── pipeline.rs       # install / repair / launch orchestration
+├── src-cli/                      # CLI binary crate (`rmcli`)
 │   ├── Cargo.toml
-│   └── src/
-│       ├── main.rs               # Clap CLI definition (5 subcommands)
-│       ├── context.rs            # CliContext — backend API facade
-│       └── commands/
-│           ├── mod.rs
-│           ├── auth.rs           # `rmcli auth login/logout/refresh/status`
-│           ├── instance.rs       # `rmcli instance create/list/delete`
-│           ├── resource.rs       # `rmcli resource check/download/verify`
-│           ├── launch.rs         # `rmcli launch run`
-│           └── config.rs         # `rmcli config get/set`
+│   ├── src/
+│   │   ├── main.rs               # Entry point (env in, exit code out)
+│   │   ├── lib.rs                # run / execute_line / dispatch
+│   │   ├── app.rs                # clap command tree (single parse source)
+│   │   ├── registry.rs           # help/completion metadata (sync-asserted)
+│   │   ├── output.rs             # Unified result envelope + plain mode
+│   │   ├── error.rs              # CliError + stable exit codes
+│   │   ├── context.rs            # CliContext — backend API facade
+│   │   ├── repl.rs               # Interactive REPL
+│   │   └── commands/             # auth config profile instance resource
+│   │                             # modloader mod launch system
+│   └── tests/                    # cli_e2e (process) + cli_integration (in-process)
 ├── src-tauri/                    # Tauri application layer
 │   ├── Cargo.toml
 │   ├── build.rs
 │   ├── tauri.conf.json
 │   ├── capabilities/default.json
 │   └── src/
-│       ├── main.rs
+│       ├── main.rs               # Entry + generate_handler! (42 commands)
+│       ├── bindings.rs           # ts-rs export of 19 types → src/ipc/types.ts
 │       ├── state.rs              # AppState (Tokio-backed)
 │       ├── events.rs             # Event constants + ThrottledEmitter
 │       └── commands/             # IPC command handlers
 │           ├── mod.rs
-│           ├── auth.rs
-│           ├── profile.rs
-│           ├── version.rs
-│           ├── modloader.rs
-│           ├── launch.rs
-│           └── settings.rs
-├── src/                          # Frontend (SolidJS — placeholder)
+│           ├── auth.rs  download.rs  instance.rs  launch.rs  logs.rs
+│           ├── mods.rs  modloader.rs  profile.rs  settings.rs  version.rs
+│           └── external.rs
+├── src/                          # Frontend (SolidJS)
 │   ├── index.html
-│   ├── main.tsx                  # Minimal entry point
-│   ├── App.tsx                   # Placeholder: "GUI deferred, use CLI"
-│   ├── routes/                   # (retained for future GUI)
-│   ├── components/
+│   ├── main.tsx                  # Router: / · /login · /settings
+│   ├── App.tsx                   # Legacy placeholder (unreferenced)
+│   ├── routes/                   # Dashboard · Login · Settings
+│   ├── components/               # TitleBar · Toast
 │   ├── ipc/
-│   │   ├── api.ts                # IPC type definitions
-│   │   └── events.ts             # Event name constants
+│   │   ├── api.ts                # Typed invoke wrappers + safeInvoke
+│   │   ├── events.ts             # Event name constants
+│   │   └── types.ts              # ts-rs generated — do not edit by hand
 │   └── styles/app.css
 └── assets/                       # Static assets (icons)
 ```
@@ -423,18 +456,23 @@ tauri-plugin-deep-link = "2"        # rmccc:// protocol handler
 
 ### 4.1 Token Encryption (AES-256-GCM)
 
-Token 存储采用轻量级本地加密方案，不依赖系统密钥链：
+Token 存储采用轻量级本地加密方案，不依赖系统密钥链。账户数据分为**明文 metadata** 与**加密 private data** 两部分（对齐 HMCL `Accounts`）：
 
 ```
-{data_dir}/rmccc/
-├── .key                  # 32-byte random AES key (file permissions: 600)
-└── auth.json             # Tokens encrypted with AES-256-GCM
+{data_dir}/
+├── .key                          # 32-byte random AES key (Unix 600, Windows icacls)
+├── accounts.json                 # Plaintext metadata list + selected AccountID
+└── private/
+    └── account-private-data.json # AES-256-GCM payload, keyed by AccountID
 ```
 
 **加密流程：**
 
+`TokenVault` 已收敛为**纯加密原语**（`encrypt` / `decrypt` + envelope 版本字段，为未来算法迁移留路径）；
+账户的读写、工厂注册与 selected 指针由 `AccountRepository` 承担。
+
 ```rust
-// rmccc-auth/src/crypto.rs
+// rmccc-auth/src/vault.rs
 use aes_gcm::{Aes256Gcm, KeyInit, Nonce};
 use aes_gcm::aead::Aead;
 
@@ -462,20 +500,18 @@ impl TokenVault {
         Ok(Self { cipher })
     }
 
-    /// Encrypt AuthSession → JSON string (for writing auth.json)
-    pub fn encrypt(&self, session: &AuthSession) -> Result<String> {
+    /// Encrypt an arbitrary payload → versioned envelope JSON string
+    pub fn encrypt(&self, plaintext: &[u8]) -> Result<String> {
         let nonce = rand::random::<[u8; 12]>();
-        let plaintext = serde_json::to_vec(session)?;
-        let ciphertext = self.cipher.encrypt(Nonce::from_slice(&nonce), &plaintext)?;
-        // Store as: { "nonce": base64, "data": base64 }
-        Ok(serde_json::to_string(&EncryptedPayload { nonce, ciphertext })?)
+        let ciphertext = self.cipher.encrypt(Nonce::from_slice(&nonce), plaintext)?;
+        // Store as: { "v": 1, "nonce": base64, "data": base64 }
+        Ok(serde_json::to_string(&EncryptedEnvelope { v: 1, nonce, ciphertext })?)
     }
 
-    /// Decrypt JSON string → AuthSession (for reading auth.json)
-    pub fn decrypt(&self, payload: &str) -> Result<AuthSession> {
-        let EncryptedPayload { nonce, ciphertext } = serde_json::from_str(payload)?;
-        let plaintext = self.cipher.decrypt(Nonce::from_slice(&nonce), &ciphertext)?;
-        Ok(serde_json::from_slice(&plaintext)?)
+    /// Decrypt a versioned envelope JSON string → plaintext
+    pub fn decrypt(&self, payload: &str) -> Result<Vec<u8>> {
+        let EncryptedEnvelope { nonce, ciphertext, .. } = serde_json::from_str(payload)?;
+        Ok(self.cipher.decrypt(Nonce::from_slice(&nonce), &ciphertext)?)
     }
 }
 ```
@@ -483,11 +519,11 @@ impl TokenVault {
 **安全边界说明：**
 - 防御目标：防止其他非特权用户、恶意脚本读取 token
 - 已知局限：本机物理访问者可读 `.key` 文件（桌面应用场景可接受）
-- `.key` 丢失则 auth.json 不可恢复（用户需重新登录）
+- `.key` 丢失则 `private/account-private-data.json` 不可恢复（用户需重新登录）
 
 ### 4.2 API Key 管理
 
-敏感 API Key（如 CurseForge）不入 config.json：
+敏感 API Key（如 CurseForge）不入 `config/launcher-settings.json`：
 
 ```rust
 // Priority order for API keys:

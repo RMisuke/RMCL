@@ -63,13 +63,25 @@ async fn missing_required_argument_is_a_usage_error() {
 
 #[tokio::test]
 async fn invalid_output_mode_is_rejected() {
-    // Output mode is validated by the top-level runner; here we exercise the
-    // parser contract directly via `run`.
-    let h = Harness::json("invalid-output");
-    // The `run` helper ignores global flags; verifying the mode enum parse:
+    // Parser contract.
     assert!(rmccc_cli::output::OutputMode::parse("json").is_some());
     assert!(rmccc_cli::output::OutputMode::parse("plain").is_some());
     assert!(rmccc_cli::output::OutputMode::parse("nope").is_none());
+
+    // The top-level runner rejects an unknown `--output` value with exit code 3,
+    // before any data directory is touched.
+    let code = rmccc_cli::run(
+        ["rmcli", "-o", "nope", "system", "info"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect(),
+        false,
+        false,
+    );
+    assert_eq!(
+        code, 3,
+        "unknown --output must be rejected with exit code 3"
+    );
 }
 
 // ────────────────────────── JSON envelope contract ──────────────────────────
@@ -107,7 +119,9 @@ async fn profile_full_lifecycle() {
 
     // Create
     let code = h
-        .run(&["profile", "create", "-n", "Beta", "-v", "1.20.4", "-l", "fabric", "--memory", "3072"])
+        .run(&[
+            "profile", "create", "-n", "Beta", "-v", "1.20.4", "-l", "fabric", "--memory", "3072",
+        ])
         .await;
     assert_eq!(code, 0);
     let created = h.last_json();
@@ -127,7 +141,9 @@ async fn profile_full_lifecycle() {
 
     // Update
     let code = h
-        .run(&["profile", "update", "--id", &id, "--name", "Beta2", "--memory", "4096"])
+        .run(&[
+            "profile", "update", "--id", &id, "--name", "Beta2", "--memory", "4096",
+        ])
         .await;
     assert_eq!(code, 0);
     assert_eq!(h.last_json()["data"]["name"], "Beta2");
@@ -180,7 +196,9 @@ async fn auth_offline_lifecycle() {
     assert_eq!(h.last_json()["data"]["logged_in"], false);
 
     // Login offline.
-    let code = h.run(&["auth", "login", "-t", "offline", "--username", "Steve"]).await;
+    let code = h
+        .run(&["auth", "login", "-t", "offline", "--username", "Steve"])
+        .await;
     assert_eq!(code, 0);
     assert_eq!(h.last_json()["data"]["username"], "Steve");
     assert_eq!(h.last_json()["data"]["provider"], "offline");
@@ -231,7 +249,9 @@ async fn auth_unknown_login_type_is_rejected() {
 async fn config_get_set_and_path() {
     let h = Harness::json("config-path");
 
-    let code = h.run(&["config", "set", "default_max_memory_mb", "8192"]).await;
+    let code = h
+        .run(&["config", "set", "default_max_memory_mb", "8192"])
+        .await;
     assert_eq!(code, 0);
 
     let code = h.run(&["config", "get", "default_max_memory_mb"]).await;
@@ -253,16 +273,16 @@ async fn config_set_unknown_field_is_validation_error() {
 #[tokio::test]
 async fn config_set_invalid_number_is_rejected() {
     let h = Harness::json("config-badnum");
-    let code = h.run(&["config", "set", "default_max_memory_mb", "abc"]).await;
+    let code = h
+        .run(&["config", "set", "default_max_memory_mb", "abc"])
+        .await;
     assert_eq!(code, 3);
 }
 
 #[tokio::test]
 async fn state_and_user_settings_paths() {
     let h = Harness::json("state-user");
-    let code = h
-        .run(&["profile", "create", "-n", "P", "-v", "1.21"])
-        .await;
+    let code = h.run(&["profile", "create", "-n", "P", "-v", "1.21"]).await;
     assert_eq!(code, 0);
     let id = h.last_json()["data"]["id"].as_str().unwrap().to_string();
 
@@ -270,7 +290,9 @@ async fn state_and_user_settings_paths() {
     assert_eq!(code, 0);
 
     // State reflects the selected profile.
-    let code = h.run(&["config", "state", "get", "selected_profile_id"]).await;
+    let code = h
+        .run(&["config", "state", "get", "selected_profile_id"])
+        .await;
     assert_eq!(code, 0);
     assert_eq!(h.last_json()["data"], id);
 
@@ -302,7 +324,16 @@ async fn local_mod_install_list_toggle_remove() {
     assert_eq!(code, 0);
     let pid = h.last_json()["data"]["id"].as_str().unwrap().to_string();
 
-    let code = h.run(&["mod", "install", "--profile", &pid, "--file", jar.to_str().unwrap()]).await;
+    let code = h
+        .run(&[
+            "mod",
+            "install",
+            "--profile",
+            &pid,
+            "--file",
+            jar.to_str().unwrap(),
+        ])
+        .await;
     assert_eq!(code, 0, "local install must succeed");
     assert_eq!(h.last_json()["data"]["installed"], "my-mod-1.0.0.jar");
 
@@ -313,17 +344,36 @@ async fn local_mod_install_list_toggle_remove() {
 
     // Toggle off → moves to disabled.
     let code = h
-        .run(&["mod", "toggle", "--profile", &pid, "--file", "my-mod-1.0.0.jar", "--enabled", "false"])
+        .run(&[
+            "mod",
+            "toggle",
+            "--profile",
+            &pid,
+            "--file",
+            "my-mod-1.0.0.jar",
+            "--enabled",
+            "false",
+        ])
         .await;
     assert_eq!(code, 0);
     let code = h.run(&["mod", "list", "--profile", &pid]).await;
     assert_eq!(code, 0);
     assert_eq!(h.last_json()["data"]["active"].as_array().unwrap().len(), 0);
-    assert_eq!(h.last_json()["data"]["disabled"].as_array().unwrap().len(), 1);
+    assert_eq!(
+        h.last_json()["data"]["disabled"].as_array().unwrap().len(),
+        1
+    );
 
     // Remove.
     let code = h
-        .run(&["mod", "remove", "--profile", &pid, "--file", "my-mod-1.0.0.jar"])
+        .run(&[
+            "mod",
+            "remove",
+            "--profile",
+            &pid,
+            "--file",
+            "my-mod-1.0.0.jar",
+        ])
         .await;
     assert_eq!(code, 0);
     let code = h.run(&["mod", "list", "--profile", &pid]).await;
@@ -334,14 +384,19 @@ async fn local_mod_install_list_toggle_remove() {
 #[tokio::test]
 async fn local_mod_install_rejects_missing_file() {
     let h = Harness::json("mod-missing-file");
-    let code = h
-        .run(&["profile", "create", "-n", "M", "-v", "1.21"])
-        .await;
+    let code = h.run(&["profile", "create", "-n", "M", "-v", "1.21"]).await;
     assert_eq!(code, 0);
     let pid = h.last_json()["data"]["id"].as_str().unwrap().to_string();
 
     let code = h
-        .run(&["mod", "install", "--profile", &pid, "--file", "/no/such/file.jar"])
+        .run(&[
+            "mod",
+            "install",
+            "--profile",
+            &pid,
+            "--file",
+            "/no/such/file.jar",
+        ])
         .await;
     assert_eq!(code, 4, "missing local file → NotFound (exit 4)");
     assert_eq!(h.last_json()["error"]["code"], "not_found");
@@ -353,7 +408,18 @@ async fn mod_install_requires_exactly_one_mode() {
     let code = h.run(&["mod", "install", "--profile", "p"]).await;
     assert_eq!(code, 3, "no mode → validation error");
     let code = h
-        .run(&["mod", "install", "--profile", "p", "--file", "a.jar", "--mod-id", "m", "--version-id", "v"])
+        .run(&[
+            "mod",
+            "install",
+            "--profile",
+            "p",
+            "--file",
+            "a.jar",
+            "--mod-id",
+            "m",
+            "--version-id",
+            "v",
+        ])
         .await;
     assert_eq!(code, 3, "both modes → validation error");
 }
@@ -400,7 +466,10 @@ async fn plain_mode_renders_human_table() {
     let code = h.run(&["profile", "list"]).await;
     assert_eq!(code, 0);
     let text = h.stdout.text();
-    assert!(text.contains("First"), "plain list must contain profile name");
+    assert!(
+        text.contains("First"),
+        "plain list must contain profile name"
+    );
     assert!(text.contains("1.21"));
 }
 

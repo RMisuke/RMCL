@@ -325,11 +325,17 @@ mod tests {
         let lib = Library {
             name: "org.lwjgl:lwjgl:3.3.1:natives-macos".into(),
             extract: Some(rmccc_version::ExtractRules {
-                exclude: vec!["META-INF/".to_string(), "org/lwjgl/glfw/GLFW.class".to_string()],
+                exclude: vec![
+                    "META-INF/".to_string(),
+                    "org/lwjgl/glfw/GLFW.class".to_string(),
+                ],
             }),
             ..Default::default()
         };
-        assert!(!should_extract("META-INF/versions/9/module-info.class", &lib));
+        assert!(!should_extract(
+            "META-INF/versions/9/module-info.class",
+            &lib
+        ));
         assert!(!should_extract("org/lwjgl/glfw/GLFW.class", &lib));
         assert!(should_extract("libglfw.dylib", &lib));
     }

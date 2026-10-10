@@ -23,9 +23,7 @@ pub use command::Command;
 pub use default_launcher::{new_default_launcher, DefaultLauncher};
 pub use java::{detect_java_installations, find_java, JavaInstallation};
 pub use launcher::{LaunchError, Launcher};
-pub use log4j::{
-    extract_log4j_configuration_file, log4j_config_file, mc_version_before,
-};
+pub use log4j::{extract_log4j_configuration_file, log4j_config_file, mc_version_before};
 pub use managed::{spawn_managed, ManagedProcess};
 pub use natives::{clean_directory_quietly, decompress_natives, is_native};
 pub use options::{LaunchOptions, ProcessPriority};

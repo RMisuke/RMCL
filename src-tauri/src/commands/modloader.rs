@@ -167,8 +167,7 @@ pub async fn modloader_install(
 
             // ── HMCL 增量语义（G4）：不写死合并结果，而是写 inheritsFrom + patches。
             // 基础版本 JSON 保持不动；回滚 = 删除 patch；多层 loader 可叠加。
-            let new_version_id =
-                format!("{}-{}-{}", profile.game_version, patch.id, patch.version);
+            let new_version_id = format!("{}-{}-{}", profile.game_version, patch.id, patch.version);
             let version_dir = game_dir.join("versions").join(&new_version_id);
             std::fs::create_dir_all(&version_dir)?;
             let json_path = version_dir.join(format!("{new_version_id}.json"));
@@ -206,9 +205,7 @@ pub async fn modloader_install(
         // and launch resolves it from disk (offline-capable).
         core.game_repository
             .write()
-            .map_err(|_| {
-                rmccc_error::RmcccError::Other("game repository lock poisoned".into())
-            })?
+            .map_err(|_| rmccc_error::RmcccError::Other("game repository lock poisoned".into()))?
             .refresh()?;
     }
 
