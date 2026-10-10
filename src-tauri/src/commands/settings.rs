@@ -26,6 +26,17 @@ pub struct SettingsUpdate {
     pub default_max_memory_mb: Option<u32>,
     pub download_concurrency: Option<u32>,
     pub mirror_url: Option<String>,
+
+    // ── Global game defaults (fallbacks for instances that inherit) ──
+    pub default_jvm_args: Option<Vec<String>>,
+    pub default_game_args: Option<Vec<String>>,
+    /// `never` | `modded` | `always`; normalised before being stored.
+    pub default_isolation: Option<String>,
+    pub default_window_width: Option<u32>,
+    pub default_window_height: Option<u32>,
+    pub default_fullscreen: Option<bool>,
+    pub default_process_priority: Option<String>,
+    pub auto_memory: Option<bool>,
 }
 
 #[tauri::command]
@@ -88,6 +99,32 @@ pub async fn settings_set(
     }
     if let Some(m) = opts.mirror_url {
         core.config.mirror_url = if m.is_empty() { None } else { Some(m) };
+    }
+
+    // Global game defaults.
+    if let Some(v) = opts.default_jvm_args {
+        core.config.default_jvm_args = v;
+    }
+    if let Some(v) = opts.default_game_args {
+        core.config.default_game_args = v;
+    }
+    if let Some(v) = opts.default_isolation {
+        core.config.default_isolation = rmccc_config::resolve_isolation(Some(&v)).to_string();
+    }
+    if let Some(v) = opts.default_window_width {
+        core.config.default_window_width = if v == 0 { None } else { Some(v) };
+    }
+    if let Some(v) = opts.default_window_height {
+        core.config.default_window_height = if v == 0 { None } else { Some(v) };
+    }
+    if let Some(v) = opts.default_fullscreen {
+        core.config.default_fullscreen = v;
+    }
+    if let Some(v) = opts.default_process_priority {
+        core.config.default_process_priority = v;
+    }
+    if let Some(v) = opts.auto_memory {
+        core.config.auto_memory = v;
     }
 
     // P4：经 FileSaver 防抖写盘（200ms 合并连续 settings_set），退出时统一 flush。
