@@ -1150,6 +1150,28 @@ body {
   box-shadow: 0 0 0 3px rgba(26, 86, 219, 0.1);
 }
 
+/* Language picker: drop the native macOS select chrome so it matches the other
+   inputs, and draw our own disclosure arrow. */
+select.settings-input {
+  appearance: none;
+  -webkit-appearance: none;
+  cursor: pointer;
+  padding-right: 32px;
+  background-image: url("data:image/svg+xml;charset=utf-8,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'%3E%3Cpath d='M1 1l4 4 4-4' fill='none' stroke='%23888888' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 12px center;
+}
+
+select.settings-input:hover {
+  border-color: var(--color-blue);
+}
+
+/* The popup itself is rendered by the OS; pin it to the active theme. */
+select.settings-input option {
+  background: var(--surface-card);
+  color: var(--text-primary);
+}
+
 .settings-refresh-btn {
   padding: 5px 12px;
   background: var(--surface-input);

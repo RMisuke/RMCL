@@ -1,4 +1,5 @@
 import { Component, createSignal, onMount, onCleanup, Show } from "solid-js";
+import { t } from "../i18n";
 
 const TitleBar: Component = () => {
   let appWindow: any = null;
@@ -25,11 +26,14 @@ const TitleBar: Component = () => {
   const toggleMax = () => { try { appWindow?.toggleMaximize(); } catch {} };
   const close = () => { try { appWindow?.close(); } catch {} };
 
+  // `data-tauri-drag-region="deep"` makes the whole bar draggable (Tauri walks
+  // the composed path); the control buttons are clickable elements and stay
+  // excluded from dragging.
   return (
-    <div class="titlebar" data-tauri-drag-region>
+    <div class="titlebar" data-tauri-drag-region="deep">
       <div class="titlebar-brand">RMCCC</div>
       <div class="titlebar-controls">
-        <button class="titlebar-btn" onClick={minimize} title="Minimize">
+        <button class="titlebar-btn" onClick={minimize} title={t("titlebar.minimize")}>
           <svg width="10" height="10" viewBox="0 0 10 10">
             <line
               x1="1" y1="5" x2="9" y2="5"
@@ -39,7 +43,7 @@ const TitleBar: Component = () => {
             />
           </svg>
         </button>
-        <button class="titlebar-btn" onClick={toggleMax} title="Maximize">
+        <button class="titlebar-btn" onClick={toggleMax} title={t("titlebar.maximize")}>
           <svg width="10" height="10" viewBox="0 0 10 10">
             <Show when={maximized()}>
               <rect
@@ -68,7 +72,7 @@ const TitleBar: Component = () => {
             </Show>
           </svg>
         </button>
-        <button class="titlebar-btn titlebar-btn-close" onClick={close} title="Close">
+        <button class="titlebar-btn titlebar-btn-close" onClick={close} title={t("titlebar.close")}>
           <svg width="10" height="10" viewBox="0 0 10 10">
             <line
               x1="1.5" y1="1.5" x2="8.5" y2="8.5"

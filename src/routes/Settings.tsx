@@ -8,6 +8,14 @@ import {
   type SettingsUpdate,
 } from "../ipc/api";
 import { showToast } from "../components/Toast";
+import {
+  t,
+  setLocale,
+  preference,
+  supportedLocales,
+  systemLocale,
+  nativeNameFor,
+} from "../i18n";
 
 const Settings: Component = () => {
   const navigate = useNavigate();
@@ -71,7 +79,7 @@ const Settings: Component = () => {
       setConfig(result.data);
       showToast({
         code: "success",
-        message: "Settings saved successfully",
+        message: t("settings.saved"),
         retryable: false,
       });
     } else {
@@ -83,14 +91,34 @@ const Settings: Component = () => {
     setJavaPath(path);
   };
 
+  /** "Follow system" label, naming the detected language when we ship it. */
+  const followSystemLabel = () => {
+    const code = systemLocale();
+    const name = nativeNameFor(code);
+    return name && name !== code
+      ? t("settings.language.systemWith", { language: name })
+      : t("settings.language.system");
+  };
+
+  const handleLocaleChange = async (e: Event) => {
+    const value = (e.currentTarget as HTMLSelectElement).value;
+    try {
+      // Persist first, then apply, so a failure cannot leave the UI showing a
+      // language the backend did not store.
+      await setLocale(value === "" ? null : value);
+    } catch (err) {
+      showToast({ code: "error", message: String(err), retryable: false });
+    }
+  };
+
   // ── Render ──
   return (
     <div class="settings-page">
       <div class="settings-header">
         <button class="settings-back-btn" onClick={() => navigate("/")}>
-          ← Back
+          {t("common.back")}
         </button>
-        <h2 class="settings-title">Settings</h2>
+        <h2 class="settings-title">{t("settings.title")}</h2>
       </div>
 
       <Show
@@ -98,30 +126,58 @@ const Settings: Component = () => {
         fallback={
           <div class="loading-inline">
             <div class="loading-spinner-small" />
-            <span>Loading settings...</span>
+            <span>{t("settings.loading")}</span>
           </div>
         }
       >
         <div class="settings-content">
+          {/* ── Language ── */}
+          <div class="settings-section">
+            <h3 class="settings-section-title">{t("settings.language.title")}</h3>
+            <p class="settings-section-desc">{t("settings.language.desc")}</p>
+
+            <div class="settings-field">
+              <Show
+                when={supportedLocales().length > 0}
+                fallback={<span class="settings-hint">{t("settings.language.loading")}</span>}
+              >
+                {/* `selected` per option rather than `value` on the select:
+                    Solid applies attributes before `For` creates the options,
+                    so a `value` binding would not find its option yet. */}
+                <select class="settings-input" onChange={handleLocaleChange}>
+                  <option value="" selected={preference() === null}>
+                    {followSystemLabel()}
+                  </option>
+                  <For each={supportedLocales()}>
+                    {(loc) => (
+                      <option value={loc.code} selected={preference() === loc.code}>
+                        {loc.native_name}
+                      </option>
+                    )}
+                  </For>
+                </select>
+              </Show>
+            </div>
+          </div>
+
           {/* ── Game Directory ── */}
           <div class="settings-section">
-            <h3 class="settings-section-title">Game Directory</h3>
-            <p class="settings-section-desc">
-              Root directory for all Minecraft data — versions, assets,
-              libraries, and mods. Follows Mojang standard layout.
-            </p>
+            <h3 class="settings-section-title">{t("settings.gameDir.title")}</h3>
+            <p class="settings-section-desc">{t("settings.gameDir.desc")}</p>
 
             <div class="settings-field">
               <label class="settings-label">
-                Game Root (.minecraft equivalent)
+                {t("settings.gameDir.label")}
                 <span class="settings-hint">
-                  Absolute path. Leave empty for default ({config()?.game_root_dir || "{data}/instances"}).
+                  {t("settings.gameDir.hint", {
+                    default: config()?.game_root_dir || "{data}/instances",
+                  })}
                 </span>
               </label>
               <input
                 type="text"
                 class="settings-input settings-input-mono"
-                placeholder="/path/to/minecraft"
+                placeholder={t("settings.gameDir.placeholder")}
                 value={gameRootDir()}
                 onInput={(e) => setGameRootDir(e.currentTarget.value)}
               />
@@ -131,23 +187,20 @@ const Settings: Component = () => {
           {/* ── Java Runtime ── */}
           <div class="settings-section">
             <h3 class="settings-section-title">
-              Java Runtime
+              {t("settings.java.title")}
               <button
                 class="settings-refresh-btn"
                 onClick={detectJava}
                 disabled={detectingJava()}
               >
-                {detectingJava() ? "Detecting..." : "Re-detect"}
+                {detectingJava() ? t("settings.java.detecting") : t("settings.java.redetect")}
               </button>
             </h3>
 
             <Show
               when={javaInstallations().length > 0}
               fallback={
-                <div class="settings-empty">
-                  No Java installations detected. Install Java 8+ to run
-                  Minecraft.
-                </div>
+                <div class="settings-empty">{t("settings.java.empty")}</div>
               }
             >
               <div class="java-list">
@@ -158,13 +211,13 @@ const Settings: Component = () => {
                       onClick={() => selectJava(java.path)}
                     >
                       <div class="java-version-badge">
-                        Java {java.major_version}
+                        {t("settings.java.badge", { version: java.major_version })}
                       </div>
                       <div class="java-info">
                         <div class="java-path">{java.path}</div>
                         <div class="java-meta">
                           {java.vendor}
-                          {java.is_64bit ? " · 64-bit" : " · 32-bit"}
+                          {java.is_64bit ? t("settings.java.arch64") : t("settings.java.arch32")}
                         </div>
                       </div>
                       <Show when={javaPath() === java.path}>
@@ -178,15 +231,15 @@ const Settings: Component = () => {
 
             <div class="settings-field" style="margin-top: 12px">
               <label class="settings-label">
-                Custom Java Path
+                {t("settings.java.customLabel")}
                 <span class="settings-hint">
-                  Or manually specify the Java executable
+                  {t("settings.java.customHint")}
                 </span>
               </label>
               <input
                 type="text"
                 class="settings-input settings-input-mono"
-                placeholder="/usr/bin/java"
+                placeholder={t("settings.java.customPlaceholder")}
                 value={javaPath()}
                 onInput={(e) => setJavaPath(e.currentTarget.value)}
               />
@@ -195,16 +248,14 @@ const Settings: Component = () => {
 
           {/* ── Memory ── */}
           <div class="settings-section">
-            <h3 class="settings-section-title">JVM Memory</h3>
-            <p class="settings-section-desc">
-              Default heap size for all profiles. Can be overridden per profile.
-            </p>
+            <h3 class="settings-section-title">{t("settings.memory.title")}</h3>
+            <p class="settings-section-desc">{t("settings.memory.desc")}</p>
 
             <div class="memory-row">
               <div class="settings-field memory-field">
                 <label class="settings-label">
-                  Min Heap (-Xms)
-                  <span class="settings-hint">MB</span>
+                  {t("settings.memory.min")}
+                  <span class="settings-hint">{t("settings.memory.unit")}</span>
                 </label>
                 <input
                   type="number"
@@ -218,7 +269,7 @@ const Settings: Component = () => {
               </div>
               <div class="settings-field memory-field">
                 <label class="settings-label">
-                  Max Heap (-Xmx)
+                  {t("settings.memory.max")}
                   <span class="settings-hint">MB</span>
                 </label>
                 <input
@@ -241,7 +292,7 @@ const Settings: Component = () => {
               onClick={handleSave}
               disabled={saving()}
             >
-              {saving() ? "Saving..." : "Save Settings"}
+              {saving() ? t("settings.saving") : t("settings.save")}
             </button>
           </div>
         </div>

@@ -21,34 +21,35 @@ import {
 import { showToast } from "../components/Toast";
 import { EVENTS } from "../ipc/events";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+import { t } from "../i18n";
 
 // ── Helpers ──
 
 const formatTime = (iso: string | null): string => {
-  if (!iso) return "Never";
+  if (!iso) return t("dashboard.time.never");
   try {
     const d = new Date(iso);
     const now = new Date();
     const diff = now.getTime() - d.getTime();
     const mins = Math.floor(diff / 60000);
-    if (mins < 1) return "Just now";
-    if (mins < 60) return `${mins}m ago`;
+    if (mins < 1) return t("dashboard.time.justNow");
+    if (mins < 60) return t("dashboard.time.minutesAgo", { count: mins });
     const hours = Math.floor(mins / 60);
-    if (hours < 24) return `${hours}h ago`;
+    if (hours < 24) return t("dashboard.time.hoursAgo", { count: hours });
     return d.toLocaleDateString();
   } catch {
-    return "Unknown";
+    return t("dashboard.time.unknown");
   }
 };
 
-const releaseTypeLabel = (t: string): string => {
-  switch (t) {
+const releaseTypeLabel = (releaseType: string): string => {
+  switch (releaseType) {
     case "release":
-      return "Release";
+      return t("dashboard.version.release");
     case "snapshot":
-      return "Snapshot";
+      return t("dashboard.version.snapshot");
     default:
-      return "Old";
+      return t("dashboard.version.old");
   }
 };
 
@@ -199,7 +200,7 @@ const Dashboard: Component = () => {
           );
           setGameLog((prev) => [
             ...prev,
-            `\n[Game exited with code ${event.payload.exit_code}]`,
+            `\n${t("dashboard.output.exited", { code: event.payload.exit_code })}`,
           ]);
           // Reload profiles to update last_played
           loadProfiles();
@@ -229,14 +230,18 @@ const Dashboard: Component = () => {
         batch_id: string;
         profile_id: string;
         version: string;
-      }>(EVENTS.DOWNLOAD_COMPLETE, () => {
+      }>(EVENTS.DOWNLOAD_COMPLETE, (event) => {
         setDownloading(false);
         setDownloadBatchId(null);
         setDownloadProgress(null);
         setInstallingVersion(null);
         loadProfiles();
         loadVersions();
-        showToast({ code: "ok", message: "Version installed", retryable: false });
+        showToast({
+          code: "ok",
+          message: t("dashboard.version.installed", { version: event.payload.version }),
+          retryable: false,
+        });
       });
       unlisteners.push(u5);
 
@@ -252,7 +257,7 @@ const Dashboard: Component = () => {
         setInstallingVersion(null);
         showToast({
           code: "error",
-          message: event.payload.error ?? "Download failed",
+          message: event.payload.error ?? t("dashboard.version.downloadFailed"),
           retryable: false,
         });
       });
@@ -368,8 +373,8 @@ const Dashboard: Component = () => {
   // ── Render ──
 
   return (
-    <Show when={!authLoading()} fallback={<LoadingScreen message="Loading session..." />}>
-      <Show when={session()} fallback={<LoadingScreen message="Redirecting to login..." />}>
+    <Show when={!authLoading()} fallback={<LoadingScreen message={t("dashboard.account.loadingSession")} />}>
+      <Show when={session()} fallback={<LoadingScreen message={t("dashboard.account.redirecting")} />}>
         <div class="launcher-root">
           {/* ── Left Column: Account ── */}
           <div class="col-left">
@@ -379,14 +384,14 @@ const Dashboard: Component = () => {
               </div>
               <div class="account-name">{session()!.username}</div>
               <div class="account-sub">
-                {session()!.provider === "microsoft" ? "Microsoft" : "Offline"}
+                {session()!.provider === "microsoft" ? t("dashboard.account.providerMicrosoft") : t("dashboard.account.providerOffline")}
               </div>
 
               <button class="account-btn" onClick={() => setShowCreateProfile(true)}>
-                + New Profile
+                {t("dashboard.account.newProfile")}
               </button>
               <button class="account-btn" onClick={() => navigate("/settings")}>
-                ⚙ Settings
+                {t("dashboard.account.settings")}
               </button>
               <div style="flex:1" />
               <button
@@ -394,7 +399,7 @@ const Dashboard: Component = () => {
                 onClick={handleLogout}
                 style="color: var(--color-red)"
               >
-                Log out
+                {t("dashboard.account.logout")}
               </button>
             </div>
 
@@ -405,11 +410,11 @@ const Dashboard: Component = () => {
                 onClick={() => setShowCreateProfile(false)}
               >
                 <div class="modal-card" onClick={(e) => e.stopPropagation()}>
-                  <h3 class="modal-title">Create Profile</h3>
+                  <h3 class="modal-title">{t("dashboard.profile.create.title")}</h3>
                   <input
                     type="text"
                     class="modal-input"
-                    placeholder="Profile name (e.g. Survival)"
+                    placeholder={t("dashboard.profile.create.placeholder")}
                     value={newProfileName()}
                     onInput={(e) => setNewProfileName(e.currentTarget.value)}
                     onKeyDown={(e) => {
@@ -422,14 +427,14 @@ const Dashboard: Component = () => {
                       class="modal-btn-cancel"
                       onClick={() => setShowCreateProfile(false)}
                     >
-                      Cancel
+                      {t("common.cancel")}
                     </button>
                     <button
                       class="modal-btn-primary"
                       onClick={handleCreateProfile}
                       disabled={creatingProfile() || !newProfileName().trim()}
                     >
-                      {creatingProfile() ? "Creating..." : "Create"}
+                      {creatingProfile() ? t("dashboard.profile.create.busy") : t("dashboard.profile.create.submit")}
                     </button>
                   </div>
                 </div>
@@ -441,27 +446,27 @@ const Dashboard: Component = () => {
           <div class="col-center">
             <div class="card card-server">
               <div class="card-server-header">
-                <span class="card-server-title">Profiles</span>
+                <span class="card-server-title">{t("dashboard.profile.title")}</span>
                 <button
                   class="add-server-btn"
                   onClick={() => setShowCreateProfile(true)}
                 >
-                  + Add
+                  {t("dashboard.profile.add")}
                 </button>
               </div>
 
               <Show
                 when={!profilesLoading()}
-                fallback={<LoadingInline message="Loading profiles..." />}
+                fallback={<LoadingInline message={t("dashboard.profile.loading")} />}
               >
                 <Show
                   when={profileList().length > 0}
                   fallback={
                     <EmptyState
-                      message="No profiles yet"
-                      action="Create your first profile to get started"
+                      message={t("dashboard.profile.empty")}
+                      action={t("dashboard.profile.emptyAction")}
                       onClick={() => setShowCreateProfile(true)}
-                      buttonLabel="Create Profile"
+                      buttonLabel={t("dashboard.profile.emptyButton")}
                     />
                   }
                 >
@@ -484,7 +489,7 @@ const Dashboard: Component = () => {
                           <div class="server-info">
                             <div class="server-name">{profile.name}</div>
                             <div class="server-addr">
-                              MC {profile.game_version}
+                              {t("dashboard.profile.gameVersion", { version: profile.game_version })}
                               {profile.mod_loader
                                 ? ` · ${profile.mod_loader.loader_type}`
                                 : ""}
@@ -501,7 +506,7 @@ const Dashboard: Component = () => {
                               e.stopPropagation();
                               handleDeleteProfile(profile.id);
                             }}
-                            title="Delete profile"
+                            title={t("dashboard.profile.delete")}
                           >
                             ×
                           </button>
@@ -520,17 +525,22 @@ const Dashboard: Component = () => {
             {/* ── Launch Bar ── */}
             <div class="card-launch">
               <div class="launch-info">
-                <div class="launch-label">Profile</div>
+                <div class="launch-label">{t("dashboard.launch.profile")}</div>
                 <div class="launch-detail">
                   {selectedProfile()
-                    ? `${selectedProfile()!.name} · MC ${selectedProfile()!.game_version}`
-                    : "No profile selected"}
+                    ? t("dashboard.launch.profileDetail", {
+                        name: selectedProfile()!.name,
+                        version: selectedProfile()!.game_version,
+                      })
+                    : t("dashboard.launch.noProfile")}
                 </div>
               </div>
               <div class="launch-info">
-                <div class="launch-label">Memory</div>
+                <div class="launch-label">{t("dashboard.launch.memory")}</div>
                 <div class="launch-detail">
-                  {selectedProfile() ? `${selectedProfile()!.memory_mb} MB` : "—"}
+                  {selectedProfile()
+                    ? t("dashboard.launch.memoryValue", { size: selectedProfile()!.memory_mb })
+                    : "—"}
                 </div>
               </div>
               <Show
@@ -544,7 +554,7 @@ const Dashboard: Component = () => {
                       style="background: var(--color-red); color: #fff"
                       onClick={() => handleKill(selectedProfileId()!)}
                     >
-                      STOP
+                      {t("dashboard.launch.stop")}
                     </button>
                   </Show>
                 }
@@ -554,7 +564,7 @@ const Dashboard: Component = () => {
                   onClick={handleLaunch}
                   disabled={launching() || !selectedProfile()}
                 >
-                  {launching() ? "..." : "LAUNCH"}
+                  {launching() ? "..." : t("dashboard.launch.start")}
                 </button>
               </Show>
             </div>
@@ -566,13 +576,13 @@ const Dashboard: Component = () => {
                     style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;"
                   >
                     <span style="font-size: 13px; color: #a1a1aa;">
-                      Downloading version...
+                      {t("dashboard.version.downloading")}
                     </span>
                     <button
                       onClick={handleCancelDownload}
                       style="font-size: 12px; padding: 4px 10px; border: 1px solid #3f3f46; border-radius: 6px; background: transparent; color: #d4d4d8; cursor: pointer;"
                     >
-                      Cancel
+                      {t("common.cancel")}
                     </button>
                   </div>
                   <div
@@ -596,7 +606,7 @@ const Dashboard: Component = () => {
           <div class="col-right">
             <div class="card card-version">
               <div class="ver-header">
-                <span class="ver-title">Versions</span>
+                <span class="ver-title">{t("dashboard.version.title")}</span>
               </div>
 
               {/* Filter buttons */}
@@ -605,29 +615,29 @@ const Dashboard: Component = () => {
                   class={`ver-filter-btn ${versionFilter() === "release" ? "active" : ""}`}
                   onClick={() => setVersionFilter("release")}
                 >
-                  Releases
+                  {t("dashboard.version.releases")}
                 </button>
                 <button
                   class={`ver-filter-btn ${versionFilter() === "snapshot" ? "active" : ""}`}
                   onClick={() => setVersionFilter("snapshot")}
                 >
-                  Snapshots
+                  {t("dashboard.version.snapshots")}
                 </button>
                 <button
                   class={`ver-filter-btn ${versionFilter() === "all" ? "active" : ""}`}
                   onClick={() => setVersionFilter("all")}
                 >
-                  All
+                  {t("dashboard.version.all")}
                 </button>
               </div>
 
               <Show
                 when={!versionsLoading()}
-                fallback={<LoadingInline message="Loading versions..." />}
+                fallback={<LoadingInline message={t("dashboard.version.loading")} />}
               >
                 <Show
                   when={filteredVersions().length > 0}
-                  fallback={<EmptyState message="No versions found" />}
+                  fallback={<EmptyState message={t("dashboard.version.empty")} />}
                 >
                   <div class="ver-list">
                     <For each={filteredVersions().slice(0, 100)}>
@@ -650,9 +660,9 @@ const Dashboard: Component = () => {
                             <div class="ver-name">{v.id}</div>
                             <div class="ver-meta">
                               {isInstalling
-                                ? "Installing..."
+                                ? t("dashboard.version.installing")
                                 : isInstalled
-                                ? "Installed"
+                                ? t("dashboard.version.installedBadge")
                                 : releaseTypeLabel(v.release_type)}
                             </div>
                           </div>
@@ -668,7 +678,7 @@ const Dashboard: Component = () => {
             <Show when={showLog()}>
               <div class="card card-log">
                 <div class="card-log-header">
-                  <span class="ver-title">Game Output</span>
+                  <span class="ver-title">{t("dashboard.output.title")}</span>
                   <button
                     class="log-close-btn"
                     onClick={() => setShowLog(false)}
@@ -681,7 +691,7 @@ const Dashboard: Component = () => {
                     {(line) => <div class="log-line">{line}</div>}
                   </For>
                   <Show when={gameLog().length === 0}>
-                    <div class="log-line log-empty">Waiting for game output...</div>
+                    <div class="log-line log-empty">{t("dashboard.output.waiting")}</div>
                   </Show>
                 </div>
               </div>

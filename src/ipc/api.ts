@@ -18,9 +18,13 @@ export type {
   VersionInfo,
   ReleaseType,
   AppConfig,
+  UserSettings,
+  UserSettingsUpdate,
+  LocaleInfo,
   IpcError,
   ErrorCode,
   JavaInfo,
+  InstanceInfo,
   DownloadProgressPayload,
 } from "./types";
 
@@ -31,6 +35,9 @@ import type {
   ModVersion,
   VersionInfo,
   AppConfig,
+  UserSettings,
+  UserSettingsUpdate,
+  LocaleInfo,
   IpcError,
   JavaInfo,
 } from "./types";
@@ -145,6 +152,16 @@ export const settings = {
   get: () => invoke<AppConfig>("settings_get"),
   set: (opts: SettingsUpdate) => invoke<AppConfig>("settings_set", { opts }),
   detectJava: () => invoke<JavaInfo[]>("java_detect"),
+};
+
+// ── User-level settings（UI 语言等）──
+
+export const userSettings = {
+  get: () => invoke<UserSettings>("settings_get_user"),
+  /** `locale: ""` = follow the system language; a tag pins it; `null` = unchanged. */
+  set: (opts: UserSettingsUpdate) =>
+    invoke<UserSettings>("settings_set_user", { opts }),
+  supportedLocales: () => invoke<LocaleInfo[]>("settings_supported_locales"),
 };
 
 // ── Logs（P3-01：补 log_get/log_clear wrapper）──

@@ -3,6 +3,7 @@ import { useNavigate } from "@solidjs/router";
 import { listen } from "@tauri-apps/api/event";
 import { auth, safeInvoke, type AuthSession } from "../ipc/api";
 import { EVENTS } from "../ipc/events";
+import { t } from "../i18n";
 
 interface DeviceCodePayload {
   user_code: string;
@@ -27,7 +28,7 @@ const Login: Component = () => {
   const handleOfflineLogin = async () => {
     const username = offlineUsername().trim();
     if (!username) {
-      setError("Please enter a username");
+      setError(t("login.error.usernameRequired"));
       return;
     }
 
@@ -78,7 +79,7 @@ const Login: Component = () => {
       <div class="login-card">
         <div class="login-header">
           <h1 class="login-title">RMCCC</h1>
-          <p class="login-subtitle">Minecraft Launcher</p>
+          <p class="login-subtitle">{t("login.subtitle")}</p>
         </div>
 
         <div class="login-section">
@@ -87,8 +88,8 @@ const Login: Component = () => {
             onClick={handleMicrosoftLogin}
             disabled={loading()}
           >
-            <Show when={!loading()} fallback="Connecting...">
-              Sign in with Microsoft
+            <Show when={!loading()} fallback={t("login.microsoft.busy")}>
+              {t("login.microsoft.submit")}
             </Show>
           </button>
         </div>
@@ -97,7 +98,7 @@ const Login: Component = () => {
         <Show when={deviceCode()}>
           {(dc) => (
             <div class="device-code-card">
-              <p class="device-code-title">Open the URL below and enter the code</p>
+              <p class="device-code-title">{t("login.deviceCode.title")}</p>
               <button
                 class="device-code-uri"
                 onClick={openVerificationUri}
@@ -105,21 +106,21 @@ const Login: Component = () => {
               >
                 {dc().verification_uri}
               </button>
-              <p class="device-code-label">Code</p>
+              <p class="device-code-label">{t("login.deviceCode.codeLabel")}</p>
               <p class="device-code-value">{dc().user_code}</p>
             </div>
           )}
         </Show>
 
         <div class="login-divider">
-          <span>or</span>
+          <span>{t("login.divider")}</span>
         </div>
 
         <div class="login-section">
           <input
             type="text"
             class="input-username"
-            placeholder="Enter username"
+            placeholder={t("login.offline.placeholder")}
             value={offlineUsername()}
             onInput={(e) => setOfflineUsername(e.currentTarget.value)}
             onKeyDown={(e) => {
@@ -132,8 +133,8 @@ const Login: Component = () => {
             onClick={handleOfflineLogin}
             disabled={loading() || !offlineUsername().trim()}
           >
-            <Show when={!loading()} fallback="Logging in...">
-              Offline Login
+            <Show when={!loading()} fallback={t("login.offline.busy")}>
+              {t("login.offline.submit")}
             </Show>
           </button>
         </div>
