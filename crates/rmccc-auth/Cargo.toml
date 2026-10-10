@@ -9,7 +9,6 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 tokio = { workspace = true }
 reqwest = { workspace = true }
-oauth2 = { workspace = true }
 aes-gcm = { workspace = true }
 rand = { workspace = true }
 base64 = { workspace = true }
@@ -17,3 +16,5 @@ chrono = { workspace = true }
 async-trait = { workspace = true }
 tracing = { workspace = true }
 uuid = { workspace = true }
+ts-rs = { workspace = true }
+md-5 = { workspace = true }

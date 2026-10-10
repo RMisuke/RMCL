@@ -1,12 +1,26 @@
 //! Authentication module: Microsoft OAuth2, offline auth, and encrypted storage.
 
+pub mod account;
+pub mod account_id;
+pub mod auth_info;
+pub mod factory;
 pub mod microsoft;
 pub mod offline;
+pub mod repository;
 pub mod types;
 pub mod vault;
 
 // Re-export key types
-pub use microsoft::MicrosoftAuthProvider;
-pub use offline::{create_offline_session, OfflineAuthProvider};
+pub use account::Account;
+pub use account_id::AccountID;
+pub use auth_info::AuthInfo;
+pub use factory::{AccountFactory, CreateAccountContext};
+pub use microsoft::{
+    MicrosoftAccount, MicrosoftAccountFactory, MicrosoftAuthProvider, REFRESH_WINDOW_SECS,
+};
+pub use offline::{
+    create_offline_session, OfflineAccount, OfflineAccountFactory, OfflineAuthProvider,
+};
+pub use repository::{AccountMetadata, AccountRepository};
 pub use types::{AuthProgress, AuthProvider, AuthSession, ProgressCallback};
 pub use vault::TokenVault;

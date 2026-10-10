@@ -2,16 +2,45 @@
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
+use ts_rs::TS;
 
 /// Authentication session (persisted, tokens encrypted at rest).
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize, TS)]
+#[ts(export_to = "types.ts")]
 pub struct AuthSession {
+    /// Stable launcher account record ID (`account:<uuid>`), independent of the
+    /// Minecraft profile UUID. Legacy records default to a random value and are
+    /// re-assigned during the Phase 1 storage migration.
+    #[serde(default = "random_account_id")]
+    #[ts(type = "string")]
+    pub account_id: String,
     pub provider: String,
     pub access_token: String,
     pub username: String,
     pub uuid: String,
     pub refresh_token: Option<String>,
     pub expires_at: Option<DateTime<Utc>>,
+}
+
+/// Default for records that predate the stable account ID field.
+fn random_account_id() -> String {
+    crate::account_id::AccountID::generate().to_string()
+}
+
+impl std::fmt::Debug for AuthSession {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("AuthSession")
+            .field("provider", &self.provider)
+            .field("username", &self.username)
+            .field("uuid", &self.uuid)
+            .field("access_token", &"[REDACTED]")
+            .field(
+                "refresh_token",
+                &self.refresh_token.as_ref().map(|_| "[REDACTED]"),
+            )
+            .field("expires_at", &self.expires_at)
+            .finish()
+    }
 }
 
 /// Progress updates during authentication (e.g., device code flow).

@@ -27,6 +27,31 @@ pub fn cache_dir() -> PathBuf {
     default_data_dir().join("cache")
 }
 
+/// `config/` subdirectory holding settings files (P3: launcher-settings).
+pub fn config_dir(data_dir: &Path) -> PathBuf {
+    data_dir.join("config")
+}
+
+/// `state/` subdirectory holding runtime state files (P3: launcher-state).
+pub fn state_dir(data_dir: &Path) -> PathBuf {
+    data_dir.join("state")
+}
+
+/// Launcher settings file (`{data_dir}/config/launcher-settings.json`).
+pub fn launcher_settings_path(data_dir: &Path) -> PathBuf {
+    config_dir(data_dir).join("launcher-settings.json")
+}
+
+/// Launcher runtime state file (`{data_dir}/state/launcher-state.json`).
+pub fn launcher_state_path(data_dir: &Path) -> PathBuf {
+    state_dir(data_dir).join("launcher-state.json")
+}
+
+/// User-level settings file (`{data_dir}/user-settings.json`).
+pub fn user_settings_path(data_dir: &Path) -> PathBuf {
+    data_dir.join("user-settings.json")
+}
+
 /// Ensure all required directories exist.
 pub fn ensure_dirs() -> std::io::Result<()> {
     let dirs = [
@@ -110,9 +135,11 @@ mod tests {
         let root = Path::new("/tmp/rmccc-test/game");
         let result = safe_join(root, "../../etc/passwd");
         // Path traversal should be detected and blocked
-        assert!(result.is_err() || {
-            // If root exists, canonicalize will catch it
-            true
-        });
+        assert!(
+            result.is_err() || {
+                // If root exists, canonicalize will catch it
+                true
+            }
+        );
     }
 }
