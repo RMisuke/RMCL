@@ -93,7 +93,10 @@ export const en = {
   "dashboard.profile.delete": "Delete profile",
   "dashboard.profile.create.title": "Create Profile",
   "dashboard.profile.create.placeholder": "Profile name (e.g. Survival)",
-  "dashboard.profile.create.submit": "Create",
+  "dashboard.profile.create.versionLabel": "Game version",
+  "dashboard.profile.create.versionPlaceholder": "Select a version…",
+  "dashboard.profile.create.includeSnapshots": "Include snapshots",
+  "dashboard.profile.create.submit": "Create & download",
   "dashboard.profile.create.busy": "Creating...",
 
   // ── Dashboard: profile timestamps ──

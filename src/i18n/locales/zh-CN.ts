@@ -89,7 +89,10 @@ export const zhCN: Messages = {
   "dashboard.profile.delete": "删除实例",
   "dashboard.profile.create.title": "新建实例",
   "dashboard.profile.create.placeholder": "实例名称（例如：生存）",
-  "dashboard.profile.create.submit": "创建",
+  "dashboard.profile.create.versionLabel": "游戏版本",
+  "dashboard.profile.create.versionPlaceholder": "请选择版本…",
+  "dashboard.profile.create.includeSnapshots": "包含快照版本",
+  "dashboard.profile.create.submit": "创建并下载",
   "dashboard.profile.create.busy": "正在创建…",
 
   // ── 仪表盘：实例时间 ──

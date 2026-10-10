@@ -69,6 +69,11 @@ const Dashboard: Component = () => {
   const [newProfileName, setNewProfileName] = createSignal("");
   const [showCreateProfile, setShowCreateProfile] = createSignal(false);
   const [creatingProfile, setCreatingProfile] = createSignal(false);
+  /// Version picked in the create dialog. Creating an instance without an
+  /// explicit version is not allowed — the version determines what gets
+  /// downloaded, so it must be a visible choice rather than a silent default.
+  const [createVersion, setCreateVersion] = createSignal("");
+  const [createIncludeSnapshots, setCreateIncludeSnapshots] = createSignal(false);
 
   // ── Version state ──
   const [versionList, setVersionList] = createSignal<VersionInfo[]>([]);
@@ -105,6 +110,13 @@ const Dashboard: Component = () => {
       return all.filter((v) => v.release_type === "snapshot");
     return all.filter((v) => v.release_type === "release");
   };
+
+  /// Versions offered in the create dialog; releases only unless the user opts
+  /// into snapshots (the full list is ~900 entries).
+  const createVersionOptions = () =>
+    versionList().filter(
+      (v) => createIncludeSnapshots() || v.release_type === "release"
+    );
 
   const isProfileRunning = (id: string) => runningProfiles().includes(id);
 
@@ -275,29 +287,33 @@ const Dashboard: Component = () => {
 
   const handleCreateProfile = async () => {
     const name = newProfileName().trim();
-    if (!name) return;
+    const gameVersion = createVersion();
+    // Both are required: the version decides what gets downloaded, so it is an
+    // explicit choice rather than an invisible default.
+    if (!name || !gameVersion) return;
 
     setCreatingProfile(true);
-    // Default to latest release version
-    const latestRelease = versionList().find(
-      (v) => v.release_type === "release"
-    );
-    const gameVersion = latestRelease?.id ?? "1.20.4";
-
     const result = await safeInvoke<Profile>("profile_create", {
       name,
       gameVersion,
     });
     setCreatingProfile(false);
 
-    if (result.ok) {
-      setProfileList((prev) => [...prev, result.data]);
-      setSelectedProfileId(result.data.id);
-      setNewProfileName("");
-      setShowCreateProfile(false);
-    } else {
+    if (!result.ok) {
       showToast(result.error);
+      return;
     }
+
+    setProfileList((prev) => [...prev, result.data]);
+    setSelectedProfileId(result.data.id);
+    setNewProfileName("");
+    setCreateVersion("");
+    setShowCreateProfile(false);
+
+    // Creating an instance immediately starts downloading its version, so the
+    // user lands on a usable instance instead of having to pick the version a
+    // second time in the versions panel.
+    await handleInstallVersion(gameVersion, result.data.id);
   };
 
   const handleDeleteProfile = async (id: string) => {
@@ -313,8 +329,14 @@ const Dashboard: Component = () => {
     }
   };
 
-  const handleInstallVersion = async (versionId: string) => {
-    const profileId = selectedProfileId();
+  /// Installs `versionId` for `profileIdOverride`, or for the selected profile
+  /// when no override is given (used right after creating an instance, before
+  /// the selection signal has propagated).
+  const handleInstallVersion = async (
+    versionId: string,
+    profileIdOverride?: string
+  ) => {
+    const profileId = profileIdOverride ?? selectedProfileId();
     if (!profileId) return;
 
     setInstallingVersion(versionId);
@@ -422,6 +444,39 @@ const Dashboard: Component = () => {
                     }}
                     autofocus
                   />
+
+                  {/* Game version is mandatory: it decides what gets downloaded
+                      right after the instance is created. */}
+                  <label class="modal-field-label" for="create-version">
+                    {t("dashboard.profile.create.versionLabel")}
+                  </label>
+                  <select
+                    id="create-version"
+                    class="modal-input"
+                    onChange={(e) => setCreateVersion(e.currentTarget.value)}
+                  >
+                    <option value="" selected={createVersion() === ""}>
+                      {t("dashboard.profile.create.versionPlaceholder")}
+                    </option>
+                    <For each={createVersionOptions()}>
+                      {(v) => (
+                        <option value={v.id} selected={createVersion() === v.id}>
+                          {v.id}
+                        </option>
+                      )}
+                    </For>
+                  </select>
+                  <label class="modal-checkbox">
+                    <input
+                      type="checkbox"
+                      checked={createIncludeSnapshots()}
+                      onChange={(e) =>
+                        setCreateIncludeSnapshots(e.currentTarget.checked)
+                      }
+                    />
+                    {t("dashboard.profile.create.includeSnapshots")}
+                  </label>
+
                   <div class="modal-actions">
                     <button
                       class="modal-btn-cancel"
@@ -432,7 +487,11 @@ const Dashboard: Component = () => {
                     <button
                       class="modal-btn-primary"
                       onClick={handleCreateProfile}
-                      disabled={creatingProfile() || !newProfileName().trim()}
+                      disabled={
+                        creatingProfile() ||
+                        !newProfileName().trim() ||
+                        !createVersion()
+                      }
                     >
                       {creatingProfile() ? t("dashboard.profile.create.busy") : t("dashboard.profile.create.submit")}
                     </button>
