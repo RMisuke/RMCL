@@ -32,21 +32,26 @@ use std::sync::Arc;
 #[allow(clippy::too_many_arguments)]
 pub fn new_default_launcher(
     instance_id: String,
-    game_dir: PathBuf,
     game_version: GameVersion,
     auth: AuthInfo,
     options: LaunchOptions,
     listener: Option<Arc<dyn ProcessListener>>,
 ) -> DefaultLauncher {
-    DefaultLauncher::new(instance_id, game_dir, game_version, auth, options, listener)
+    DefaultLauncher::new(instance_id, game_version, auth, options, listener)
 }
 
 /// Concrete launcher implementation (HMCL `DefaultLauncher`).
 pub struct DefaultLauncher {
     /// Version / instance id (e.g. `1.20.4` or `1.20.4-fabric-0.16.9`).
     instance_id: String,
-    /// Run directory (`.minecraft`).
+    /// Shared game root (`.minecraft` equivalent) holding `versions/`,
+    /// `libraries/` and `assets/` — always shared across instances.
     game_dir: PathBuf,
+    /// The instance's **run directory**: what `--gameDir` and the process working
+    /// directory point at, and where per-instance `mods/`, `saves/` and
+    /// `options.txt` live. Differs from `game_dir` only when the instance is
+    /// isolated (HMCL `getRunDirectory`).
+    run_dir: PathBuf,
     /// The resolved launch manifest.
     game_version: GameVersion,
     /// Auth credentials.
@@ -61,20 +66,29 @@ impl DefaultLauncher {
     /// Create a new launcher.
     pub fn new(
         instance_id: String,
-        game_dir: PathBuf,
         game_version: GameVersion,
         auth: AuthInfo,
         options: LaunchOptions,
         listener: Option<Arc<dyn ProcessListener>>,
     ) -> Self {
+        // Both directories live on `LaunchOptions`; reading them from there keeps
+        // a single source of truth for "shared root" vs "run directory".
+        let game_dir = options.game_dir.clone();
+        let run_dir = options.run_dir.clone();
         Self {
             instance_id,
             game_dir,
+            run_dir,
             game_version,
             auth,
             options,
             listener,
         }
+    }
+
+    /// The instance's run directory (`--gameDir`, cwd, per-instance mods).
+    pub fn run_dir(&self) -> &Path {
+        &self.run_dir
     }
 
     /// The actual Minecraft version string (the root of the inheritance chain).
@@ -209,7 +223,7 @@ impl DefaultLauncher {
             &self.auth.user_type,
             &version_name,
             &version_type,
-            &self.game_dir.display().to_string(),
+            &self.run_dir.display().to_string(),
             &assets_dir,
             &self.game_version.asset_index.id,
             natives_var,
@@ -270,7 +284,7 @@ impl DefaultLauncher {
         );
         env.insert(
             "INST_MC_DIR".to_string(),
-            self.game_dir.display().to_string(),
+            self.run_dir.display().to_string(),
         );
         env.insert(
             "INST_JAVA".to_string(),
@@ -535,7 +549,7 @@ impl DefaultLauncher {
             game_args.extend(default_game_arguments(
                 &self.auth,
                 &self.game_version,
-                &self.game_dir,
+                &self.run_dir,
                 &configurations,
             ));
         }
@@ -592,7 +606,7 @@ impl DefaultLauncher {
 
         // Pre-launch command.
         if let Some(pre) = &self.options.pre_launch_command {
-            run_external_command(pre, &self.get_env_vars(), &self.game_dir)
+            run_external_command(pre, &self.get_env_vars(), &self.run_dir)
                 .await
                 .map_err(|e| LaunchError::Other(format!("Pre-launch command failed: {e}")))?;
         }
@@ -600,13 +614,13 @@ impl DefaultLauncher {
         // Response file keeps --accessToken out of `ps aux` (P1-03).
         // Drop leftovers from a previous crashed run first (only stale ones, so
         // a concurrently launching instance cannot lose its own file).
-        sweep_stale_response_files(&self.game_dir);
+        sweep_stale_response_files(&self.run_dir);
 
         let response_file = build_response_file(
             &command.jvm_args,
             &command.game_args,
             &command.main_class,
-            &self.game_dir,
+            &self.run_dir,
         )
         .map_err(LaunchError::from)?;
 
@@ -615,7 +629,7 @@ impl DefaultLauncher {
         let child = spawn_game(
             &self.options.java.path,
             &response_file,
-            &self.game_dir,
+            &self.run_dir,
             Some(env),
         )
         .await
@@ -654,21 +668,21 @@ impl DefaultLauncher {
                 inner: Some(l.clone()),
                 command: cmd.clone(),
                 env: self.get_env_vars(),
-                dir: self.game_dir.clone(),
+                dir: self.run_dir.clone(),
                 instance_root: instance_root.clone(),
             })),
             (Some(l), None) => Some(Arc::new(PostExitListener {
                 inner: Some(l.clone()),
                 command: String::new(),
                 env: self.get_env_vars(),
-                dir: self.game_dir.clone(),
+                dir: self.run_dir.clone(),
                 instance_root,
             })),
             (None, Some(cmd)) => Some(Arc::new(PostExitListener {
                 inner: None,
                 command: cmd.clone(),
                 env: self.get_env_vars(),
-                dir: self.game_dir.clone(),
+                dir: self.run_dir.clone(),
                 instance_root,
             })),
             (None, None) => None,
@@ -1144,7 +1158,6 @@ mod tests {
         options.java.is_64bit = true;
         DefaultLauncher::new(
             "1.20.4".to_string(),
-            PathBuf::from("/game"),
             gv,
             AuthInfo::new("Steve", "uuid", "token", "msa"),
             options,
@@ -1169,7 +1182,6 @@ mod tests {
         opts.height = Some(1080);
         let l2 = DefaultLauncher::new(
             l.instance_id.clone(),
-            l.game_dir.clone(),
             l.game_version.clone(),
             l.auth.clone(),
             opts,
@@ -1238,7 +1250,6 @@ mod tests {
 
         let l = DefaultLauncher::new(
             "1.20.4".to_string(),
-            game_dir.clone(),
             gv,
             AuthInfo::new("Steve", "uuid", "token", "msa"),
             options,

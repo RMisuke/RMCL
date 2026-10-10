@@ -229,23 +229,21 @@ pub async fn launch_start(
     );
 
     // ── Phase 5: Build options + launcher (HMCL DefaultLauncher) ──
-    let options = LaunchOptions::from_profile(&resolved.profile, java_install.clone());
+    // `from_profile` derives both the shared game root (versions/libraries/
+    // assets, where the resolved manifest lives) and the instance's run
+    // directory (which honours its isolation setting), so the launcher can no
+    // longer be handed a per-profile directory holding none of those files.
+    let options = {
+        let core = state.core.read().await;
+        LaunchOptions::from_profile(&resolved.profile, &core.config, java_install.clone())
+    };
     let listener: Arc<dyn rmccc_launch::ProcessListener> = Arc::new(TauriProcessListener {
         app_handle: state.app_handle.clone(),
         profile_id: profile_id.clone(),
         running_games: state.running_games.clone(),
     });
-    // Use the repository's game root, which is where the resolved manifest,
-    // libraries, assets and natives actually live. `profile.game_dir` may point
-    // elsewhere (e.g. a legacy per-profile install), and using it would build a
-    // classpath of missing files.
-    let game_dir = {
-        let core = state.core.read().await;
-        core.config.resolved_game_root()
-    };
     let launcher = rmccc_launch::DefaultLauncher::new(
         resolved.profile.game_version.clone(),
-        game_dir,
         resolved.game_version,
         auth_info,
         options,

@@ -41,6 +41,10 @@ pub struct LaunchOptions {
     pub java: JavaInstallation,
     /// Run directory (the `.minecraft` equivalent).
     pub game_dir: PathBuf,
+    /// The instance's **run directory**: `--gameDir`, the process working
+    /// directory, and where per-instance `mods/`, `saves/` and `options.txt`
+    /// live. Equals `game_dir` unless the instance is isolated.
+    pub run_dir: PathBuf,
     /// Display version name shown in-game (`${version_name}`).
     pub version_name: Option<String>,
     /// Version type label (`release` / `snapshot` / ...).
@@ -97,40 +101,63 @@ impl LaunchOptions {
     /// Maps every extended [`Profile`](rmccc_profile::Profile) field onto the
     /// corresponding [`LaunchOptions`] field so both the Tauri and CLI
     /// orchestration layers share a single conversion.
-    pub fn from_profile(profile: &rmccc_profile::Profile, java: JavaInstallation) -> Self {
+    /// Builds the launcher options from a profile plus the launcher-wide
+    /// defaults.
+    ///
+    /// Both directories are derived here so every caller agrees on them:
+    /// `game_dir` is the shared game root from the config (versions, libraries,
+    /// assets), and `run_dir` is that root unless the instance's isolation
+    /// setting gives it its own (HMCL `getRunDirectory`).
+    pub fn from_profile(
+        profile: &rmccc_profile::Profile,
+        config: &rmccc_config::AppConfig,
+        java: JavaInstallation,
+    ) -> Self {
+        let resolved = profile.resolve(config);
+        let game_dir = config.resolved_game_root();
+        let isolation =
+            rmccc_version::IsolationType::parse(&resolved.isolation).unwrap_or_default();
+        let run_dir = rmccc_version::isolation::run_directory(
+            &game_dir,
+            &profile.game_version,
+            isolation,
+            profile.mod_loader.is_some(),
+        );
+
         Self {
             java,
-            game_dir: profile.game_dir.clone(),
+            game_dir,
+            run_dir,
             version_name: Some(profile.name.clone()),
             profile_name: Some(profile.name.clone()),
             version_type: None,
-            max_memory: profile.memory_mb,
-            min_memory: profile.min_memory_mb,
-            metaspace: profile.metaspace_mb,
-            jvm_args: profile.jvm_args.clone(),
-            override_jvm_args: profile.override_jvm_args.clone(),
-            game_args: profile.game_args.clone(),
-            java_agents: profile.java_agents.clone(),
-            env_vars: profile.env_vars.clone(),
-            process_priority: match profile.process_priority.as_str() {
+            max_memory: resolved.max_memory_mb,
+            min_memory: resolved.min_memory_mb,
+            metaspace: resolved.metaspace_mb,
+            jvm_args: resolved.jvm_args.clone(),
+            override_jvm_args: resolved.override_jvm_args.clone(),
+            game_args: resolved.game_args.clone(),
+            java_agents: resolved.java_agents.clone(),
+            env_vars: resolved.env_vars.clone(),
+            process_priority: match resolved.process_priority.as_str() {
                 "low" => ProcessPriority::Low,
                 "below_normal" => ProcessPriority::BelowNormal,
                 "above_normal" => ProcessPriority::AboveNormal,
                 "high" => ProcessPriority::High,
                 _ => ProcessPriority::Normal,
             },
-            wrapper: profile.wrapper.clone(),
-            width: profile.width,
-            height: profile.height,
-            fullscreen: profile.fullscreen,
-            use_native_glfw: profile.use_native_glfw,
-            use_native_openal: profile.use_native_openal,
-            use_custom_natives: profile.use_custom_natives,
-            no_generated_jvm_args: profile.no_generated_jvm_args,
-            no_generated_optimizing_jvm_args: profile.no_generated_optimizing_jvm_args,
-            enable_debug_log_output: profile.enable_debug_log_output,
-            pre_launch_command: profile.pre_launch_command.clone(),
-            post_exit_command: profile.post_exit_command.clone(),
+            wrapper: resolved.wrapper.clone(),
+            width: resolved.width,
+            height: resolved.height,
+            fullscreen: resolved.fullscreen,
+            use_native_glfw: resolved.use_native_glfw,
+            use_native_openal: resolved.use_native_openal,
+            use_custom_natives: resolved.use_custom_natives,
+            no_generated_jvm_args: resolved.no_generated_jvm_args,
+            no_generated_optimizing_jvm_args: resolved.no_generated_optimizing_jvm_args,
+            enable_debug_log_output: resolved.enable_debug_log_output,
+            pre_launch_command: resolved.pre_launch_command.clone(),
+            post_exit_command: resolved.post_exit_command.clone(),
         }
     }
 }
@@ -145,6 +172,7 @@ impl Default for LaunchOptions {
                 is_64bit: true,
             },
             game_dir: PathBuf::new(),
+            run_dir: PathBuf::new(),
             version_name: None,
             version_type: None,
             profile_name: None,

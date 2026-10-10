@@ -1062,7 +1062,11 @@ impl CliContext {
             }
         };
         let auth = rmccc_launch::AuthInfo::new(username, uuid, access_token, user_type);
-        let options = rmccc_launch::LaunchOptions::from_profile(&profile, java_install.clone());
+        let options = rmccc_launch::LaunchOptions::from_profile(
+            &profile,
+            &self.core.read().await.config,
+            java_install.clone(),
+        );
 
         // Phase 5: state-syncing process listener.
         let (exit_tx, exit_rx) = tokio::sync::watch::channel(None);
@@ -1077,7 +1081,6 @@ impl CliContext {
 
         let launcher = rmccc_launch::DefaultLauncher::new(
             profile.game_version.clone(),
-            profile.game_dir.clone(),
             game_version,
             auth,
             options,
@@ -1205,10 +1208,13 @@ impl CliContext {
             }
         };
         let auth = rmccc_launch::AuthInfo::new(username, uuid, access_token, user_type);
-        let options = rmccc_launch::LaunchOptions::from_profile(&profile, java_install.clone());
+        let options = rmccc_launch::LaunchOptions::from_profile(
+            &profile,
+            &self.core.read().await.config,
+            java_install.clone(),
+        );
         let launcher = rmccc_launch::DefaultLauncher::new(
             profile.game_version.clone(),
-            profile.game_dir.clone(),
             game_version,
             auth,
             options,

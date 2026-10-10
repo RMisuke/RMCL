@@ -602,7 +602,8 @@ pub async fn launch_game(
     let java_install = detect_launch_java(profile, &game_version)?;
     let (username, uuid_str, access_token, user_type) = resolve_launch_auth(core).await?;
     let auth = rmccc_launch::AuthInfo::new(username, uuid_str, access_token, user_type);
-    let options = rmccc_launch::LaunchOptions::from_profile(profile, java_install.clone());
+    let options =
+        rmccc_launch::LaunchOptions::from_profile(profile, &core.config, java_install.clone());
 
     let listener: Arc<dyn rmccc_launch::ProcessListener> = Arc::new(CliListener {
         output: output.clone(),
@@ -610,7 +611,6 @@ pub async fn launch_game(
 
     let launcher = rmccc_launch::DefaultLauncher::new(
         profile.game_version.clone(),
-        profile.game_dir.clone(),
         game_version,
         auth,
         options,
