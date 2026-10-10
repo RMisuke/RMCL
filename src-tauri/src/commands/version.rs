@@ -126,7 +126,10 @@ async fn run_install_background(
                 message: format!("Profile not found: {profile_id}"),
                 retryable: false,
             })?;
-        let game_dir = profile.game_dir.clone();
+        // Install into the game root that `GameRepository` indexes rather than
+        // `profile.game_dir`: versions/libraries/assets are shared across
+        // instances, and the launch path resolves them through the repository.
+        let game_dir = core.config.resolved_game_root();
         (profile, game_dir)
     };
 

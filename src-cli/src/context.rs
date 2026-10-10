@@ -304,7 +304,9 @@ impl CliContext {
             });
         let core = self.core.write().await;
         let id = uuid::Uuid::new_v4().to_string();
-        let game_dir = core.config.profile_game_dir(&id);
+        // Shared game root, matching what `GameRepository` indexes and where
+        // installs land (see the Tauri `profile_create` for the full rationale).
+        let game_dir = core.config.resolved_game_root();
         let profile = rmccc_profile::Profile {
             id,
             name: name.to_string(),

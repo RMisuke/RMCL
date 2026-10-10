@@ -235,9 +235,17 @@ pub async fn launch_start(
         profile_id: profile_id.clone(),
         running_games: state.running_games.clone(),
     });
+    // Use the repository's game root, which is where the resolved manifest,
+    // libraries, assets and natives actually live. `profile.game_dir` may point
+    // elsewhere (e.g. a legacy per-profile install), and using it would build a
+    // classpath of missing files.
+    let game_dir = {
+        let core = state.core.read().await;
+        core.config.resolved_game_root()
+    };
     let launcher = rmccc_launch::DefaultLauncher::new(
         resolved.profile.game_version.clone(),
-        resolved.profile.game_dir.clone(),
+        game_dir,
         resolved.game_version,
         auth_info,
         options,

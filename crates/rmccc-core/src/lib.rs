@@ -151,6 +151,13 @@ impl CoreContext {
         // re-run after every install via `refresh()`.
         let game_root = config.resolved_game_root();
         std::fs::create_dir_all(&game_root)?;
+
+        // Adopt instance data written by the pre-shared-root layout *before*
+        // indexing, so the repository sees the migrated versions immediately.
+        if let Err(e) = migrate_instance_layout(&config, &profile_store) {
+            tracing::warn!(error = %e, "Instance layout migration failed");
+        }
+
         let mut game_repository = rmccc_version::DefaultGameRepository::new(game_root.clone());
         if let Err(e) = game_repository.refresh() {
             tracing::warn!(error = %e, game_root = %game_root.display(), "Initial game repository refresh failed");
@@ -306,6 +313,138 @@ impl CoreContext {
     }
 }
 
+/// Moves instance data written by the pre-shared-root layout into the shared
+/// game root, and repoints the owning profile at it.
+///
+/// Earlier builds created a nested directory per profile
+/// (`{game_root}/{profile_id}/versions|assets|libraries`) while
+/// `GameRepository` indexes `{game_root}`. Those installs were therefore
+/// invisible to the launch path, which resolves versions through the repository
+/// (`get_resolved()`), so launching failed even though the download succeeded.
+///
+/// Only a direct child of the game root that actually contains `versions/` is
+/// touched, so a user-chosen custom `game_dir` (possibly on another volume) is
+/// never moved. Trees are moved with same-filesystem renames where possible,
+/// which keeps this cheap even for several hundred MB.
+fn migrate_instance_layout(
+    config: &rmccc_config::AppConfig,
+    profile_store: &rmccc_profile::ProfileStore,
+) -> rmccc_error::Result<usize> {
+    let game_root = config.resolved_game_root();
+    if !game_root.is_dir() {
+        return Ok(0);
+    }
+
+    let profiles = profile_store.list()?;
+    let mut migrated = 0usize;
+
+    for mut profile in profiles.iter().cloned() {
+        if profile.game_dir == game_root {
+            continue;
+        }
+        // Only handle the legacy shape; anything else is a deliberate choice.
+        if profile.game_dir.parent() != Some(game_root.as_path()) {
+            continue;
+        }
+
+        if profile.game_dir.is_dir() {
+            adopt_instance_tree(&game_root, &profile.game_dir)?;
+        }
+
+        let legacy = profile.game_dir.clone();
+        profile.game_dir = game_root.clone();
+        profile_store.save(&profile)?;
+        migrated += 1;
+        tracing::info!(
+            profile_id = %profile.id,
+            from = %legacy.display(),
+            to = %game_root.display(),
+            "Migrated instance to the shared game root"
+        );
+    }
+
+    // Leftover legacy directories no longer referenced by any profile are only
+    // reported: silently adopting them would keep disk usage the user may have
+    // intended to reclaim by deleting a profile.
+    let referenced: Vec<&std::path::Path> = profiles
+        .iter()
+        .map(|p| p.game_dir.as_path())
+        .chain(std::iter::once(game_root.as_path()))
+        .collect();
+    if let Ok(entries) = std::fs::read_dir(&game_root) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if !path.is_dir()
+                || !path.join("versions").is_dir()
+                || referenced.contains(&path.as_path())
+            {
+                continue;
+            }
+            tracing::warn!(
+                path = %path.display(),
+                "Orphaned pre-migration instance directory; delete it to reclaim space"
+            );
+        }
+    }
+
+    Ok(migrated)
+}
+
+/// Merges the game trees of a legacy instance directory into `game_root`.
+fn adopt_instance_tree(
+    game_root: &std::path::Path,
+    legacy: &std::path::Path,
+) -> rmccc_error::Result<()> {
+    for sub in ["versions", "libraries", "assets"] {
+        let from = legacy.join(sub);
+        if from.is_dir() {
+            merge_tree(&from, &game_root.join(sub))?;
+        }
+    }
+
+    // Anything left over is run-directory data (saves, mods, options.txt, ...)
+    // that we deliberately do not move; the non-empty removal simply reports it.
+    match std::fs::remove_dir(legacy) {
+        Ok(()) => {}
+        Err(_) => tracing::warn!(
+            path = %legacy.display(),
+            "Pre-migration instance directory still holds non-game files; left in place"
+        ),
+    }
+    Ok(())
+}
+
+/// Moves the contents of `from` into `to`, keeping files that already exist
+/// (identical versions produce identical, SHA1-verified content).
+fn merge_tree(from: &std::path::Path, to: &std::path::Path) -> rmccc_error::Result<()> {
+    std::fs::create_dir_all(to)?;
+    for entry in std::fs::read_dir(from)? {
+        let entry = entry?;
+        let source = entry.path();
+        let target = to.join(entry.file_name());
+
+        if entry.file_type()?.is_dir() {
+            merge_tree(&source, &target)?;
+            continue;
+        }
+
+        if target.exists() {
+            let _ = std::fs::remove_file(&source);
+            continue;
+        }
+
+        if std::fs::rename(&source, &target).is_err() {
+            // Different filesystem: fall back to a copy.
+            std::fs::copy(&source, &target)?;
+            let _ = std::fs::remove_file(&source);
+        }
+    }
+
+    // Best effort: drop the source once it is empty.
+    let _ = std::fs::remove_dir(from);
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -334,5 +473,92 @@ mod tests {
         assert_eq!(core.auth_provider.provider_id(), "microsoft");
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+    fn temp_dir(tag: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "rmccc-core-{tag}-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    /// 旧布局（`{game_root}/{profile_id}/versions`）必须被并入共享根，否则
+    /// `GameRepository` 索引不到版本，启动必定失败。
+    #[test]
+    fn test_migrate_instance_layout_adopts_nested_instances() {
+        let data_dir = temp_dir("migrate");
+        let config = rmccc_config::AppConfig {
+            data_dir: Some(data_dir.clone()),
+            ..Default::default()
+        };
+        let game_root = config.resolved_game_root();
+        let profile_store = rmccc_profile::ProfileStore::new(data_dir.join("profiles"));
+
+        let profile_id = "11111111-1111-1111-1111-111111111111";
+        let legacy_dir = game_root.join(profile_id);
+        let version_dir = legacy_dir.join("versions").join("1.20.4");
+        std::fs::create_dir_all(&version_dir).unwrap();
+        std::fs::write(version_dir.join("1.20.4.json"), b"{}").unwrap();
+        std::fs::create_dir_all(legacy_dir.join("libraries")).unwrap();
+        std::fs::write(legacy_dir.join("libraries/lib.jar"), b"x").unwrap();
+        // 运行目录残留：不应被搬走
+        std::fs::write(legacy_dir.join("options.txt"), b"fov:70").unwrap();
+
+        profile_store
+            .save(&rmccc_profile::Profile {
+                id: profile_id.to_string(),
+                name: "Old".into(),
+                game_version: "1.20.4".into(),
+                game_dir: legacy_dir.clone(),
+                ..Default::default()
+            })
+            .unwrap();
+
+        assert_eq!(migrate_instance_layout(&config, &profile_store).unwrap(), 1);
+
+        assert!(game_root.join("versions/1.20.4/1.20.4.json").exists());
+        assert!(game_root.join("libraries/lib.jar").exists());
+        assert_eq!(
+            profile_store.get(profile_id).unwrap().unwrap().game_dir,
+            game_root
+        );
+        // 非游戏文件留在原处，且目录未被误删
+        assert!(legacy_dir.join("options.txt").exists());
+
+        let _ = std::fs::remove_dir_all(&data_dir);
+    }
+
+    /// 用户自定义的 `game_dir`（不在共享根之下）绝不能被迁移。
+    #[test]
+    fn test_migrate_leaves_custom_game_dir_alone() {
+        let data_dir = temp_dir("migrate-custom");
+        let config = rmccc_config::AppConfig {
+            data_dir: Some(data_dir.clone()),
+            ..Default::default()
+        };
+        let custom = data_dir.join("elsewhere");
+        std::fs::create_dir_all(custom.join("versions")).unwrap();
+
+        let store = rmccc_profile::ProfileStore::new(data_dir.join("profiles"));
+        store
+            .save(&rmccc_profile::Profile {
+                id: "p1".into(),
+                name: "Custom".into(),
+                game_version: "1.20.4".into(),
+                game_dir: custom.clone(),
+                ..Default::default()
+            })
+            .unwrap();
+
+        assert_eq!(migrate_instance_layout(&config, &store).unwrap(), 0);
+        assert_eq!(store.get("p1").unwrap().unwrap().game_dir, custom);
+
+        let _ = std::fs::remove_dir_all(&data_dir);
     }
 }

@@ -51,17 +51,16 @@ pub async fn profile_create(
     let id = uuid::Uuid::new_v4().to_string();
 
     let core = state.core.read().await;
-    let game_dir = core.config.profile_game_dir(&id);
 
-    // P3-03：防御性校验 game_dir 必须位于 game_root 之下（防配置异常导致目录逃逸）。
+    // The profile's game directory is the *shared* game root (`.minecraft`
+    // equivalent), which is also what `GameRepository` indexes and what installs
+    // write into. Giving each profile its own nested directory made the layout
+    // per-profile isolated while the repository scanned the shared root, so
+    // `get_resolved()` could never find an installed version (launch failed).
+    // Per-profile isolation belongs to `IsolationType` and affects only the
+    // *run* directory, not where versions/libraries/assets live.
     let game_root = core.config.resolved_game_root();
-    if !game_dir.starts_with(&game_root) {
-        return Err(IpcError {
-            code: rmccc_error::ErrorCode::ValidationError,
-            message: format!("Profile game_dir {game_dir:?} escapes game_root {game_root:?}",),
-            retryable: false,
-        });
-    }
+    let game_dir = game_root.clone();
 
     let profile = Profile {
         id: id.clone(),

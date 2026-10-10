@@ -78,7 +78,9 @@ pub async fn modloader_install(
                 retryable: false,
             })?;
 
-        let game_dir = profile.game_dir.clone();
+        // The loader writes a new version manifest, which `GameRepository` must
+        // index — so target the shared game root, like `version_install` does.
+        let game_dir = core.config.resolved_game_root();
         let game_version = profile.game_version.clone();
 
         // Detect Java for running Forge/NeoForge installers
