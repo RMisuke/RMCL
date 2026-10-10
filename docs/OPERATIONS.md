@@ -58,7 +58,10 @@ CLI 与 GUI 日志体系一致（均为 JSON 滚动文件）。
 ## 6. 安全注意事项
 
 - `.key` 与 `accounts/` 属敏感文件，Windows 上 `.key` 已用 `icacls` 限制当前用户；请勿共享。
-- 启动参数经 response file 传递且启动后立即删除，避免 `--accessToken` 落盘（P1-03）。
+- 启动参数经 response file 传递（`@argfile`），`--accessToken` 不会出现在 `ps aux`；
+  文件以 0600 权限写在游戏根目录，**在 JVM 读完参数后**由后台任务删除（不能更早——
+  立即删除会让 JVM 报 `could not open .../.launch-args-*` 而启动失败）。
+  上次崩溃残留的 `.launch-args-*` 会在下次启动时清扫。
 - 认证失败日志已对 token 类字段脱敏（P3-10）。
 
 ## 7. 发布（维护者）

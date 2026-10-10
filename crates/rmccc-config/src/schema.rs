@@ -182,6 +182,12 @@ impl SchemaStatus {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CompatibilityResult {
     pub status: SchemaStatus,
+    /// True when the file's marker used a legacy namespace prefix.
+    ///
+    /// Needed because [`ConfigSchema`] itself does not retain the namespace once
+    /// parsed, so comparing the parsed schema against the expected one cannot
+    /// tell a legacy marker apart from an identical current one.
+    pub legacy_namespace: bool,
 }
 
 impl CompatibilityResult {
@@ -255,36 +261,35 @@ fn is_accepted_version_string(version_str: &str, version: SchemaVersion) -> bool
 /// read from `root`, compared against `expected`, and the resulting
 /// [`CompatibilityResult`] drives whether the file may be read / saved.
 pub fn check_schema(root: &serde_json::Value, expected: &ConfigSchema) -> CompatibilityResult {
+    /// Builds a result without a legacy marker.
+    fn plain(status: SchemaStatus) -> CompatibilityResult {
+        CompatibilityResult {
+            status,
+            legacy_namespace: false,
+        }
+    }
+
     let Some(marker) = root.get("$schema") else {
-        return CompatibilityResult {
-            status: SchemaStatus::Missing,
-        };
+        return plain(SchemaStatus::Missing);
     };
     let Some(value) = marker.as_str() else {
-        return CompatibilityResult {
-            status: SchemaStatus::Invalid {
-                invalid_value: marker.to_string(),
-            },
-        };
+        return plain(SchemaStatus::Invalid {
+            invalid_value: marker.to_string(),
+        });
     };
     let Some(parsed) = parse_schema_url(value) else {
-        return CompatibilityResult {
-            status: SchemaStatus::Unparseable,
-        };
+        return plain(SchemaStatus::Unparseable);
     };
     if parsed.id != expected.id {
-        return CompatibilityResult {
-            status: SchemaStatus::UnexpectedId,
-        };
+        return plain(SchemaStatus::UnexpectedId);
     }
     if parsed.version.major != expected.version.major {
-        return CompatibilityResult {
-            status: SchemaStatus::UnsupportedMajor,
-        };
+        return plain(SchemaStatus::UnsupportedMajor);
     }
     if parsed.version.minor > expected.version.minor {
         return CompatibilityResult {
             status: SchemaStatus::ReadOnlyPreserveSchema,
+            legacy_namespace: parsed.legacy,
         };
     }
     if parsed.version.minor == expected.version.minor {
@@ -296,10 +301,12 @@ pub fn check_schema(root: &serde_json::Value, expected: &ConfigSchema) -> Compat
             } else {
                 SchemaStatus::ReadWritePreserveSchema
             },
+            legacy_namespace: parsed.legacy,
         };
     }
     CompatibilityResult {
         status: SchemaStatus::ReadWrite,
+        legacy_namespace: parsed.legacy,
     }
 }
 

@@ -46,6 +46,12 @@ impl SettingFileAccess {
 pub struct LoadResult<T> {
     pub value: T,
     pub access: SettingFileAccess,
+    /// True when the file's `$schema` marker was upgraded (an older minor
+    /// version, or a legacy namespace) and should therefore be rewritten.
+    ///
+    /// Callers save eagerly on this, so a namespace change lands on disk at the
+    /// next start instead of waiting for the user to edit something.
+    pub schema_upgraded: bool,
 }
 
 /// A typed settings file accessor.
@@ -95,6 +101,7 @@ impl<T: JsonSetting> SettingFile<T> {
             return LoadResult {
                 value,
                 access: SettingFileAccess::ReadWrite,
+                schema_upgraded: false,
             };
         }
 
@@ -110,6 +117,7 @@ impl<T: JsonSetting> SettingFile<T> {
                 return LoadResult {
                     value: (self.default_fn)(),
                     access: SettingFileAccess::Unreadable,
+                    schema_upgraded: false,
                 };
             }
         };
@@ -127,6 +135,7 @@ impl<T: JsonSetting> SettingFile<T> {
                 return LoadResult {
                     value,
                     access: SettingFileAccess::ReadWrite,
+                    schema_upgraded: false,
                 };
             }
         };
@@ -178,6 +187,7 @@ impl<T: JsonSetting> SettingFile<T> {
             return LoadResult {
                 value: (self.default_fn)(),
                 access: SettingFileAccess::Unreadable,
+                schema_upgraded: false,
             };
         }
 
@@ -195,12 +205,17 @@ impl<T: JsonSetting> SettingFile<T> {
                 return LoadResult {
                     value,
                     access: SettingFileAccess::ReadWrite,
+                    schema_upgraded: false,
                 };
             }
         };
 
         // 仅旧版本（ReadWrite）升级到当前 schema；同 minor 保留原 marker。
-        if !schema_result.preserve_schema() && value.schema() != &self.expected_schema {
+        // 旧命名空间也会走到这里（check_schema 将其判为 ReadWrite），因此
+        // `$schema` 会在本次加载后落成当前命名空间。
+        let schema_upgraded = !schema_result.preserve_schema()
+            && (schema_result.legacy_namespace || value.schema() != &self.expected_schema);
+        if schema_upgraded {
             value.set_schema(self.expected_schema.clone());
         }
 
@@ -210,7 +225,11 @@ impl<T: JsonSetting> SettingFile<T> {
             SettingFileAccess::ReadOnly
         };
         value.set_savable(access.can_save());
-        LoadResult { value, access }
+        LoadResult {
+            value,
+            access,
+            schema_upgraded,
+        }
     }
 
     /// Saves the settings object, backing up the file first when required.

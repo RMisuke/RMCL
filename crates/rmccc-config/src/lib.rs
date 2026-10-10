@@ -254,7 +254,10 @@ impl AppConfig {
         let file = Self::setting_file(data_dir);
         let result = file.load(None);
         // 损坏文件：备份旧内容并落盘默认值；否则保持只读/原样。
-        if result.access.can_save() && result.value.backup_on_next_save {
+        // 保存的两种情形：损坏文件已标记需备份重建，或 `$schema` 被升级
+        // （旧版本号 / 旧命名空间）——后者让命名空间变更立即落盘。
+        if result.access.can_save() && (result.value.backup_on_next_save || result.schema_upgraded)
+        {
             let mut value = result.value;
             file.save(&mut value)?;
             return Ok(value);
@@ -373,7 +376,10 @@ impl LauncherState {
     pub fn load(data_dir: &Path) -> Result<Self> {
         let file = Self::setting_file(data_dir);
         let result = file.load(None);
-        if result.access.can_save() && result.value.backup_on_next_save {
+        // 保存的两种情形：损坏文件已标记需备份重建，或 `$schema` 被升级
+        // （旧版本号 / 旧命名空间）——后者让命名空间变更立即落盘。
+        if result.access.can_save() && (result.value.backup_on_next_save || result.schema_upgraded)
+        {
             let mut value = result.value;
             file.save(&mut value)?;
             return Ok(value);
@@ -470,7 +476,10 @@ impl UserSettings {
     pub fn load(data_dir: &Path) -> Result<Self> {
         let file = Self::setting_file(data_dir);
         let result = file.load(None);
-        if result.access.can_save() && result.value.backup_on_next_save {
+        // 保存的两种情形：损坏文件已标记需备份重建，或 `$schema` 被升级
+        // （旧版本号 / 旧命名空间）——后者让命名空间变更立即落盘。
+        if result.access.can_save() && (result.value.backup_on_next_save || result.schema_upgraded)
+        {
             let mut value = result.value;
             file.save(&mut value)?;
             return Ok(value);
@@ -675,5 +684,43 @@ mod tests {
             assert_eq!(resolve_locale(Some(locale)), *locale);
         }
         assert!(SUPPORTED_LOCALES.contains(&DEFAULT_LOCALE));
+    }
+    /// 旧命名空间的 `$schema` 必须在加载时升级并立即落盘，否则用户要等到下次
+    /// 修改设置才会看到新命名空间。
+    #[test]
+    fn test_legacy_schema_namespace_is_rewritten_on_load() {
+        let dir = std::env::temp_dir().join(format!(
+            "rmccc-config-namespace-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        let path = paths::launcher_settings_path(&dir);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(
+            &path,
+            r#"{"$schema":"https://hmcl.huangyuhui.net/json/schema/launcher-settings/1.0.0","default_max_memory_mb":6144}"#,
+        )
+        .unwrap();
+
+        let config = AppConfig::load(&dir).unwrap();
+        // 设置值保留（迁移不得丢数据）
+        assert_eq!(config.default_max_memory_mb, 6144);
+        assert_eq!(config.schema.id, LAUNCHER_SETTINGS_SCHEMA_ID);
+
+        let on_disk = std::fs::read_to_string(&path).unwrap();
+        assert!(
+            on_disk.contains("rmcl.snowebsite.top"),
+            "legacy marker must be rewritten to the current namespace: {on_disk}"
+        );
+        assert!(
+            !on_disk.contains("hmcl.huangyuhui.net"),
+            "legacy namespace must not survive a load: {on_disk}"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

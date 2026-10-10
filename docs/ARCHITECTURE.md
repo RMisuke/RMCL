@@ -593,7 +593,12 @@ pub fn build_response_file(args: &[String], game_dir: &Path) -> Result<PathBuf> 
 }
 
 // Spawn with: java @response_file_path
-// Delete file after process starts (or on exit)
+//
+// Deletion timing matters: the JVM reads the @argfile while parsing its command
+// line, i.e. AFTER spawn() returns. Deleting it at spawn time races that read
+// and the JVM dies with "could not open .../.launch-args-<uuid>". Schedule the
+// removal (detached task) once the JVM has certainly consumed it, and sweep
+// stale files (older than the grace period) at the next launch.
 ```
 
 ## 5. Error Architecture
@@ -1300,7 +1305,7 @@ User clicks "Launch" on a profile
   ├─ Rust: Spawn process
   │   ├─ Command::new(java_path).arg(format!("@{}", response_file)).spawn()
   │   ├─ Capture stdout/stderr → emit "launch://output"
-  │   ├─ Delete response file after spawn
+  │   ├─ Schedule response-file removal once the JVM has read its args
   │   └─ Wait for exit → emit "launch://exited" with exit code
   │
   └─ Frontend: Show game log console, "Kill" button
@@ -1545,6 +1550,10 @@ strategy:
 
 ### 15.2 Profile JSON Schema
 
+> `game_dir` 指向**共享游戏根**（`.minecraft` 等价目录），版本/依赖库/资源在其中只存一份、
+> 跨实例复用；安装、`GameRepository` 索引与启动器一律以该目录为准。
+> 每实例隔离属于 `IsolationType`，只影响运行目录（存档/mods/options.txt）。
+
 ```json
 {
   "id": "550e8400-e29b-41d4-a716-446655440000",
@@ -1558,7 +1567,7 @@ strategy:
   "jvm_args": ["-XX:+UseG1GC", "-XX:+ParallelRefProcEnabled"],
   "game_args": [],
   "memory_mb": 4096,
-  "game_dir": "/Users/xxx/.rmccc/instances/survival-pack",
+  "game_dir": "/Users/xxx/Library/Application Support/rmccc/instances",
   "created_at": "2026-07-29T10:00:00Z",
   "last_played": null,
   "icon": null
