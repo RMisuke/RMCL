@@ -250,3 +250,46 @@ pub async fn instance_repair(
     tracing::info!(id = %id, files = count, "Instance repair completed");
     Ok(count)
 }
+
+/// Effective on-disk locations for an instance, so the settings page can show
+/// where the run directory and mods actually are (they depend on isolation).
+#[derive(Debug, Clone, Serialize, TS)]
+#[ts(export_to = "types.ts")]
+pub struct InstancePaths {
+    /// Shared game root (`.minecraft` equivalent).
+    pub game_root: String,
+    /// `--gameDir` / process working directory for this instance.
+    pub run_dir: String,
+    /// Where this instance's mods live.
+    pub mods_dir: String,
+    /// Normalised isolation value: `never` | `modded` | `always`.
+    pub isolation: String,
+    /// Whether the run directory differs from the shared game root.
+    pub isolated: bool,
+}
+
+#[tauri::command]
+#[tracing::instrument(skip(state))]
+pub async fn instance_paths(
+    state: tauri::State<'_, AppState>,
+    id: String,
+) -> Result<InstancePaths, IpcError> {
+    let core = state.core.read().await;
+    let profile = core.profile_store.get(&id)?.ok_or_else(|| IpcError {
+        code: rmccc_error::ErrorCode::ProfileNotFound,
+        message: format!("Profile not found: {id}"),
+        retryable: false,
+    })?;
+
+    let game_root = core.config.resolved_game_root();
+    let run_dir = rmccc_launch::instance_run_dir(&core.config, &profile);
+    let mods_dir = rmccc_launch::instance_mods_dir(&core.config, &profile);
+
+    Ok(InstancePaths {
+        isolated: run_dir != game_root,
+        game_root: game_root.display().to_string(),
+        run_dir: run_dir.display().to_string(),
+        mods_dir: mods_dir.display().to_string(),
+        isolation: profile.effective_isolation(&core.config),
+    })
+}

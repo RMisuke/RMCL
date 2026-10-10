@@ -5,6 +5,8 @@
 use crate::state::AppState;
 use rmccc_error::IpcError;
 use rmccc_mods::ModSearchQuery;
+use serde::Serialize;
+use ts_rs::TS;
 
 #[tauri::command]
 #[tracing::instrument(skip(state))]
@@ -86,7 +88,7 @@ pub async fn mod_get_download_url(
 pub async fn mod_list(
     state: tauri::State<'_, AppState>,
     profile_id: String,
-) -> Result<Vec<String>, IpcError> {
+) -> Result<ModList, IpcError> {
     let core = state.core.read().await;
     let profile = core
         .profile_store
@@ -100,24 +102,40 @@ pub async fn mod_list(
     // Mods follow the instance run directory, so an isolated instance keeps
     // its own mods (HMCL behaviour) instead of writing into the shared root.
     let mods_dir = rmccc_launch::instance_mods_dir(&core.config, &profile);
-    if !mods_dir.exists() {
-        tracing::debug!(profile_id = %profile_id, "mods dir does not exist");
-        return Ok(Vec::new());
-    }
+    let disabled_dir = mods_dir.join("disabled");
 
-    let mut mods = Vec::new();
-    if let Ok(entries) = std::fs::read_dir(&mods_dir) {
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if path.extension().is_some_and(|e| e == "jar") {
-                if let Some(name) = path.file_stem().and_then(|n| n.to_str()) {
-                    mods.push(name.to_string());
+    let scan = |dir: &std::path::Path| -> Vec<String> {
+        let mut names: Vec<String> = Vec::new();
+        if let Ok(entries) = std::fs::read_dir(dir) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.extension().is_some_and(|e| e == "jar") {
+                    // Full file name (with `.jar`), so the UI can feed it straight
+                    // back to `mod_toggle` / `mod_remove`, which expect a file
+                    // name rather than a stem.
+                    if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
+                        names.push(name.to_string());
+                    }
                 }
             }
         }
-    }
-    tracing::info!(profile_id = %profile_id, count = mods.len(), "Mods listed");
-    Ok(mods)
+        names.sort();
+        names
+    };
+
+    let enabled = scan(&mods_dir);
+    let disabled = scan(&disabled_dir);
+    tracing::info!(
+        profile_id = %profile_id,
+        enabled = enabled.len(),
+        disabled = disabled.len(),
+        "Mods listed"
+    );
+    Ok(ModList {
+        enabled,
+        disabled,
+        mods_dir: mods_dir.display().to_string(),
+    })
 }
 
 #[tauri::command]
@@ -291,4 +309,19 @@ pub async fn mod_remove(
     }
 
     Ok(())
+}
+
+/// Installed mods for an instance, split by state.
+///
+/// Disabled mods live in `mods/disabled/`, which is why the listing reports both
+/// buckets — a UI that only showed active mods would hide half the state.
+#[derive(Debug, Clone, Serialize, TS)]
+#[ts(export_to = "types.ts")]
+pub struct ModList {
+    /// File names of enabled mods (`mods/*.jar`), including the extension.
+    pub enabled: Vec<String>,
+    /// File names of disabled mods (`mods/disabled/*.jar`).
+    pub disabled: Vec<String>,
+    /// Where this instance's mods live (follows its run directory).
+    pub mods_dir: String,
 }

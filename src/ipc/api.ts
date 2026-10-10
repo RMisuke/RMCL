@@ -25,6 +25,8 @@ export type {
   ErrorCode,
   JavaInfo,
   InstanceInfo,
+  MissingFileInfo,
+  InstancePaths,
   DownloadProgressPayload,
 } from "./types";
 
@@ -40,6 +42,10 @@ import type {
   LocaleInfo,
   IpcError,
   JavaInfo,
+  MissingFileInfo,
+  InstancePaths,
+  ModList,
+  LoaderVersion,
 } from "./types";
 
 // 输入型 DTO：允许部分更新（后端字段为 Option，未提供字段保持原值）
@@ -129,7 +135,7 @@ export const mods = {
   getDownloadUrl: (versionId: string) =>
     invoke<string>("mod_get_download_url", { versionId }),
   list: (profileId: string) =>
-    invoke<string[]>("mod_list", { profileId }),
+    invoke<ModList>("mod_list", { profileId }),
   toggle: (profileId: string, modFilename: string, enabled: boolean) =>
     invoke<void>("mod_toggle", { profileId, modFilename, enabled }),
   install: (profileId: string, version: ModVersion) =>
@@ -138,12 +144,32 @@ export const mods = {
     invoke<void>("mod_remove", { profileId, modFilename }),
 };
 
+// ── Mod loaders ──
+
+export const modLoader = {
+  list: (loaderType: string, gameVersion: string) =>
+    invoke<LoaderVersion[]>("modloader_list", { loaderType, gameVersion }),
+  install: (profileId: string, loaderType: string, loaderVersion: string) =>
+    invoke<void>("modloader_install", { profileId, loaderType, loaderVersion }),
+};
+
 // ── Downloads ──
 
 export const downloads = {
   cancel: (batchId: string) => invoke<void>("download_cancel", { batchId }),
   pause: (batchId: string) => invoke<void>("download_pause", { batchId }),
   resume: (batchId: string) => invoke<void>("download_resume", { batchId }),
+};
+
+// ── Instances（本地实例仓库 / 路径）──
+
+export const instances = {
+  /** Effective on-disk locations; the run dir depends on the isolation setting. */
+  paths: (id: string) => invoke<InstancePaths>("instance_paths", { id }),
+  refresh: () => invoke<number>("instance_refresh"),
+  checkCompletion: (id: string) =>
+    invoke<MissingFileInfo[]>("instance_check_completion", { id }),
+  repair: (id: string) => invoke<void>("instance_repair", { id }),
 };
 
 // ── Settings ──

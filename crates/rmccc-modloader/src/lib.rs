@@ -125,7 +125,8 @@ impl ModLoaderType {
 }
 
 /// A specific loader version available for a game version.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export_to = "types.ts")]
 pub struct LoaderVersion {
     pub version: String,
     pub stable: bool,

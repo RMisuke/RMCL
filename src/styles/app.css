@@ -1013,6 +1013,30 @@ select.modal-input {
 .modal-btn-primary:disabled { opacity: 0.5; cursor: not-allowed; }
 
 /* ── Profile Delete ── */
+/* Per-instance settings entry on the instance card (HMCL has this in the
+   card's ⋮ menu; a direct gear is a deliberate RMCCC addition). */
+.profile-settings-btn {
+  flex-shrink: 0;
+  width: 24px;
+  height: 24px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border: none;
+  border-radius: 5px;
+  color: var(--text-secondary);
+  font-size: 13px;
+  line-height: 1;
+  cursor: pointer;
+  transition: all 0.12s ease;
+}
+
+.profile-settings-btn:hover {
+  background: var(--surface-hover);
+  color: var(--color-blue);
+}
+
 .profile-delete-btn {
   background: none;
   border: none;

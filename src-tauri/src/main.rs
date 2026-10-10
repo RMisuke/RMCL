@@ -108,6 +108,7 @@ fn main() {
             commands::instance::instance_remove,
             commands::instance::instance_check_completion,
             commands::instance::instance_repair,
+            commands::instance::instance_paths,
         ])
         .build(tauri::generate_context!())
         .expect("Error while building RMCCC");

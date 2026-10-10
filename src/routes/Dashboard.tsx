@@ -560,6 +560,17 @@ const Dashboard: Component = () => {
                             </div>
                           </div>
                           <button
+                            class="profile-settings-btn"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              navigate(`/instances/${profile.id}`);
+                            }}
+                            title={t("dashboard.profile.settings")}
+                            aria-label={t("dashboard.profile.settings")}
+                          >
+                            ⚙
+                          </button>
+                          <button
                             class="profile-delete-btn"
                             onClick={(e) => {
                               e.stopPropagation();
