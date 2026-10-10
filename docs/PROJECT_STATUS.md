@@ -8,6 +8,37 @@
 
 ## 0. 更新记录
 
+**2026-10-10（第 4 轮）**：修复窗口外壳与交互缺陷，并新增语言设置（English / 简体中文）。
+
+**窗口外壳缺陷**（用户实测反馈：无法拖动、启动在角落、四周有缝隙）根因三条，均已修复：
+
+1. **无法拖动/没有窗口按钮**：`TitleBar.tsx` 与 `.app-root` 的 CSS 早已写好，但 `main.tsx` 只渲染了
+   `<Router>`，**从未挂载过它们**。改为 `Router root={App}`，shell（标题栏 + 圆角容器 + toast 层）常驻。
+2. **启动在角落 + 尺寸异常**：`tauri-plugin-window-state` 恢复了一份过期几何
+   （**2200×1426 @ (-760, 892)**，而显示器只有 **1440×900**）——用户只看到一个巨大窗口的一角。
+   已把该状态文件备份为 `.window-state.json.stale-20261010`，并在 `App.tsx` 增加启动时的
+   显示器范围校验（不可达则 `center()`）。
+3. **四周缝隙**：路由根元素的 `flex: 1` 找不到 flex 父容器（`.app-root` 未挂载）→ 内容塌缩、
+   透明窗口露出桌面。挂载 shell 后即恢复设计意图。
+
+顺带修复：窗口 `visible: false` 却**无人调用 `show()`**——此前仅靠 window-state 里存的
+`visible: true` 侥幸可见，删掉那份状态后窗口将永不出现。现由 `App.tsx` 在 `initI18n()` 后显式
+`show()`（ready-to-show）。另外 `ToastContainer` 也从未挂载，所有 `showToast` 都不可见，一并补上。
+新增 capability：`core:window:allow-center`、`core:window:allow-available-monitors`。
+
+**语言设置**：见 §9.5（`ARCHITECTURE.md`）。`UserSettings.locale` 此前从未被 IPC 读写，
+现补齐 `settings_get_user` / `settings_set_user` / `settings_supported_locales` 三个命令。
+默认跟随系统语言，系统语言不在支持列表内（如 `fr`/`ja`）回退英语。
+
+> 注：窗口外壳修复与语言功能落在同两个 commit（`6609fa4` 含 capability，`371b0e1` 含 shell），
+> 未单独成一个 commit。
+
+| commit | 内容 |
+|--------|------|
+| `6609fa4` | feat(config,tauri)：用户级设置与 UI 语言后端 |
+| `371b0e1` | feat(ui)：i18n（English / 简体中文）+ 窗口外壳修复 |
+| `b7f7150` | docs：i18n 管线与新命令 |
+
 **2026-10-10（第 3 轮）**：**第 0 步地基全部完成**——CI 的 lint 三门禁已本地跑通并修复，文档漂移已同步。
 
 - 补齐本地工具链：`rustfmt` / `clippy` 组件（清华镜像缺这两个组件，改用 `static.rust-lang.org`
@@ -55,7 +86,7 @@
 | 编译 | `cargo check --workspace --all-targets` **通过**；clippy 无 warning |
 | 前端类型 | `pnpm typecheck` **通过** |
 | CI lint 三门禁 | `cargo fmt --check` / `clippy --all-targets -D warnings` / `clippy --lib --bins -D clippy::panic -D clippy::unwrap_used` **全部本地通过** |
-| 测试 | **284 passed / 0 failed**（修复 CLI 致命 bug 前为 256 / 28，见 §0/§3/§4） |
+| 测试 | **286 passed / 0 failed**（修复 CLI 致命 bug 前为 256 / 28，见 §0/§3/§4） |
 | 版本控制 | ✅ **已按主题提交为 10 个 commit**，工作区干净（原为 110 改 + 52 新增、零提交） |
 | 发布体积 | CLI release 二进制 5.74MB；手工 strip 后 **4.09MB**（`strip = true` 在本机失效，见 §7.3） |
 | 代码规模 | Rust 133 文件 / **29,284 行**（不含 `tests/` 为 28,431 行）；前端 12 文件 / 3,203 行 |
@@ -66,7 +97,7 @@
 
 1. **代码质量高于文档所描述的状态**。后端在 2026-08-05 已完成两轮大重构（启动模块重写、版本管理本地仓库化、认证/配置对齐 HMCL），crate 级单测全绿。
 2. **工程管理风险已清除**：数千行改动此前零提交、CI 实际为红、文档与代码漂移。现均已处理：工作区已分主题提交、284 项测试全绿、CI lint 三门禁本地通过、`ARCHITECTURE.md` 漂移已同步。
-3. **前后端严重不对称**：后端 42 个 IPC 命令已实现并注册，前端只调用 33 个，整个"实例管理/修复"与"ModLoader 安装"两条链路在 GUI 上完全不存在。
+3. **前后端严重不对称**：后端 45 个 IPC 命令已实现并注册，前端只调用 36 个，整个"实例管理/修复"与"ModLoader 安装"两条链路在 GUI 上完全不存在。
 
 ---
 
@@ -189,7 +220,7 @@ rmccc-core（编排 + DI 容器 CoreContext）
 ├── rmccc-modloader    5.6k 行  8 种 loader（Fabric/Forge/NeoForge/Quilt/LiteLoader/OptiFine/Cleanroom/LegacyFabric）
 ├── rmccc-mods         0.5k 行  ModSource trait + Modrinth 实现
 └── rmccc-profile      0.3k 行  Profile JSON 存储（原子写）
-src-tauri  2.4k 行  42 个 IPC 命令 + AppState + 事件常量 + ts-rs 绑定导出
+src-tauri  2.6k 行  45 个 IPC 命令 + AppState + 事件常量 + ts-rs 绑定导出（21 类型）
 src-cli    4.3k 行  clap 命令面 + CliContext 门面 + registry（帮助/补全）+ 统一输出信封
 ```
 
@@ -205,7 +236,7 @@ src-cli    4.3k 行  clap 命令面 + CliContext 门面 + registry（帮助/补�
 ### 5.3 IPC 面实测
 
 - 定义 42 个 `#[tauri::command]`，注册 42 个（`src-tauri/src/main.rs:65-108`），**差集为空**。
-- 前端实际调用 33 个；**9 个后端命令前端零调用**：`instance_list/refresh/rename/duplicate/remove/check_completion/repair`（`commands/instance.rs`，253 行）与 `modloader_list/install`（`commands/modloader.rs`，237 行）。
+- 前端实际调用 36 个；**9 个后端命令前端零调用**：`instance_list/refresh/rename/duplicate/remove/check_completion/repair`（`commands/instance.rs`，253 行）与 `modloader_list/install`（`commands/modloader.rs`，237 行）。
 - 事件常量 Rust 侧 11 个、前端 10 个，缺 `INSTANCES_REFRESHED = "instances://refreshed"`（`src-tauri/src/events.rs:34`）。
 - `src/ipc/api.ts` 手工重定义了 `SettingsUpdate` / `ProfileUpdateOpts`（`api.ts:39-55`），**遮蔽**了 ts-rs 已生成的同名类型；`InstanceInfo` / `MissingFileInfo` / `LauncherState` / `UserSettings` 未 re-export，前端拿不到实例类型。
 
@@ -229,7 +260,7 @@ src-cli    4.3k 行  clap 命令面 + CliContext 门面 + registry（帮助/补�
 - `crates/rmccc-modloader/src/cleanroom/` 整个子模块是 stub（`execute()` 直接返回 "not yet implemented"）。
 - 死代码：`src/App.tsx`（33 行占位，无人 import）、`src/components/TitleBar.tsx`（92 行，0 引用）、`ToastContainer`（从未挂载）、`src/routes/index.ts`（3 行空操作）。
 
-**测试覆盖薄弱处**：`src-tauri/src/commands/` 42 个命令 **0 个单测**；`rmccc-mods` 4、`rmccc-profile` 3、`rmccc-core` 3、`rmccc-error` 0。
+**测试覆盖薄弱处**：`src-tauri/src/commands/` 45 个命令 **0 个单测**；`rmccc-mods` 4、`rmccc-profile` 3、`rmccc-core` 3、`rmccc-error` 0。
 
 ---
 
@@ -293,7 +324,7 @@ export CARGO_HOME=$HOME/.cargo
 ### 第 0 步：地基 —— ✅ 全部完成
 
 1. ✅ **提交现有工作**。已按主题拆为 10 个 commit（见 §0），CI 可运行、历史可追溯。
-2. ✅ **修掉 §3/§4 的 CLI 问题**，`cargo test --workspace` 已 **284 passed / 0 failed**。
+2. ✅ **修掉 §3/§4 的 CLI 问题**，`cargo test --workspace` 已 **286 passed / 0 failed**。
 3. ✅ **补齐本地 lint 能力**并跑通 CI 的 lint job：安装 rustfmt/clippy 组件后，发现三门禁原本全红
    （27 文件未格式化 + 15 处 clippy lint + 9 处生产 `unwrap()`），均已修复。
 4. ✅ **同步文档漂移**：`ARCHITECTURE.md` 8 类漂移已修（§7.2）、`DEVELOPMENT_PLAN.md` 已回填
@@ -314,7 +345,7 @@ export CARGO_HOME=$HOME/.cargo
 1. 拆分 `src-cli/src/context.rs`（1,511 行）为按域的门面（auth/instance/version/mod/modloader/launch/system）。
 2. 统一编排：让 CLI 与 Tauri 都经由 `pipeline::launch_game`（当前无调用方），消除两条分叉。
 3. 收敛 modloader 双体系：删除旧 `ModLoaderProvider` + `create_provider`，或在 `core` 侧也改用 `DependencyManager`。
-4. 补 `src-tauri/src/commands/` 的单元测试（当前 42 个命令 0 测试）。
+4. 补 `src-tauri/src/commands/` 的单元测试（当前 45 个命令 0 测试）。
 
 ### 第 3 步：发布工程
 
