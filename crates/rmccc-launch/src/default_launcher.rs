@@ -324,7 +324,13 @@ impl DefaultLauncher {
         }
 
         // 3. Java executable.
-        cmd.add(&java.path.display().to_string());
+        //
+        // Deliberately NOT added to the argument list: `Command::jvm_args` holds
+        // only JVM *arguments*. The executable is supplied by the two consumers
+        // — `spawn_game()` passes it as the program, and `make_launch_script()`
+        // prepends it. Including it here put the java path into the response
+        // file, where the JVM read it as the main class and died with
+        // "could not find or load main class /Library/.../bin/java".
 
         // 4. Override JVM args (highest priority).
         cmd.add_all(&self.options.override_jvm_args);
@@ -592,6 +598,10 @@ impl DefaultLauncher {
         }
 
         // Response file keeps --accessToken out of `ps aux` (P1-03).
+        // Drop leftovers from a previous crashed run first (only stale ones, so
+        // a concurrently launching instance cannot lose its own file).
+        sweep_stale_response_files(&self.game_dir);
+
         let response_file = build_response_file(
             &command.jvm_args,
             &command.game_args,
@@ -611,14 +621,15 @@ impl DefaultLauncher {
         .await
         .map_err(LaunchError::from)?;
 
-        // Remove the response file immediately after spawn.
-        if let Err(e) = std::fs::remove_file(&response_file) {
-            tracing::warn!(
-                path = %response_file.display(),
-                error = ?e,
-                "Failed to remove launch response file"
-            );
-        }
+        // Do NOT delete the response file here: the JVM reads the `@argfile`
+        // while parsing its command line, which happens *after* `spawn()`
+        // returns. Removing it immediately raced with that read and made the
+        // game die with `could not open .../.launch-args-<uuid>` (exit code 1)
+        // — i.e. every launch failed. Hand the file to a detached task that
+        // removes it once the JVM has certainly consumed it, which still keeps
+        // the access token off disk for the rest of the session without adding
+        // latency to the launch path.
+        schedule_response_file_cleanup(response_file.clone());
 
         // Clean up the temp natives symlink.
         #[cfg(unix)]
@@ -675,6 +686,68 @@ impl Launcher for DefaultLauncher {
     }
 }
 
+// ── Response file lifecycle ──
+
+/// Prefix of the temporary `@argfile` handed to the JVM.
+const RESPONSE_FILE_PREFIX: &str = ".launch-args-";
+
+/// How long to wait before removing the response file.
+///
+/// The JVM reads its `@argfile` during command-line parsing, before the VM is
+/// initialised — a few tens of milliseconds in practice. If the file cannot be
+/// read the JVM exits immediately with code 1, so by this point it has
+/// certainly been consumed.
+const RESPONSE_FILE_GRACE: std::time::Duration = std::time::Duration::from_secs(5);
+
+/// Removes the response file once the JVM has consumed it.
+///
+/// Runs detached so the launch path is not delayed. See
+/// [`RESPONSE_FILE_GRACE`] for why the file must outlive `spawn()`.
+fn schedule_response_file_cleanup(path: PathBuf) {
+    tokio::spawn(async move {
+        tokio::time::sleep(RESPONSE_FILE_GRACE).await;
+        match std::fs::remove_file(&path) {
+            Ok(()) => tracing::debug!(path = %path.display(), "Response file removed"),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => tracing::warn!(
+                path = %path.display(),
+                error = ?e,
+                "Failed to remove launch response file"
+            ),
+        }
+    });
+}
+
+/// Deletes response files left behind by a crash or a forced quit.
+///
+/// Only files older than [`RESPONSE_FILE_GRACE`] are touched, so an instance
+/// launching concurrently in the same game directory keeps its own file.
+fn sweep_stale_response_files(game_dir: &Path) {
+    let Ok(entries) = std::fs::read_dir(game_dir) else {
+        return;
+    };
+    let now = std::time::SystemTime::now();
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        let Some(name) = name.to_str() else { continue };
+        if !name.starts_with(RESPONSE_FILE_PREFIX) {
+            continue;
+        }
+        let stale = entry
+            .metadata()
+            .and_then(|m| m.modified())
+            .ok()
+            .and_then(|mtime| now.duration_since(mtime).ok())
+            .is_some_and(|age| age > RESPONSE_FILE_GRACE);
+        if stale {
+            let path = entry.path();
+            if std::fs::remove_file(&path).is_ok() {
+                tracing::warn!(path = %path.display(), "Removed stale launch response file");
+            }
+        }
+    }
+}
+
 // ── Launch script generation (HMCL `makeLaunchScript`) ──
 
 fn make_launch_script_impl(launcher: &DefaultLauncher, path: &Path) -> LaunchResult<()> {
@@ -716,10 +789,10 @@ fn make_launch_script_impl(launcher: &DefaultLauncher, path: &Path) -> LaunchRes
         std::fs::create_dir_all(parent)?;
     }
 
-    let full_args: Vec<String> = command
-        .jvm_args
-        .iter()
-        .cloned()
+    // The script must start with the Java executable, which `Command::jvm_args`
+    // intentionally does not carry (see `generate_command_line`).
+    let full_args: Vec<String> = std::iter::once(launcher.options.java.path.display().to_string())
+        .chain(command.jvm_args.iter().cloned())
         .chain(std::iter::once(command.main_class.clone()))
         .chain(command.game_args.iter().cloned())
         .collect();
