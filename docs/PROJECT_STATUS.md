@@ -6,15 +6,37 @@
 
 ---
 
+## 0. 更新记录
+
+**2026-10-10（第 2 轮）**：§3、§4 记录的 CLI 问题**已全部修复**，工作区**已按主题提交为 10 个 commit**。
+当前基线：`cargo test --workspace` **284 passed / 0 failed**；`pnpm typecheck` 通过；`git status` 干净。
+
+| commit | 内容 |
+|--------|------|
+| `9d3d496` | chore(build)：工具链、CI/release 工作流、依赖清单 |
+| `3f9c21e` | feat(auth,config)：账户与配置持久化对齐 HMCL |
+| `59b86a7` | feat(version,download)：版本管理本地磁盘中心化 |
+| `b4bcb09` | feat(launch,profile)：启动模块按 HMCL 结构重写 |
+| `050de4d` | feat(modloader,mods,error)：加载器 provider 与 Modrinth |
+| `7618ee0` | refactor(core)：编排抽取为 pipeline + 真 DI |
+| `27b2447` | feat(tauri)：IPC 命令面补齐 + ts-rs 绑定 |
+| `3840337` | feat(cli)：命令面重建 + 统一输出信封（含下列修复） |
+| `9f59d23` | feat(ui)：SolidJS 前端接线 |
+| `6d93d52` | docs：审计、整改台账、运维手册与现状交接 |
+
+> 说明：§3 / §4 保留为**问题溯源记录**，其中"现象/根因/修法"仍有价值；"未修复"的措辞已不代表当前状态。
+> §8 第 0 步的第 1–2 项已完成，第 3–4 项仍待做。
+
+---
+
 ## 1. 结论速览
 
 | 维度 | 实测结论 |
 |------|----------|
 | 编译 | `cargo check --workspace --all-targets` **通过**，仅 1 处 warning |
 | 前端类型 | `pnpm typecheck` **通过** |
-| 测试 | **277 passed / 7 failed**（修复 1 个 CLI 致命 bug 前为 256 / 28） |
-| 失败范围 | 全部集中在 CLI 层（`src-cli/tests/cli_e2e.rs` 2 个、`cli_integration.rs` 5 个） |
-| 版本控制 | **全部实质代码未提交**：仅 1 个 commit（2026-07-31 初始化），工作区 110 改 + 52 新增 |
+| 测试 | **284 passed / 0 failed**（修复 CLI 致命 bug 前为 256 / 28，见 §0/§3/§4） |
+| 版本控制 | ✅ **已按主题提交为 10 个 commit**，工作区干净（原为 110 改 + 52 新增、零提交） |
 | 发布体积 | CLI release 二进制 5.74MB；手工 strip 后 **4.09MB**（`strip = true` 在本机失效，见 §7.3） |
 | 代码规模 | Rust 133 文件 / **29,284 行**（不含 `tests/` 为 28,431 行）；前端 12 文件 / 3,203 行 |
 | 阶段判断 | **Phase 1–2 完成；Phase 3 后端完成、前端未做；Phase 4 后端基本完成、UI 未做；Phase 5 配置齐备但端到端未验证** |
@@ -22,7 +44,7 @@
 **最重要的三个判断**：
 
 1. **代码质量高于文档所描述的状态**。后端在 2026-08-05 已完成两轮大重构（启动模块重写、版本管理本地仓库化、认证/配置对齐 HMCL），crate 级单测全绿。
-2. **风险不在设计，在工程管理**：数千行改动零提交、CI 实际为红、文档与代码漂移。这是继续开发前必须先清掉的地基问题。
+2. **工程管理是原最大风险，现已缓解**：数千行改动此前零提交、CI 实际为红、文档与代码漂移。现已提交、测试转绿；**文档漂移仍未修（§7.2）**。
 3. **前后端严重不对称**：后端 42 个 IPC 命令已实现并注册，前端只调用 33 个，整个"实例管理/修复"与"ModLoader 安装"两条链路在 GUI 上完全不存在。
 
 ---
@@ -65,10 +87,14 @@ Command rmcli: command name `help` is duplicated
 **效果**：测试失败数 **28 → 7**。
 
 > ⚠️ 该 bug 让此前所有 CLI 测试全部失败，因此它**掩盖了另外 7 个真实失败**。这正是"文档自述全绿但实际为红"的原因。
+>
+> ✅ **状态：已修复并提交**（`3840337`）。
 
 ---
 
-## 4. 剩余 7 个失败的分类与定性
+## 4. 其余 7 个失败的分类与定性（均已修复）
+
+> ✅ 本节 7 个失败在 `3840337` 中全部处理完毕，`cargo test --workspace` 现为 **284 passed / 0 failed**。以下保留现象与根因分析，供后续回归参照。
 
 | # | 测试 | 现象 | 定性 |
 |---|------|------|------|
@@ -77,7 +103,7 @@ Command rmcli: command name `help` is duplicated
 | 3 | `local_mod_install_list_toggle_remove` | `mod toggle --enabled false` 是用法错误（exit 2） | **生产代码缺陷** |
 | 4–7 | `e2e_error_exit_codes`、`json_error_emits_error_envelope_with_exit_code`、`profile_create_rejects_invalid_input`、`local_mod_install_rejects_missing_file` | 测试期望 `"ProfileNotFound"` / `"ValidationError"` / `"NotFound"`，实际输出 `"profile_not_found"` / `"validation_error"` / `"not_found"` | **测试过期** |
 
-### 4.1 缺陷 1：`--help` / `--version` 走错分支（生产代码）
+### 4.1 缺陷 1：`--help` / `--version` 走错分支（生产代码）—— ✅ 已修
 
 `src-cli/src/lib.rs:45-53` 把 `Cli::try_parse_from` 的所有 `Err` 一律当作用法错误渲染：
 
@@ -101,7 +127,7 @@ $ rmcli -o plain --version      # -o 也被忽略
 **影响**：脚本/CI 无法用 `rmcli --version` 取版本；`--help` 不可读；`-o plain` 在错误路径不生效。
 **修法**：在 `Err` 分支先匹配 `e.kind()`，`DisplayHelp` / `DisplayVersion` 直接 `print!("{e}")` 并返回 0；其余再走错误信封；同时把 `-o` 已解析的值传给输出层。同一问题存在于 `execute_line`（`lib.rs:140-153`）。
 
-### 4.2 缺陷 2：`--enabled` 是 flag 而非取值参数（生产代码）
+### 4.2 缺陷 2：`--enabled` 是 flag 而非取值参数（生产代码）—— ✅ 已修
 
 `app.rs:405` 定义为 `enabled: bool`，clap derive 对 `bool` 生成 **SetTrue flag**，因此：
 
@@ -112,7 +138,7 @@ $ rmcli -o plain --version      # -o 也被忽略
 用户无法用 `--enabled false` 显式表达禁用（只能靠省略），与测试及常规 CLI 直觉不符。
 **修法**：改为 `#[arg(long, action = clap::ArgAction::Set)] enabled: bool`（或 `Option<bool>` + `num_args(1)`），使取值语义生效。
 
-### 4.3 测试过期的 4 项：错误码大小写
+### 4.3 测试过期的 4 项：错误码大小写 —— ✅ 已修（改测试断言）
 
 `ErrorCode` 的权威定义是 `#[serde(rename_all = "snake_case")]`（[`crates/rmccc-error/src/lib.rs:113`](../crates/rmccc-error/src/lib.rs#L113)），ts-rs 生成的 IPC 契约同样是 snake_case
 （[`src/ipc/types.ts:196`](../src/ipc/types.ts#L196) 起：`"profile_not_found" | ... | "validation_error" | "not_found"`）。
@@ -120,7 +146,7 @@ $ rmcli -o plain --version      # -o 也被忽略
 因此**测试期望的 PascalCase 才是错的**（很可能是 `rename_all` 加上之前写下的断言）。
 **修法**：把这 4 个断言改成 snake_case，与 `types.ts` 契约对齐。
 
-### 4.4 契约分歧：不支持 shell 的处理
+### 4.4 契约分歧：不支持 shell 的处理 —— ✅ 已修（去掉 value_parser）
 
 `app.rs:92-96` 用 `value_parser = ["bash","zsh","fish","powershell","elvish"]` 限制了取值，而 `registry::render_completions` 本可对未知 shell 友好提示。测试期望后者。
 **建议**：去掉 `value_parser`，改由 `render_completions` 处理未知值（与测试一致，也更符合"优雅降级"）。
@@ -225,12 +251,14 @@ src-cli    4.3k 行  clap 命令面 + CliContext 门面 + registry（帮助/补�
 
 ## 8. 继续开发的建议顺序
 
-### 第 0 步：地基（建议在写任何新功能之前完成）
+### 第 0 步：地基 —— 进行中
 
-1. **提交现有工作**。按主题拆成若干 commit（认证/配置重构、版本管理本地仓库化、启动模块重写、CLI/Tauri 命令层、文档），使 CI 真正开始运行、历史可追溯。这是当前最大的单点风险。
-2. **修掉 §4 的 5 处代码/测试问题**，使 `cargo test --workspace` 转绿（其中 4 项是改测试断言、1 项是 `--enabled` 取值语义）。§3 的 clap panic 已修。
-3. **补齐本地 lint 能力**（安装 rustfmt/clippy 组件），跑通 CI 的 lint job，确认 `-D clippy::panic -D clippy::unwrap_used` 门禁真实通过。
-4. **更新 `ARCHITECTURE.md` 的 8 处漂移**（§7.2）并回填 `DEVELOPMENT_PLAN.md` 的 Phase 状态；把 `BACKEND_ISSUES_INDEX.md` 标注为"已被本文件取代"。
+1. ✅ **提交现有工作**。已按主题拆为 10 个 commit（见 §0），CI 可运行、历史可追溯。
+2. ✅ **修掉 §3/§4 的 CLI 问题**，`cargo test --workspace` 已 **284 passed / 0 failed**。
+3. ⏳ **补齐本地 lint 能力**（安装 rustfmt/clippy 组件），跑通 CI 的 lint job，确认
+   `-D clippy::panic -D clippy::unwrap_used` 门禁真实通过。**未做**——工具链缺组件（§7.3）。
+4. ⏳ **更新 `ARCHITECTURE.md` 的 8 处漂移**（§7.2）并回填 `DEVELOPMENT_PLAN.md` 的 Phase 状态；
+   把 `BACKEND_ISSUES_INDEX.md` 标注为"已被本文件取代"。**未做**——下一步的优先候选。
 
 ### 第 1 步：补齐前端（Phase 3/4 的缺口，投入产出比最高）
 
