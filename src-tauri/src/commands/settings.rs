@@ -114,3 +114,88 @@ pub async fn java_detect(_state: tauri::State<'_, AppState>) -> Result<Vec<JavaI
         .collect();
     Ok(infos)
 }
+
+// ── User-level settings ──
+
+/// Query the supported UI languages.
+///
+/// The list is owned by `rmccc-config` so validation and the UI cannot drift
+/// apart. `native_name` is shown in its own language, so it is correct
+/// regardless of the language currently active.
+#[derive(Debug, Clone, Serialize, TS)]
+#[ts(export_to = "types.ts")]
+pub struct LocaleInfo {
+    /// BCP-47 tag persisted in `UserSettings::locale`, e.g. `en`, `zh-CN`.
+    pub code: String,
+    /// Endonym shown in the language picker, e.g. `English`, `简体中文`.
+    pub native_name: String,
+}
+
+/// User-level settings update payload.
+#[derive(Debug, Deserialize, TS)]
+#[ts(export_to = "types.ts")]
+pub struct UserSettingsUpdate {
+    /// UI language. `""` (empty) = follow the system language; otherwise a
+    /// locale tag such as `en` or `zh-CN`. Omitted = leave unchanged.
+    ///
+    /// Unknown tags are normalised to the default locale rather than rejected,
+    /// so a system language we do not ship degrades to English.
+    pub locale: Option<String>,
+    /// Whether to check for launcher updates on startup.
+    pub check_updates: Option<bool>,
+}
+
+#[tauri::command]
+#[tracing::instrument(skip(state))]
+pub async fn settings_get_user(
+    state: tauri::State<'_, AppState>,
+) -> Result<rmccc_config::UserSettings, IpcError> {
+    let core = state.core.read().await;
+    Ok(core.user_settings.clone())
+}
+
+#[tauri::command]
+#[tracing::instrument(skip(state))]
+pub async fn settings_set_user(
+    state: tauri::State<'_, AppState>,
+    opts: UserSettingsUpdate,
+) -> Result<rmccc_config::UserSettings, IpcError> {
+    use rmccc_config::resolve_locale;
+
+    let mut core = state.core.write().await;
+
+    if let Some(locale) = opts.locale {
+        // Empty string clears the override → follow the system language again.
+        core.user_settings.locale = if locale.trim().is_empty() {
+            None
+        } else {
+            // Normalise so only supported tags are ever persisted.
+            Some(resolve_locale(Some(&locale)).to_string())
+        };
+    }
+    if let Some(check) = opts.check_updates {
+        core.user_settings.check_updates = check;
+    }
+
+    // P4：与 settings_set 一致，经 FileSaver 防抖写盘并在退出时统一 flush。
+    let data_dir = core.config.resolved_data_dir();
+    let path = rmccc_config::paths::user_settings_path(&data_dir);
+    let content = serde_json::to_string_pretty(&core.user_settings)?;
+    core.file_saver.save(path, content);
+
+    Ok(core.user_settings.clone())
+}
+
+#[tauri::command]
+#[tracing::instrument(skip(_state))]
+pub async fn settings_supported_locales(
+    _state: tauri::State<'_, AppState>,
+) -> Result<Vec<LocaleInfo>, IpcError> {
+    Ok(rmccc_config::SUPPORTED_LOCALES
+        .iter()
+        .map(|code| LocaleInfo {
+            code: (*code).to_string(),
+            native_name: rmccc_config::locale_native_name(code).to_string(),
+        })
+        .collect())
+}

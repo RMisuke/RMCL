@@ -54,6 +54,63 @@ fn user_settings_schema() -> ConfigSchema {
     ConfigSchema::new(USER_SETTINGS_SCHEMA_ID, USER_SETTINGS_VERSION)
 }
 
+// ── UI language ──
+
+/// Locale used when the system language is not one the launcher ships.
+///
+/// Fallback is English rather than "whatever we have": a user whose system is
+/// `fr` gets English, not an arbitrary locale.
+pub const DEFAULT_LOCALE: &str = "en";
+
+/// Canonical list of locales the launcher ships translations for.
+///
+/// `crate::UserSettings::locale` is always normalised to one of these (or
+/// `None` = follow the system). The frontend keeps the matching translation
+/// bundles in `src/i18n/locales/`; keep the two lists in sync.
+pub const SUPPORTED_LOCALES: &[&str] = &["en", "zh-CN"];
+
+/// Endonym (the language's own name) for a supported locale.
+///
+/// Shown in the language picker, so it stays readable no matter which language
+/// is currently active. Unknown codes are returned unchanged.
+pub fn locale_native_name(code: &str) -> &str {
+    match code {
+        "en" => "English",
+        "zh-CN" => "简体中文",
+        other => other,
+    }
+}
+
+/// Normalises a BCP-47 tag (or a bare language code) to a supported locale,
+/// falling back to [`DEFAULT_LOCALE`].
+///
+/// Language-only and script-tagged inputs collapse onto what we ship:
+/// `en-US` → `en`, `zh` / `zh-Hans` / `zh-Hans-CN` / `zh_CN` → `zh-CN`,
+/// anything unknown → `en`.
+pub fn resolve_locale(requested: Option<&str>) -> &'static str {
+    let Some(tag) = requested.map(str::trim).filter(|t| !t.is_empty()) else {
+        return DEFAULT_LOCALE;
+    };
+
+    let lower = tag.to_ascii_lowercase().replace('_', "-");
+
+    // Exact tag match first.
+    if let Some(exact) = SUPPORTED_LOCALES
+        .iter()
+        .find(|c| c.to_ascii_lowercase() == lower)
+    {
+        return exact;
+    }
+
+    // Otherwise match on the primary language subtag.
+    let primary = lower.split('-').next().unwrap_or_default();
+    SUPPORTED_LOCALES
+        .iter()
+        .find(|c| c.split('-').next() == Some(primary))
+        .copied()
+        .unwrap_or(DEFAULT_LOCALE)
+}
+
 // ── Launcher settings (AppConfig) ──
 
 /// Global application configuration (persisted as `config/launcher-settings.json`).
@@ -350,7 +407,10 @@ pub struct UserSettings {
     #[serde(rename = "$schema", default = "default_user_schema")]
     #[ts(type = "string")]
     pub schema: ConfigSchema,
-    /// UI language (`zh-CN`, `en-US`, ...); empty = follow system.
+    /// UI language: `None` follows the system language, `Some(tag)` pins a
+    /// locale. Always normalised to [`SUPPORTED_LOCALES`] via [`resolve_locale`]
+    /// before being stored, so the persisted value is either `None`, `"en"` or
+    /// `"zh-CN"`.
     #[serde(default)]
     pub locale: Option<String>,
     /// Whether to check for launcher updates on startup.
@@ -576,5 +636,44 @@ mod tests {
         assert_eq!(loaded.locale.as_deref(), Some("zh-CN"));
         assert!(!loaded.check_updates);
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Locale normalisation: exact tags, language/script variants, and the
+    /// English fallback for anything unsupported.
+    #[test]
+    fn test_resolve_locale() {
+        // Unset / empty → follow-system placeholder resolves to the default.
+        assert_eq!(resolve_locale(None), "en");
+        assert_eq!(resolve_locale(Some("")), "en");
+        assert_eq!(resolve_locale(Some("   ")), "en");
+
+        // Exact matches (and case-insensitivity).
+        assert_eq!(resolve_locale(Some("en")), "en");
+        assert_eq!(resolve_locale(Some("EN")), "en");
+        assert_eq!(resolve_locale(Some("zh-CN")), "zh-CN");
+        assert_eq!(resolve_locale(Some("zh-cn")), "zh-CN");
+
+        // Region / script variants collapse onto what we ship.
+        assert_eq!(resolve_locale(Some("en-US")), "en");
+        assert_eq!(resolve_locale(Some("en_GB")), "en");
+        assert_eq!(resolve_locale(Some("zh")), "zh-CN");
+        assert_eq!(resolve_locale(Some("zh-Hans")), "zh-CN");
+        assert_eq!(resolve_locale(Some("zh-Hans-CN")), "zh-CN");
+        assert_eq!(resolve_locale(Some("zh_TW")), "zh-CN");
+
+        // Unsupported system languages fall back to English, not to "first".
+        assert_eq!(resolve_locale(Some("fr")), "en");
+        assert_eq!(resolve_locale(Some("ja-JP")), "en");
+        assert_eq!(resolve_locale(Some("de-DE")), "en");
+    }
+
+    /// Every supported locale must resolve to itself, so the persisted value is
+    /// always one of `SUPPORTED_LOCALES`.
+    #[test]
+    fn test_supported_locales_are_stable() {
+        for locale in SUPPORTED_LOCALES {
+            assert_eq!(resolve_locale(Some(locale)), *locale);
+        }
+        assert!(SUPPORTED_LOCALES.contains(&DEFAULT_LOCALE));
     }
 }

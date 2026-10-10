@@ -36,6 +36,13 @@ pub struct CoreContext {
     /// P3: separates settings from runtime state.
     pub launcher_state: rmccc_config::LauncherState,
 
+    /// User-level preferences (loaded from `user-settings.json`).
+    ///
+    /// Holds the UI language (`locale`: `None` = follow the system language)
+    /// and the update-check preference. Owned here so the Tauri layer and the
+    /// CLI read the same value.
+    pub user_settings: rmccc_config::UserSettings,
+
     /// The actual data directory in use (respects CLI `-d` override).
     /// All file I/O (auth, config, profiles) uses this path, not
     /// `config.resolved_data_dir()` which ignores CLI overrides.
@@ -107,6 +114,8 @@ impl CoreContext {
         let mut config = rmccc_config::AppConfig::load(data_dir)?;
         // P3：运行状态（可丢失）与设置分离。
         let launcher_state = rmccc_config::LauncherState::load(data_dir)?;
+        // 用户级偏好（UI 语言等）；locale = None 表示跟随系统。
+        let user_settings = rmccc_config::UserSettings::load(data_dir)?;
 
         // Ensure config.data_dir reflects the actual directory in use
         // so that resolved_data_dir() and resolved_game_root() respect
@@ -211,6 +220,7 @@ impl CoreContext {
         Ok(Self {
             config,
             launcher_state,
+            user_settings,
             data_dir: data_dir.to_path_buf(),
             http_client,
             download_manager,
