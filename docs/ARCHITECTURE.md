@@ -147,23 +147,22 @@ RMCL/
 
 ### 3.1 Crate Dependency Graph
 
+由各 crate 的 `Cargo.toml` 实测得出（`rmccc-error` 是唯一叶子，全图无环）：
+
 ```
-rmccc-core (orchestrator + DI container)
-├── rmccc-auth
-├── rmccc-download
-├── rmccc-version
-│   └── rmccc-download
-├── rmccc-modloader
-│   ├── rmccc-download
-│   └── rmccc-version
-├── rmccc-mods
-│   └── rmccc-download
-├── rmccc-launch
-│   ├── rmccc-version
-│   └── rmccc-config
-├── rmccc-profile
-│   └── rmccc-config
-└── rmccc-config
+rmccc-error                     # leaf — 统一错误类型 + ErrorCode
+├── rmccc-config                # → error
+├── rmccc-download              # → error
+├── rmccc-auth                  # → error
+└── rmccc-mods                  # → error, download
+
+rmccc-version    → error, download
+rmccc-modloader  → error, download, version
+rmccc-profile    → error, config, modloader
+rmccc-launch     → error, config, version, profile
+rmccc-core       → 以上全部（编排 + DI 容器）
+src-tauri (rmccc)     → rmccc-core + 全部子 crate
+src-cli   (rmccc-cli) → rmccc-core + 全部子 crate
 ```
 
 `rmccc-core` 不仅是 re-export，还承担两个职责：
