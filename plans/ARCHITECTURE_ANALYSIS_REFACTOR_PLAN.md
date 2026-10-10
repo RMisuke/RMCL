@@ -1,5 +1,9 @@
 # RMCCC 账户认证与配置持久化 —— 架构分析与重构步骤清单
 
+> ✅ **状态：已落地（2026-08-05 完成，2026-10-10 复核）**。Phase 0–4 全部实现并随工作区提交；
+> Phase 5 仍为后续扩展（Authlib-Injector / 皮肤 / 账户导出 / 多工作区锁）。
+> 当前状态与验证结果见 [`../docs/PROJECT_STATUS.md`](../docs/PROJECT_STATUS.md)。
+
 > 对标对象：HMCL（HMCLCore `auth/` + HMCL `setting/`）
 > 原则：使用 HMCL 同款实现方式直接学习，不自行过度创新。所有重构均以 HMCL 成熟模式为蓝本，再落到 Rust 语言与 <10MB 体积红线约束。
 

@@ -1,5 +1,10 @@
 # 启动模块重写方案（以 HMCL 为蓝本，含下载模块衔接分析）
 
+> ✅ **状态：已落地（2026-08-05 完成，2026-10-10 复核）**。第 1–9 步全部实现：
+> `LaunchOptions` / `ProcessListener` / natives 重构 / log4j / `DefaultLauncher`（20 步 Pipeline） /
+> 启动脚本 / 完整性检查编排 / IPC 与 CLI 编排层改造。
+> 当前状态与验证结果见 [`../docs/PROJECT_STATUS.md`](../docs/PROJECT_STATUS.md)。
+
 > 本文档先梳理 HMCL 下载模块与启动模块的设计（入口文档 + 源码只读分析），再对照当前 RMCL/RMCCC 启动链路，逐项识别差距，最终给出以「复刻 HMCL 功能行为」为目标的启动模块完整重写方案。报告确认前不修改任何代码。
 
 ---

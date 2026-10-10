@@ -8,8 +8,28 @@
 
 ## 0. 更新记录
 
+**2026-10-10（第 3 轮）**：**第 0 步地基全部完成**——CI 的 lint 三门禁已本地跑通并修复，文档漂移已同步。
+
+- 补齐本地工具链：`rustfmt` / `clippy` 组件（清华镜像缺这两个组件，改用 `static.rust-lang.org`
+  的 1.98.1 组件包装入现有工具链）。
+- CI lint job 原本**三项全红**，现已全绿：
+  - `cargo fmt --all -- --check`：27 个文件未格式化 → 已 `cargo fmt --all`。
+  - `cargo clippy --workspace --all-targets -- -D warnings`：15 处 lint（`derivable_impls`、
+    `unnecessary_to_owned`、`needless_borrows_for_generic_args`、`question_mark`、
+    `field_reassign_with_default`）→ 已修。
+  - `cargo clippy --workspace --lib --bins -- -D warnings -D clippy::panic -D clippy::unwrap_used`：
+    **9 处生产代码 `unwrap()`**（`MicrosoftAccount` 的 session mutex）→ 改为
+    `session_lock()` / `session_snapshot()`，从锁中毒恢复而非 panic。
+- 文档漂移已修：`ARCHITECTURE.md` 的 8 类漂移（§2 目录树、§4.1 加密、§7 路径、§8.3 下载粒度、
+  §9.1 路由、§10.3 认证流、§11 命令表 31→42、§15.1 数据目录）已对齐实现；
+  `DEVELOPMENT_PLAN.md` 已为 5 个 Phase 回填状态块；4 份历史文档已加「已被取代 / 历史快照」横幅。
+
+| commit | 内容 |
+|--------|------|
+| `9ed6cf0` | fix(lint)：通过 fmt / clippy / 生产 unwrap 三门禁 |
+| （本轮 docs） | 同步 ARCHITECTURE.md、DEVELOPMENT_PLAN.md 与历史文档横幅 |
+
 **2026-10-10（第 2 轮）**：§3、§4 记录的 CLI 问题**已全部修复**，工作区**已按主题提交为 10 个 commit**。
-当前基线：`cargo test --workspace` **284 passed / 0 failed**；`pnpm typecheck` 通过；`git status` 干净。
 
 | commit | 内容 |
 |--------|------|
@@ -25,7 +45,6 @@
 | `6d93d52` | docs：审计、整改台账、运维手册与现状交接 |
 
 > 说明：§3 / §4 保留为**问题溯源记录**，其中"现象/根因/修法"仍有价值；"未修复"的措辞已不代表当前状态。
-> §8 第 0 步的第 1–2 项已完成，第 3–4 项仍待做。
 
 ---
 
@@ -33,18 +52,20 @@
 
 | 维度 | 实测结论 |
 |------|----------|
-| 编译 | `cargo check --workspace --all-targets` **通过**，仅 1 处 warning |
+| 编译 | `cargo check --workspace --all-targets` **通过**；clippy 无 warning |
 | 前端类型 | `pnpm typecheck` **通过** |
+| CI lint 三门禁 | `cargo fmt --check` / `clippy --all-targets -D warnings` / `clippy --lib --bins -D clippy::panic -D clippy::unwrap_used` **全部本地通过** |
 | 测试 | **284 passed / 0 failed**（修复 CLI 致命 bug 前为 256 / 28，见 §0/§3/§4） |
 | 版本控制 | ✅ **已按主题提交为 10 个 commit**，工作区干净（原为 110 改 + 52 新增、零提交） |
 | 发布体积 | CLI release 二进制 5.74MB；手工 strip 后 **4.09MB**（`strip = true` 在本机失效，见 §7.3） |
 | 代码规模 | Rust 133 文件 / **29,284 行**（不含 `tests/` 为 28,431 行）；前端 12 文件 / 3,203 行 |
+| 文档同步 | `ARCHITECTURE.md` / `DEVELOPMENT_PLAN.md` 已对齐实现；历史文档已加取代横幅 |
 | 阶段判断 | **Phase 1–2 完成；Phase 3 后端完成、前端未做；Phase 4 后端基本完成、UI 未做；Phase 5 配置齐备但端到端未验证** |
 
 **最重要的三个判断**：
 
 1. **代码质量高于文档所描述的状态**。后端在 2026-08-05 已完成两轮大重构（启动模块重写、版本管理本地仓库化、认证/配置对齐 HMCL），crate 级单测全绿。
-2. **工程管理是原最大风险，现已缓解**：数千行改动此前零提交、CI 实际为红、文档与代码漂移。现已提交、测试转绿；**文档漂移仍未修（§7.2）**。
+2. **工程管理风险已清除**：数千行改动此前零提交、CI 实际为红、文档与代码漂移。现均已处理：工作区已分主题提交、284 项测试全绿、CI lint 三门禁本地通过、`ARCHITECTURE.md` 漂移已同步。
 3. **前后端严重不对称**：后端 42 个 IPC 命令已实现并注册，前端只调用 33 个，整个"实例管理/修复"与"ModLoader 安装"两条链路在 GUI 上完全不存在。
 
 ---
@@ -218,17 +239,19 @@ src-cli    4.3k 行  clap 命令面 + CliContext 门面 + registry（帮助/补�
 
 | 文档 | 性质 | 时效 |
 |------|------|------|
-| `ARCHITECTURE.md`（1,649 行） | 设计基线，AGENTS.md 指定的最高权威 | 结构仍成立，多处细节漂移 |
-| `DEVELOPMENT_PLAN.md`（175 行） | Phase 1–5 路线图 | Phase 完成状态未回填 |
+| `ARCHITECTURE.md` | 设计基线，AGENTS.md 指定的最高权威 | ✅ 2026-10-10 已同步实现（1,728 行） |
+| `DEVELOPMENT_PLAN.md` | Phase 1–5 路线图 | ✅ 2026-10-10 已回填各 Phase 状态块 |
 | `AI_EDITING_RULES.md`（101 行） | 编码规范 | 有效 |
-| `ARCHITECTURE_AUDIT_REPORT.md`（417 行） | 2026-07-31 审计 | 已被下一份取代 |
-| `ARCHITECTURE_AUDIT_REPORT_2026-08-04.md`（298 行） | 2026-08-04 审计（Phase 2–4 交界） | **其 5 个 P0 在工作区均已修复，结论已过期** |
-| `FIX_PLAN_2026-08-04.md`（683 行） | 53 项整改台账（P0×5/P1×9/P2×25/P3×14） | 自述全部关闭；同一文档内状态有翻转 |
-| `BACKEND_ISSUES_INDEX.md`（838 行） | 51 项问题索引 | **无状态列**，无法判断进度 |
+| `ARCHITECTURE_AUDIT_REPORT.md` | 2026-07-31 审计 | ✅ 已加「历史快照」横幅 |
+| `ARCHITECTURE_AUDIT_REPORT_2026-08-04.md` | 2026-08-04 审计（Phase 2–4 交界） | ✅ 已加「历史快照」横幅；其 5 个 P0 均已修复 |
+| `FIX_PLAN_2026-08-04.md` | 53 项整改台账（P0×5/P1×9/P2×25/P3×14） | ✅ 已加「历史台账」横幅 |
+| `BACKEND_ISSUES_INDEX.md` | 51 项问题索引 | ✅ 已加「已被 `PROJECT_STATUS.md` 取代」横幅 |
 | `MODLOADER_IMPLEMENTATION_PLAN.md`、`test-flow.md`、`test_log.md`、`OPERATIONS.md` | 专题 | 可用 |
-| `plans/*.md`（3 份，2026-08-05） | 认证/配置重构、版本管理兼容、启动模块重写 | **三份计划均已基本落地**，文档未标注完成 |
+| `plans/*.md`（3 份，2026-08-05） | 认证/配置重构、版本管理兼容、启动模块重写 | ✅ 已加「已落地」横幅 |
 
-### 7.2 ARCHITECTURE.md 确切的漂移点（需修正）
+### 7.2 ARCHITECTURE.md 的漂移点 —— ✅ 已全部修正（2026-10-10）
+
+> 下列 8 类漂移已在本轮同步到实现，此处保留为记录。
 
 1. `:41` 称离线认证为 **UUID v5** —— 实际已改为官方算法 **UUID v3 = MD5("OfflinePlayer:"+name)**（`crates/rmccc-auth/src/offline.rs`）。
 2. `:100-109` 称 `src/`（前端）为 placeholder —— 实际已是真实 Router + 3 个页面（1,134 行）。
@@ -243,22 +266,38 @@ src-cli    4.3k 行  clap 命令面 + CliContext 门面 + registry（帮助/补�
 
 ### 7.3 环境问题（非代码缺陷）
 
-- **`cargo` 不在 PATH**：Homebrew rustup 未安装任何工具链到 `~/.rustup`，实际工具链在 `/opt/homebrew/opt/rustup/toolchains/stable-aarch64-apple-darwin`。直接用该路径调用可正常工作（本文档 §2 已给出）。
-- **`rustfmt` / `clippy` 组件缺失**：无法本地复现 CI 的 lint job（含 `-D clippy::panic -D clippy::unwrap_used` 硬门禁）。需 `rustup component add rustfmt clippy`（写入 `/opt/homebrew/opt/rustup`，在受限沙箱下需放行）。
-- **`strip = true` 失效**：`rust-objcopy` 因缺 `libLLVM.dylib` SIGABRT，release 二进制未剥离符号 → 5.74MB；手工 `strip` 后 **4.09MB**。真实体积应报 4.09MB。
+推荐的本地构建环境变量（本机实测可用）：
+
+```bash
+export PATH=/opt/homebrew/opt/rustup/toolchains/stable-aarch64-apple-darwin/bin:$PATH
+export CARGO_HOME=$HOME/.cargo
+```
+
+- **`cargo` 不在 PATH**：Homebrew rustup 未安装任何工具链到 `~/.rustup`，实际工具链在
+  `/opt/homebrew/opt/rustup/toolchains/stable-aarch64-apple-darwin`。直接用该路径调用即可正常工作
+  （`cargo` / `rustc` / `rustfmt` / `cargo-fmt` / `clippy-driver` / `cargo-clippy` 都在该 bin 目录下）。
+- **`rustfmt` / `clippy` 组件**：✅ **已安装**（2026-10-10）。注意配置的清华镜像
+  （`mirrors.tuna.tsinghua.edu.cn`）**缺这两个组件的 1.98.1 包（404）**，且已安装工具链的
+  `multirust-channel-manifest.toml` 写死了该镜像的绝对 URL，`RUSTUP_DIST_SERVER` 无法覆盖。
+  解决方式：从 `https://static.rust-lang.org/dist/2026-09-03/` 取
+  `rustfmt-1.98.1-aarch64-apple-darwin.tar.xz` 与 `clippy-1.98.1-aarch64-apple-darwin.tar.xz`，
+  解包后用包内 `install.sh --prefix=<toolchain dir>` 装入。
+- **`strip = true` 失效**：`rust-objcopy` 因缺 `libLLVM.dylib` SIGABRT，release 二进制未剥离符号
+  → 5.74MB；手工 `strip` 后 **4.09MB**。真实体积应报 4.09MB。
+  （安装 `llvm-tools` 组件可修此问题，但该组件同样在清华镜像缺失；尚未处理，不影响链接结果。）
 
 ---
 
 ## 8. 继续开发的建议顺序
 
-### 第 0 步：地基 —— 进行中
+### 第 0 步：地基 —— ✅ 全部完成
 
 1. ✅ **提交现有工作**。已按主题拆为 10 个 commit（见 §0），CI 可运行、历史可追溯。
 2. ✅ **修掉 §3/§4 的 CLI 问题**，`cargo test --workspace` 已 **284 passed / 0 failed**。
-3. ⏳ **补齐本地 lint 能力**（安装 rustfmt/clippy 组件），跑通 CI 的 lint job，确认
-   `-D clippy::panic -D clippy::unwrap_used` 门禁真实通过。**未做**——工具链缺组件（§7.3）。
-4. ⏳ **更新 `ARCHITECTURE.md` 的 8 处漂移**（§7.2）并回填 `DEVELOPMENT_PLAN.md` 的 Phase 状态；
-   把 `BACKEND_ISSUES_INDEX.md` 标注为"已被本文件取代"。**未做**——下一步的优先候选。
+3. ✅ **补齐本地 lint 能力**并跑通 CI 的 lint job：安装 rustfmt/clippy 组件后，发现三门禁原本全红
+   （27 文件未格式化 + 15 处 clippy lint + 9 处生产 `unwrap()`），均已修复。
+4. ✅ **同步文档漂移**：`ARCHITECTURE.md` 8 类漂移已修（§7.2）、`DEVELOPMENT_PLAN.md` 已回填
+   5 个 Phase 状态、4 份历史文档已加取代/快照横幅。
 
 ### 第 1 步：补齐前端（Phase 3/4 的缺口，投入产出比最高）
 

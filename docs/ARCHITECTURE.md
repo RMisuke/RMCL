@@ -818,7 +818,7 @@ async fn download_batch(
 ### 7.1 Download Retry
 
 ```rust
-// rmccc-download/src/retry.rs
+// rmccc-download/src/lib.rs — retry policy of ConcurrentDownloadManager
 pub struct RetryConfig {
     pub max_retries: u32,        // default: 3
     pub base_delay: Duration,    // default: 1s
@@ -837,7 +837,7 @@ impl RetryConfig {
 ### 7.2 Download Resume (HTTP Range)
 
 ```rust
-// rmccc-download/src/resume.rs
+// rmccc-download/src/lib.rs — Range resume inside ConcurrentDownloadManager
 /// Check existing partial file, request with Range header
 pub async fn resume_download(
     client: &reqwest::Client,
@@ -995,10 +995,12 @@ impl AppState {
 
 ### 8.3 Download Control Granularity
 
-| Operation | Scope | Behavior |
-|-----------|-------|----------|
-| `download_cancel` | 单文件 | 取消指定文件，其余继续 |
-| `download_cancel_batch` | 整批 | 取消整批，清理已下载的 partial 文件 |
+All three IPC commands operate on a **batch** (`batch_id`); there is no
+per-file cancel command.
+
+| IPC command | Scope | Behavior |
+|-------------|-------|----------|
+| `download_cancel` | 整批 | 取消整批（`cancel_batch(batch_id)`），清理已下载的 partial 文件 |
 | `download_pause` | 整批 | 等待当前 worker 完成，停止 dequeuing 新任务 |
 | `download_resume` | 整批 | 从断点继续（HTTP Range） |
 
@@ -1006,13 +1008,19 @@ impl AppState {
 
 ### 9.1 Pages & Routing
 
+当前实现（`src/main.tsx`）：
+
 ```
-/                  → Dashboard (active downloads, recent profiles, quick launch)
-/profiles          → Profile List (grid of game instances)
-/profiles/:id      → Profile Detail (launch, mods, settings)
-/mods              → Mod Browser (search, install, manage)
-/settings          → Global Settings (auth, JVM, download mirrors)
-/login             → Login Flow (Microsoft OAuth / offline)
+/         → Dashboard (accounts, profiles, version install, launch/stop)
+/login    → Login (Microsoft device code / offline)
+/settings → Settings (launcher settings, Java detection)
+```
+
+规划中但尚未实现（Phase 3/4 前端缺口，见 `PROJECT_STATUS.md` §8）：
+
+```
+/profiles/:id → Profile Detail (mod loader install, repair)
+/mods         → Mod Browser (search, install, manage)
 ```
 
 ### 9.2 State Management
@@ -1112,10 +1120,9 @@ export const launch = {
   kill: (profileId: string) => invoke<void>("launch_kill", { profileId }),
 };
 
-// Downloads
+// Downloads (all batch-scoped)
 export const downloads = {
-  cancel: (taskId: string) => invoke<void>("download_cancel", { taskId }),
-  cancelBatch: (batchId: string) => invoke<void>("download_cancel_batch", { batchId }),
+  cancel: (batchId: string) => invoke<void>("download_cancel", { batchId }),
   pause: (batchId: string) => invoke<void>("download_pause", { batchId }),
   resume: (batchId: string) => invoke<void>("download_resume", { batchId }),
 };
@@ -1240,8 +1247,9 @@ User clicks "Microsoft Login"
   │   ├─ Exchange for XSTS token
   │   ├─ Exchange for Minecraft access token
   │   ├─ GET https://api.minecraftservices.com/minecraft/profile
-  │   ├─ Encrypt session via TokenVault (AES-256-GCM)
-  │   ├─ Write encrypted auth.json to disk
+  │   ├─ Encrypt private fields via TokenVault (AES-256-GCM)
+  │   ├─ Write plaintext metadata to accounts.json
+  │   ├─ Write encrypted private data to private/account-private-data.json
   │   └─ Return AuthSession
   │
   └─ Frontend: Show logged-in username, store session
@@ -1277,39 +1285,57 @@ User clicks "Launch" on a profile
 
 ## 11. IPC Command Table
 
+42 commands, all registered in `src-tauri/src/main.rs` `generate_handler!`.
+Definition count and registration count are verified equal (see
+`PROJECT_STATUS.md` §5.3).
+
 | Command | Handler | Description |
 |---------|---------|-------------|
-| `auth_microsoft_login` | `auth.rs` | Start MS OAuth2 device flow |
+| `auth_microsoft_login` | `auth.rs` | Start MS OAuth2 device flow (emits `auth://device-code`) |
 | `auth_offline_login` | `auth.rs` | Create offline session |
-| `auth_logout` | `auth.rs` | Clear session + delete encrypted file |
+| `auth_logout` | `auth.rs` | Clear session + remove private data |
 | `auth_get_session` | `auth.rs` | Decrypt + return cached session |
+| `auth_refresh_token` | `auth.rs` | Silent refresh with a profile-UUID consistency check |
+| `auth_list_accounts` | `auth.rs` | List accounts (plaintext metadata only) |
+| `auth_switch_account` | `auth.rs` | Change the selected account |
+| `auth_remove_account` | `auth.rs` | Remove an account and its private data |
 | `profile_list` | `profile.rs` | List all profiles |
 | `profile_create` | `profile.rs` | Create new profile |
 | `profile_update` | `profile.rs` | Update profile settings |
 | `profile_delete` | `profile.rs` | Delete profile + cleanup game dir |
-| `profile_import` | `profile.rs` | Import profile from JSON file |
-| `profile_export` | `profile.rs` | Export profile to JSON file |
+| `instance_list` | `instance.rs` | List instances from the local repository index |
+| `instance_refresh` | `instance.rs` | Rescan `versions/`, emit `instances://refreshed` |
+| `instance_rename` | `instance.rs` | Rename an instance |
+| `instance_duplicate` | `instance.rs` | Duplicate an instance (jar + patched JSON) |
+| `instance_remove` | `instance.rs` | Remove an instance |
+| `instance_check_completion` | `instance.rs` | Report missing files |
+| `instance_repair` | `instance.rs` | Download missing files |
 | `version_list` | `version.rs` | List available MC versions (with cache) |
-| `version_install` | `version.rs` | Download + install MC version |
-| `modloader_list` | `modloader.rs` | List loader versions (unified, takes `loader_type` param) |
-| `modloader_install` | `modloader.rs` | Install mod loader |
-| `mod_search` | `mods.rs` | Search mods (Modrinth/CurseForge) |
-| `mod_install` | `mods.rs` | Download + install mod (+ dependency resolution) |
+| `version_install` | `version.rs` | Install MC version; returns a real `batch_id` |
+| `modloader_list` | `modloader.rs` | List loader versions (`loader_type` param) |
+| `modloader_install` | `modloader.rs` | Install mod loader (emits install progress) |
+| `mod_search` | `mods.rs` | Search mods (Modrinth) |
+| `mod_get_versions` | `mods.rs` | List versions of a mod |
+| `mod_get_download_url` | `mods.rs` | Resolve a download URL |
+| `mod_install` | `mods.rs` | Download + install mod (remote or local file) |
 | `mod_remove` | `mods.rs` | Remove mod from profile |
-| `mod_list` | `mods.rs` | List installed mods |
-| `mod_toggle` | `mods.rs` | Enable/disable mod (move to/from `mods/disabled/` subdirectory) |
-| `launch_start` | `launch.rs` | Launch game (response file for args) |
-| `launch_kill` | `launch.rs` | Kill game process |
+| `mod_list` | `mods.rs` | List installed mods (active + disabled) |
+| `mod_toggle` | `mods.rs` | Enable/disable mod (move to/from `mods/disabled/`) |
+| `launch_start` | `launch.rs` | Launch game through `DefaultLauncher` |
+| `launch_kill` | `launch.rs` | Kill game process (process group on Unix) |
 | `launch_status` | `launch.rs` | Get running game status |
-| `download_cancel` | `download.rs` | Cancel single file in batch |
-| `download_cancel_batch` | `download.rs` | Cancel entire download batch |
+| `download_cancel` | `download.rs` | Cancel an entire download batch |
 | `download_pause` | `download.rs` | Pause download batch |
 | `download_resume` | `download.rs` | Resume paused download batch |
 | `settings_get` | `settings.rs` | Get global settings |
-| `settings_set` | `settings.rs` | Update global settings (hot-reload where applicable) |
+| `settings_set` | `settings.rs` | Update global settings (debounced `FileSaver` write) |
 | `java_detect` | `settings.rs` | Auto-detect Java installations |
-| `log_get` | `log.rs` | Get recent launcher log lines |
-| `log_clear` | `log.rs` | Clear/truncate log file |
+| `log_get` | `logs.rs` | Get recent launcher log lines |
+| `log_clear` | `logs.rs` | Clear/truncate log file |
+| `open_external_url` | `external.rs` | Open a URL in the system browser (deep-link) |
+
+> 前端现状：`src/ipc/api.ts` + 路由页共调用其中 33 个；`instance_*`（7 个）与
+> `modloader_*`（2 个）尚无 UI 入口。补齐前端见 `PROJECT_STATUS.md` §8 第 1 步。
 
 ## 12. Size Budget
 
@@ -1435,7 +1461,7 @@ strategy:
 |---------|------------------|
 | Auto-update | `tauri-plugin-updater` — GitHub Releases as update source |
 | System tray | Game running → minimize to tray, show status |
-| Window state | Persist window size/position in config.json |
+| Window state | `tauri-plugin-window-state` persists window size/position |
 | Deep link | `rmccc://profile/{id}` — browser one-click import |
 | Linux min version | Ubuntu 22.04+ (WebKit2GTK 4.0+) |
 
@@ -1444,20 +1470,30 @@ strategy:
 ### 15.1 User Data Directory
 
 ```
-{data_dir}/rmccc/                    # Platform data dir
-├── config.json                      # Global settings
-├── .key                             # AES-256 encryption key (chmod 600)
-├── auth.json                        # Encrypted auth session
-├── .api_keys/                       # API keys (separate from config)
+{data_dir}/                          # Platform data dir (CLI `-d` overrides)
+├── config/
+│   └── launcher-settings.json       # Global settings ($schema versioned)
+├── state/
+│   └── launcher-state.json          # Runtime state (loss-tolerant)
+├── user-settings.json               # User-level preferences
+├── .key                             # AES-256 encryption key (600 / icacls)
+├── accounts.json                    # Plaintext account metadata + selected
+├── private/
+│   └── account-private-data.json    # AES-256-GCM encrypted private data
+├── .api_keys/                       # API keys (separate from settings)
 │   └── curseforge                   # CurseForge API key
 ├── cache/                           # Offline caches
-│   ├── versions.json                # Cached version list
-│   └── mod_search/                  # Cached mod search results
+│   ├── versions.json                # Cached version list (TTL)
+│   └── objects/{sha1[0:2]}/{sha1}   # SHA1-keyed download cache
 ├── profiles/                        # Profile definitions
 │   ├── {profile-id-1}.json
 │   └── {profile-id-2}.json
+├── instances/                       # Default game root (.minecraft equivalent)
+│   ├── versions/                    # Local instance index source
+│   ├── libraries/  assets/          # Shared across instances
+│   └── launcher_profiles.json       # Created on demand (Forge/LiteLoader need it)
 └── logs/                            # Launcher logs
-    ├── rmccc-2026-07-29.log         # Daily rolling
+    ├── rmccc-2026-07-29.log         # Daily rolling, 10 kept
     └── rmccc-2026-07-28.log
 
 {game_dir}/                          # Per-profile game directory
@@ -1465,8 +1501,8 @@ strategy:
 │   └── 1.20.4/
 │       ├── 1.20.4.json              # Version metadata
 │       ├── 1.20.4.jar               # Client JAR
-│       └── 1.20.4-fabric-0.15.6/   # Mod loader version
-│           └── 1.20.4-fabric-0.15.6.json
+│       ├── natives-{platform}/      # Extracted natives (HMCL layout)
+│       └── .abnormal                # Crash marker, cleared on normal exit
 ├── libraries/                       # Shared libraries
 │   └── com/google/...
 ├── assets/                          # Game assets
@@ -1502,6 +1538,13 @@ strategy:
   "icon": null
 }
 ```
+
+> 扩展字段（全部 `#[serde(default)]`，旧 JSON 可无损加载）：`min_memory_mb`、
+> `metaspace_mb`、`process_priority`、`width` / `height` / `fullscreen`、
+> `use_native_glfw` / `use_native_openal` / `use_custom_natives`、
+> `no_generated_jvm_args` / `no_generated_optimizing_jvm_args`、
+> `enable_debug_log_output`、`wrapper`、`java_agents`、`override_jvm_args`、
+> `pre_launch_command`、`post_exit_command`、`env_vars`。
 
 ## 16. Testing Strategy
 

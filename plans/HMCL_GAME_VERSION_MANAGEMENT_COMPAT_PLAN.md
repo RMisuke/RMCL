@@ -1,5 +1,10 @@
 # 游戏版本管理系统改进报告（以与 HMCL 相同/兼容为目标）
 
+> ✅ **状态：已落地（2026-08-05 完成，2026-10-10 复核）**。阶段 A–E 的主要模块
+> （`game_repository` / `default_game_repository` / `resolved` / `file_layout` / `isolation` /
+> `compatibility` / `completion`）均已实现并接入启动链路。
+> 当前状态与验证结果见 [`../docs/PROJECT_STATUS.md`](../docs/PROJECT_STATUS.md)。
+
 > 分析入口：`HMCL-main/explain/game_version_management_游戏版本管理模块.md` + HMCL 源码（只读）
 > 当前项目：RMCL / RMCCC（Rust workspace + Tauri 2.x + SolidJS）
 > 日期：2026-08-05 | 状态：待确认，未改任何代码

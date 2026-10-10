@@ -1,10 +1,20 @@
 # RMCCC 开发路线图
 
 > 按 Phase 分阶段交付，每阶段产出可运行的增量版本。
+>
+> **当前状态入口**：各 Phase 的实际完成情况见下方每个 Phase 的「状态」块。
+> 完整的实测数据、架构 as-built 与待办优先级见 [`PROJECT_STATUS.md`](PROJECT_STATUS.md)。
+> 最后回填：2026-10-10（`cargo test --workspace` 284 passed / 0 failed，CI lint 三门禁本地通过）。
 
 ---
 
 ## Phase 1: Foundation（Week 1–2）
+
+> **状态：✅ 完成**
+> Workspace、路径/配置（`$schema` 版本化 + `FileSaver`）、统一错误、下载引擎（并发/SHA1/Range/退避）、
+> 认证（MS device flow + 离线 + AES-256-GCM + `AccountRepository`）、IPC 框架、事件与前端登录页均已落地。
+> `cargo check` 零错误、`pnpm typecheck` 通过。
+> 未在本轮复测：GUI 窗口实际弹出与真实 MS 登录（需人工联调）。
 
 **目标**：项目能跑起来，能登录，能下载文件。
 
@@ -43,6 +53,12 @@
 ---
 
 ## Phase 2: Core Game（Week 3–4）
+
+> **状态：✅ 完成**
+> `MojangVersionProvider`、版本列表 TTL 缓存、assets/libraries、Java 检测与版本匹配、
+> response file 启动参数、`ManagedProcess` 进程管理、Profile CRUD 均已落地。
+> 启动链路已升级为本地 `DefaultGameRepository` + `DefaultLauncher`（离线可启动）。
+> 已有记录：CLI 端到端启动原版 26.2 成功（`docs/test_log.md`）。
 
 **目标**：能下载并启动原版 Minecraft。
 
@@ -83,6 +99,12 @@
 
 ## Phase 3: Mod Loaders（Week 5–6）
 
+> **状态：⚠️ 后端完成，前端未做**
+> 后端支持 8 种 loader（Fabric / Forge / NeoForge / Quilt / LiteLoader / OptiFine / Cleanroom / LegacyFabric），
+> 其中 Cleanroom 仍是 stub。已有记录：Fabric / NeoForge 安装后可正常启动（`docs/test_log.md`）。
+> **未达成**：前端「Mod loader 选择 UI」与「安装进度」——
+> `modloader_list` / `modloader_install` 两个 IPC 命令在前端零调用（见 `PROJECT_STATUS.md` §5.3）。
+
 **目标**：支持 Fabric / Forge / NeoForge 安装。
 
 ### Rust 侧
@@ -112,6 +134,11 @@
 ---
 
 ## Phase 4: Mod Management（Week 7–8）
+
+> **状态：⚠️ 后端基本完成，前端未做**
+> Modrinth 搜索/版本/下载链接/安装/启停/移除与本地 mod 管理（`mods/disabled/`）已落地并注册 IPC。
+> **未达成**：CurseForge 源（仅有本地 mod 路径）、依赖提示（`ModDependency` 类型已定义但未接入解析）、
+> 以及全部前端 UI（Mod 浏览器 / 详情页 / 管理列表）。
 
 **目标**：搜索、安装、管理 Mod。
 
@@ -145,6 +172,18 @@
 ---
 
 ## Phase 5: Polish & Ship（Week 9–10）
+
+> **状态：⚠️ 配置齐备，端到端未验证**
+> 已就绪：CI（fmt / clippy 含 panic+unwrap 硬门禁 / 三平台测试 / tauri-driver E2E job / cargo-audit /
+> ts-rs 绑定新鲜度校验）、`release.yml`（三平台打包 + macOS 公证 + updater 签名）、运维手册、
+> `tauri-plugin-updater` / `window-state` / `process` / `deep-link` 依赖与 capability。
+>
+> 已实测：`cargo fmt --check`、两条 clippy 门禁、284 项测试、`pnpm typecheck` 全绿；
+> CLI release 二进制 strip 后 **4.09MB**。
+>
+> **未完成**：`cargo bloat` 正式审计、前端 bundle 分析、wiremock 集成测试补全、
+> E2E 实跑（本地需 `RMCCC_RUN_E2E=1`）、三平台产物实测、updater 真实 `endpoints` 与签名 Secret、
+> macOS 证书公证、无 P0/P1 bug 的最终确认（当前仍有结构性欠账，见 `PROJECT_STATUS.md` §6）。
 
 **目标**：生产级质量，可发布。
 
