@@ -110,9 +110,7 @@ impl LibraryType {
         }
 
         // NeoForge (check before Forge)
-        if group == "net.neoforged.fancymodloader"
-            && (artifact == "core" || artifact == "loader")
-        {
+        if group == "net.neoforged.fancymodloader" && (artifact == "core" || artifact == "loader") {
             return Some(LibraryType::NeoForge);
         }
 
@@ -229,8 +227,7 @@ impl LibraryAnalyzer {
             (
                 Library {
                     name: "minecraft".into(),
-                    downloads: None,
-                    rules: None,
+                    ..Default::default()
                 },
                 Some(game_version.to_string()),
             ),
@@ -255,8 +252,7 @@ impl LibraryAnalyzer {
                 (
                     Library {
                         name: format!("__patch__{}", patch.id),
-                        downloads: None,
-                        rules: None,
+                        ..Default::default()
                     },
                     Some(patch.version.clone()),
                 )
@@ -426,10 +422,8 @@ pub const FORGE_TWEAKERS: &[&str] = &[
 ];
 
 /// Known OptiFine tweaker classes.
-pub const OPTIFINE_TWEAKERS: &[&str] = &[
-    "optifine.OptiFineTweaker",
-    "optifine.OptiFineForgeTweaker",
-];
+pub const OPTIFINE_TWEAKERS: &[&str] =
+    &["optifine.OptiFineTweaker", "optifine.OptiFineForgeTweaker"];
 
 /// LiteLoader tweaker class.
 pub const LITELOADER_TWEAKER: &str = "com.mumfrey.liteloader.launch.LiteLoaderTweaker";
@@ -445,55 +439,35 @@ mod tests {
             main_class: VANILLA_MAIN.into(),
             asset_index: rmccc_version::AssetIndex {
                 id: "17".into(),
-                url: String::new(),
-                sha1: String::new(),
-                size: 0,
-                total_size: 0,
+                ..Default::default()
             },
-            downloads: Default::default(),
-            libraries: vec![],
-            java_version: None,
-            inherits_from: None,
-            patches: vec![],
-            arguments: None,
-            minecraft_arguments: None,
-            raw_json: None,
+            ..Default::default()
         }
     }
 
     fn make_lib(name: &str) -> Library {
         Library {
             name: name.into(),
-            downloads: None,
-            rules: None,
+            ..Default::default()
         }
     }
 
     #[test]
     fn test_detect_forge() {
         let lib = make_lib("net.minecraftforge:forge:1.21-49.0.50");
-        assert_eq!(
-            LibraryType::detect(&lib, &[]),
-            Some(LibraryType::Forge)
-        );
+        assert_eq!(LibraryType::detect(&lib, &[]), Some(LibraryType::Forge));
     }
 
     #[test]
     fn test_detect_fabric() {
         let lib = make_lib("net.fabricmc:fabric-loader:0.16.0");
-        assert_eq!(
-            LibraryType::detect(&lib, &[]),
-            Some(LibraryType::Fabric)
-        );
+        assert_eq!(LibraryType::detect(&lib, &[]), Some(LibraryType::Fabric));
     }
 
     #[test]
     fn test_detect_neoforge() {
         let lib = make_lib("net.neoforged.fancymodloader:loader:3.0.0");
-        assert_eq!(
-            LibraryType::detect(&lib, &[]),
-            Some(LibraryType::NeoForge)
-        );
+        assert_eq!(LibraryType::detect(&lib, &[]), Some(LibraryType::NeoForge));
     }
 
     #[test]
@@ -517,19 +491,13 @@ mod tests {
     #[test]
     fn test_detect_optifine() {
         let lib = make_lib("optifine:OptiFine:1.21_HD_U_J1");
-        assert_eq!(
-            LibraryType::detect(&lib, &[]),
-            Some(LibraryType::OptiFine)
-        );
+        assert_eq!(LibraryType::detect(&lib, &[]), Some(LibraryType::OptiFine));
     }
 
     #[test]
     fn test_detect_quilt() {
         let lib = make_lib("org.quiltmc:quilt-loader:0.26.0");
-        assert_eq!(
-            LibraryType::detect(&lib, &[]),
-            Some(LibraryType::Quilt)
-        );
+        assert_eq!(LibraryType::detect(&lib, &[]), Some(LibraryType::Quilt));
     }
 
     #[test]
@@ -541,8 +509,12 @@ mod tests {
     #[test]
     fn test_analyzer_detects_installed_modloader() {
         let mut version = make_vanilla_version();
-        version.libraries.push(make_lib("net.fabricmc:fabric-loader:0.16.0"));
-        version.libraries.push(make_lib("net.fabricmc:fabric-api:0.100.0"));
+        version
+            .libraries
+            .push(make_lib("net.fabricmc:fabric-loader:0.16.0"));
+        version
+            .libraries
+            .push(make_lib("net.fabricmc:fabric-api:0.100.0"));
 
         let analyzer = LibraryAnalyzer::analyze(&version, "1.21");
 
@@ -563,10 +535,13 @@ mod tests {
     #[test]
     fn test_analyzer_remove_modloader() {
         let mut version = make_vanilla_version();
-        version.libraries.push(make_lib("net.minecraftforge:forge:1.21-49.0.50"));
+        version
+            .libraries
+            .push(make_lib("net.minecraftforge:forge:1.21-49.0.50"));
         version.patches.push(rmccc_version::GamePatch {
             id: "forge".into(),
             version: "49.0.50".into(),
+            ..Default::default()
         });
 
         let mut analyzer = LibraryAnalyzer::analyze(&version, "1.21");

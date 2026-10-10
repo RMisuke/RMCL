@@ -5,12 +5,12 @@
 
 use crate::install_task::InstallTask;
 use crate::patch::GameInstancePatch;
-use rmccc_error::{RmcccError, Result};
+use rmccc_error::{Result, RmcccError};
 use std::io::Read;
 use std::path::PathBuf;
 
-use super::old_install::ForgeOldInstallTask;
 use super::new_install::ForgeNewInstallTask;
+use super::old_install::ForgeOldInstallTask;
 
 /// The state of the Forge install task.
 #[derive(Debug)]
@@ -32,6 +32,8 @@ pub struct ForgeInstallTask {
     pub java_path: Option<PathBuf>,
     /// Game directory.
     pub game_dir: Option<PathBuf>,
+    /// Shared HTTP client (reused from provider).
+    pub client: reqwest::Client,
 }
 
 impl ForgeInstallTask {
@@ -45,9 +47,9 @@ impl ForgeInstallTask {
 
         let mut profile_json = String::new();
         {
-            let mut entry = archive.by_name("install_profile.json").map_err(|e| {
-                RmcccError::Other(format!("install_profile.json not found: {e}"))
-            })?;
+            let mut entry = archive
+                .by_name("install_profile.json")
+                .map_err(|e| RmcccError::Other(format!("install_profile.json not found: {e}")))?;
             entry.read_to_string(&mut profile_json)?;
         }
 
@@ -62,7 +64,10 @@ impl ForgeInstallTask {
                 game_version: self.game_version.clone(),
                 forge_version: self.forge_version.clone(),
                 installer_path: installer_path.to_path_buf(),
-                java_path: self.java_path.clone().unwrap_or_else(|| PathBuf::from("java")),
+                java_path: self
+                    .java_path
+                    .clone()
+                    .unwrap_or_else(|| PathBuf::from("java")),
                 game_dir: self.game_dir.clone().unwrap_or_else(|| PathBuf::from(".")),
             })))
         } else if parsed.get("install").is_some() && parsed.get("versionInfo").is_some() {
@@ -83,7 +88,7 @@ impl ForgeInstallTask {
 impl InstallTask for ForgeInstallTask {
     async fn execute(&mut self) -> Result<GameInstancePatch> {
         // Download the installer if needed
-        let installer_path = download_installer(&self.installer_url).await?;
+        let installer_path = download_installer(&self.client, &self.installer_url).await?;
 
         // Detect type if not already done
         if matches!(self.state, ForgeInstallState::NotStarted) {
@@ -106,10 +111,9 @@ impl InstallTask for ForgeInstallTask {
 }
 
 /// Download the Forge installer JAR to a temp file.
-async fn download_installer(url: &str) -> Result<PathBuf> {
+async fn download_installer(client: &reqwest::Client, url: &str) -> Result<PathBuf> {
     tracing::info!(url = %url, "Downloading Forge installer");
 
-    let client = reqwest::Client::new();
     let resp = client
         .get(url)
         .send()

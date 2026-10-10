@@ -1,7 +1,7 @@
 //! Quilt remote version.
 
-use crate::remote_version::{RemoteVersion, VersionType};
 use crate::install_task::InstallTask;
+use crate::remote_version::{RemoteVersion, VersionType};
 use chrono::{DateTime, Utc};
 use rmccc_error::Result;
 

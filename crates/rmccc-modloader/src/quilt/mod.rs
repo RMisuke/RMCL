@@ -14,13 +14,13 @@
 //! - [`QuiltRemoteVersion`] implements [`RemoteVersion`]
 //! - [`QuiltInstallTask`] implements [`InstallTask`]
 
-pub mod version_list;
-pub mod remote_version;
 pub mod install_task;
+pub mod remote_version;
+pub mod version_list;
 
-pub use version_list::QuiltVersionList;
-pub use remote_version::QuiltRemoteVersion;
 pub use install_task::QuiltInstallTask;
+pub use remote_version::QuiltRemoteVersion;
+pub use version_list::QuiltVersionList;
 
 // ── Legacy ModLoaderProvider (stub — Quilt not yet in ModLoaderType) ──
 // QuiltInstallTask provides the new InstallTask interface.

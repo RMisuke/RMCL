@@ -9,7 +9,11 @@ pub struct CleanroomInstallTask;
 #[async_trait::async_trait]
 impl InstallTask for CleanroomInstallTask {
     async fn execute(&mut self) -> Result<GameInstancePatch> {
-        Err(rmccc_error::RmcccError::Other("Cleanroom install not yet implemented".into()))
+        Err(rmccc_error::RmcccError::Other(
+            "Cleanroom install not yet implemented".into(),
+        ))
     }
-    fn description(&self) -> &str { "Installing Cleanroom (unimplemented)" }
+    fn description(&self) -> &str {
+        "Installing Cleanroom (unimplemented)"
+    }
 }

@@ -2,8 +2,8 @@
 //!
 //! URLs point to the Forge installer JAR (Maven or HMCL mirror).
 
-use crate::remote_version::{RemoteVersion, VersionType};
 use crate::install_task::InstallTask;
+use crate::remote_version::{RemoteVersion, VersionType};
 use chrono::{DateTime, Utc};
 use rmccc_error::Result;
 
@@ -62,6 +62,7 @@ impl RemoteVersion for ForgeRemoteVersion {
             state: super::install_task::ForgeInstallState::NotStarted,
             java_path: None,
             game_dir: None,
+            client: reqwest::Client::new(),
         }))
     }
 }

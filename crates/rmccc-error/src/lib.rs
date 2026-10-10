@@ -5,6 +5,7 @@
 
 use serde::Serialize;
 use thiserror::Error;
+use ts_rs::TS;
 
 /// Central error type used across all RMCCC crates.
 #[derive(Debug, Error)]
@@ -22,6 +23,22 @@ pub enum RmcccError {
     // ── Auth ──
     #[error("Authentication failed: {0}")]
     AuthFailed(String),
+
+    /// The stored credentials are permanently invalid and a full
+    /// re-authorization is required (e.g. the Microsoft refresh token was
+    /// revoked). Aligned with HMCL's `CredentialsExpiredException`; callers
+    /// should route the user through `Account::log_in_when_credentials_expired`.
+    #[error("Credentials expired, re-authentication required")]
+    CredentialExpired,
+
+    /// After refreshing, the refreshed credentials belong to a different
+    /// Minecraft profile than the one stored. Aligned with HMCL's
+    /// `OAuthAccount.WrongAccountException`; the token silently moved to
+    /// another account and must not be used for the stored profile.
+    #[error(
+        "Refreshed credentials belong to a different profile (expected {expected}, got {actual})"
+    )]
+    WrongAccount { expected: String, actual: String },
 
     #[error("Token expired and refresh failed")]
     TokenExpired,
@@ -63,7 +80,10 @@ pub enum RmcccError {
     MissingDependency(String),
 
     #[error("Mod version conflict: {mod_name} requires {constraint}")]
-    ModVersionConflict { mod_name: String, constraint: String },
+    ModVersionConflict {
+        mod_name: String,
+        constraint: String,
+    },
 
     // ── IO / System ──
     #[error("IO error: {0}")]
@@ -91,9 +111,15 @@ impl RmcccError {
 /// Error code enum for IPC boundary — serialized to frontend.
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
+#[derive(TS)]
+#[ts(export_to = "types.ts")]
 pub enum ErrorCode {
     NetworkError,
     AuthFailed,
+    /// Credentials permanently invalid — the user must re-authenticate.
+    CredentialExpired,
+    /// Refreshed credentials belong to a different Minecraft profile.
+    WrongAccount,
     TokenExpired,
     DownloadFailed,
     HashMismatch,
@@ -106,11 +132,18 @@ pub enum ErrorCode {
     ModVersionConflict,
     IoError,
     AlreadyRunning,
+    /// Internal error (should not happen in normal operation).
+    InternalError,
+    /// Input validation failed (e.g. name too long).
+    ValidationError,
+    /// Resource not found (version/mod not installed).
+    NotFound,
     Unknown,
 }
 
 /// IPC-safe error that crosses the Tauri boundary.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, TS)]
+#[ts(export_to = "types.ts")]
 pub struct IpcError {
     pub code: ErrorCode,
     pub message: String,
@@ -127,6 +160,8 @@ impl From<RmcccError> for IpcError {
             RmcccError::AuthFailed(_) | RmcccError::DeviceCodePending { .. } => {
                 ErrorCode::AuthFailed
             }
+            RmcccError::CredentialExpired => ErrorCode::CredentialExpired,
+            RmcccError::WrongAccount { .. } => ErrorCode::WrongAccount,
             RmcccError::TokenExpired => ErrorCode::TokenExpired,
             RmcccError::DownloadFailed { .. } => ErrorCode::DownloadFailed,
             RmcccError::HashMismatch { .. } => ErrorCode::HashMismatch,

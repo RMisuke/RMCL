@@ -5,11 +5,11 @@
 //! - Intermediary mappings (optional)
 //! - Maven repository routing based on groupId
 
+use crate::analyzer::LibraryType;
 use crate::install_task::InstallTask;
 use crate::patch::{GameInstancePatch, PRIORITY_LOADER};
-use crate::analyzer::LibraryType;
-use rmccc_error::{RmcccError, Result};
-use rmccc_version::{Library, VersionArguments, VersionArgument};
+use rmccc_error::{Result, RmcccError};
+use rmccc_version::{Library, VersionArgument, VersionArguments};
 use serde::Deserialize;
 
 pub struct QuiltInstallTask {
@@ -59,10 +59,9 @@ impl InstallTask for QuiltInstallTask {
             });
         }
 
-        let quilt_info: QuiltInfo = resp
-            .json()
-            .await
-            .map_err(|e| RmcccError::Other(format!("Failed to parse Quilt launch metadata: {e}")))?;
+        let quilt_info: QuiltInfo = resp.json().await.map_err(|e| {
+            RmcccError::Other(format!("Failed to parse Quilt launch metadata: {e}"))
+        })?;
 
         let patch = build_patch(&self.loader_version, &quilt_info)?;
 
@@ -123,8 +122,7 @@ fn build_patch(loader_version: &str, info: &QuiltInfo) -> Result<GameInstancePat
                     if let Some(name) = entry.get("name").and_then(|v| v.as_str()) {
                         libraries.push(Library {
                             name: name.into(),
-                            downloads: None,
-                            rules: None,
+                            ..Default::default()
                         });
                     }
                 }
@@ -136,8 +134,7 @@ fn build_patch(loader_version: &str, info: &QuiltInfo) -> Result<GameInstancePat
     if let Some(ref intermediary) = info.intermediary {
         libraries.push(Library {
             name: intermediary.maven.clone(),
-            downloads: None,
-            rules: None,
+            ..Default::default()
         });
     }
 
@@ -145,16 +142,14 @@ fn build_patch(loader_version: &str, info: &QuiltInfo) -> Result<GameInstancePat
     if let Some(ref hashed) = info.hashed {
         libraries.push(Library {
             name: hashed.maven.clone(),
-            downloads: None,
-            rules: None,
+            ..Default::default()
         });
     }
 
     // Add loader
     libraries.push(Library {
         name: info.loader.maven.clone(),
-        downloads: None,
-        rules: None,
+        ..Default::default()
     });
 
     Ok(GameInstancePatch::with_loader(
@@ -210,8 +205,14 @@ mod tests {
         );
         // common lib + intermediary + hashed + loader = 4
         assert_eq!(patch.libraries.len(), 4);
-        assert!(patch.libraries.iter().any(|l| l.name.contains("quilt-loader")));
+        assert!(patch
+            .libraries
+            .iter()
+            .any(|l| l.name.contains("quilt-loader")));
         assert!(patch.libraries.iter().any(|l| l.name.contains("hashed")));
-        assert!(patch.libraries.iter().any(|l| l.name.contains("intermediary")));
+        assert!(patch
+            .libraries
+            .iter()
+            .any(|l| l.name.contains("intermediary")));
     }
 }

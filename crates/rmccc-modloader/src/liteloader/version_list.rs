@@ -1,9 +1,9 @@
 //! LiteLoader version list.
 
-use crate::version_list::VersionList;
-use crate::remote_version::RemoteVersion;
 use crate::liteloader::remote_version::LiteLoaderRemoteVersion;
-use rmccc_error::{RmcccError, Result};
+use crate::remote_version::RemoteVersion;
+use crate::version_list::VersionList;
+use rmccc_error::{Result, RmcccError};
 use serde::Deserialize;
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
@@ -17,7 +17,10 @@ pub struct LiteLoaderVersionList {
 
 impl LiteLoaderVersionList {
     pub fn new(client: reqwest::Client) -> Self {
-        Self { client, versions: RwLock::new(HashMap::new()) }
+        Self {
+            client,
+            versions: RwLock::new(HashMap::new()),
+        }
     }
 }
 
@@ -77,18 +80,29 @@ struct LiteLoaderLibrary {
 
 #[async_trait::async_trait]
 impl VersionList for LiteLoaderVersionList {
-    fn has_type(&self) -> bool { false }
+    fn has_type(&self) -> bool {
+        false
+    }
 
     async fn refresh(&self, _game_version: Option<&str>) -> Result<()> {
         tracing::info!("Fetching LiteLoader versions");
 
-        let resp = self.client.get(LITELOADER_VERSIONS_URL).send().await
+        let resp = self
+            .client
+            .get(LITELOADER_VERSIONS_URL)
+            .send()
+            .await
             .map_err(|e| RmcccError::Network(e.to_string()))?;
         if !resp.status().is_success() {
-            return Err(RmcccError::HttpStatus { status: resp.status().as_u16(), url: LITELOADER_VERSIONS_URL.into() });
+            return Err(RmcccError::HttpStatus {
+                status: resp.status().as_u16(),
+                url: LITELOADER_VERSIONS_URL.into(),
+            });
         }
 
-        let root: LiteLoaderRoot = resp.json().await
+        let root: LiteLoaderRoot = resp
+            .json()
+            .await
             .map_err(|e| RmcccError::Network(e.to_string()))?;
 
         let mut map: HashMap<String, Vec<Arc<dyn RemoteVersion>>> = HashMap::new();
@@ -97,7 +111,10 @@ impl VersionList for LiteLoaderVersionList {
             for repo in &entry.repo {
                 for v in &repo.versions {
                     let url = v.url.clone().unwrap_or_else(|| {
-                        format!("http://dl.liteloader.com/versions/{}/{}/{}/{}", gv, v.version, v.file, v.file)
+                        format!(
+                            "http://dl.liteloader.com/versions/{}/{}/{}/{}",
+                            gv, v.version, v.file, v.file
+                        )
                     });
                     rvs.push(Arc::new(LiteLoaderRemoteVersion {
                         game_version: gv.clone(),
@@ -118,14 +135,33 @@ impl VersionList for LiteLoaderVersionList {
         Ok(())
     }
 
-    fn is_loaded_any(&self) -> bool { self.versions.read().map(|g| !g.is_empty()).unwrap_or(false) }
-    fn is_loaded(&self, game_version: &str) -> bool { self.versions.read().map(|g| g.contains_key(game_version)).unwrap_or(false) }
-    fn get_versions(&self, game_version: &str) -> Vec<Arc<dyn RemoteVersion>> {
-        self.versions.read().ok().and_then(|g| g.get(game_version).cloned()).unwrap_or_default()
+    fn is_loaded_any(&self) -> bool {
+        self.versions.read().map(|g| !g.is_empty()).unwrap_or(false)
     }
-    fn get_version(&self, game_version: &str, remote_version: &str) -> Option<Arc<dyn RemoteVersion>> {
+    fn is_loaded(&self, game_version: &str) -> bool {
+        self.versions
+            .read()
+            .map(|g| g.contains_key(game_version))
+            .unwrap_or(false)
+    }
+    fn get_versions(&self, game_version: &str) -> Vec<Arc<dyn RemoteVersion>> {
+        self.versions
+            .read()
+            .ok()
+            .and_then(|g| g.get(game_version).cloned())
+            .unwrap_or_default()
+    }
+    fn get_version(
+        &self,
+        game_version: &str,
+        remote_version: &str,
+    ) -> Option<Arc<dyn RemoteVersion>> {
         self.versions.read().ok().and_then(|g| {
-            g.get(game_version).and_then(|rvs| rvs.iter().find(|rv| rv.self_version() == remote_version).cloned())
+            g.get(game_version).and_then(|rvs| {
+                rvs.iter()
+                    .find(|rv| rv.self_version() == remote_version)
+                    .cloned()
+            })
         })
     }
 }

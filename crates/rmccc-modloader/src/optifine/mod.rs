@@ -10,10 +10,10 @@
 //! - [`OptiFineInstallTask`] implements [`InstallTask`] — Patcher execution,
 //!   launchwrapper extraction, compatibility checks
 
-pub mod version_list;
-pub mod remote_version;
 pub mod install_task;
+pub mod remote_version;
+pub mod version_list;
 
-pub use version_list::OptiFineVersionList;
-pub use remote_version::OptiFineRemoteVersion;
 pub use install_task::OptiFineInstallTask;
+pub use remote_version::OptiFineRemoteVersion;
+pub use version_list::OptiFineVersionList;

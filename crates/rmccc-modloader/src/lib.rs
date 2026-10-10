@@ -26,30 +26,34 @@ pub mod neoforge;
 pub mod optifine;
 pub mod quilt;
 
-use rmccc_error::{RmcccError, Result};
+use rmccc_error::{Result, RmcccError};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Arc;
+use ts_rs::TS;
 
 // ── Re-exports ──
 
 pub use analyzer::{
-    LibraryAnalyzer, LibraryMark, LibraryStatus, LibraryType,
-    BOOTSTRAP_LAUNCHER_MAIN, FORGE_BOOTSTRAP_MAIN, FORGE_OPTIFINE_MAIN, FORGE_TWEAKERS,
-    LAUNCH_WRAPPER_MAIN, LITELOADER_TWEAKER, MOD_LAUNCHER_MAIN,
-    NEO_FORGE_BOOTSTRAP_MAIN, OPTIFINE_TWEAKERS, VANILLA_MAIN, VANILLA_ONLY_MAIN,
+    LibraryAnalyzer, LibraryMark, LibraryStatus, LibraryType, BOOTSTRAP_LAUNCHER_MAIN,
+    FORGE_BOOTSTRAP_MAIN, FORGE_OPTIFINE_MAIN, FORGE_TWEAKERS, LAUNCH_WRAPPER_MAIN,
+    LITELOADER_TWEAKER, MOD_LAUNCHER_MAIN, NEO_FORGE_BOOTSTRAP_MAIN, OPTIFINE_TWEAKERS,
+    VANILLA_MAIN, VANILLA_ONLY_MAIN,
 };
 pub use install_task::InstallTask;
-pub use patch::{GameInstancePatch, PRIORITY_LITELOADER, PRIORITY_LOADER, PRIORITY_MC, PRIORITY_OPTIFINE};
+pub use patch::{
+    GameInstancePatch, PRIORITY_LITELOADER, PRIORITY_LOADER, PRIORITY_MC, PRIORITY_OPTIFINE,
+};
 pub use remote_version::{RemoteVersion, VersionType};
 pub use version_list::VersionList;
 
 // ── ModLoaderType — expanded for all 8 modloaders ──
 
 /// Supported modloader types (GUI-friendly, all 8 modloaders).
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash, TS)]
 #[serde(rename_all = "snake_case")]
+#[ts(export_to = "types.ts")]
 pub enum ModLoaderType {
     Fabric,
     Forge,
@@ -62,6 +66,7 @@ pub enum ModLoaderType {
 }
 
 impl ModLoaderType {
+    #[allow(clippy::should_implement_trait)]
     pub fn from_str(s: &str) -> Option<Self> {
         match s.to_lowercase().as_str() {
             "fabric" => Some(Self::Fabric),
@@ -79,9 +84,14 @@ impl ModLoaderType {
     /// All supported types (for GUI dropdowns).
     pub fn all() -> &'static [Self] {
         &[
-            Self::Fabric, Self::Forge, Self::NeoForge,
-            Self::Quilt, Self::OptiFine, Self::LiteLoader,
-            Self::Cleanroom, Self::LegacyFabric,
+            Self::Fabric,
+            Self::Forge,
+            Self::NeoForge,
+            Self::Quilt,
+            Self::OptiFine,
+            Self::LiteLoader,
+            Self::Cleanroom,
+            Self::LegacyFabric,
         ]
     }
 
@@ -127,15 +137,26 @@ pub struct LoaderVersion {
 pub trait ModLoaderProvider: Send + Sync {
     fn loader_type(&self) -> ModLoaderType;
     async fn list_versions(&self, game_version: &str) -> Result<Vec<LoaderVersion>>;
-    async fn install(&self, game_version: &str, loader_version: &str, game_dir: &Path, java_path: &Path) -> Result<String>;
+    async fn install(
+        &self,
+        game_version: &str,
+        loader_version: &str,
+        game_dir: &Path,
+        java_path: &Path,
+    ) -> Result<String>;
 }
 
-pub fn create_provider(loader_type: &ModLoaderType, client: reqwest::Client) -> Box<dyn ModLoaderProvider> {
+pub fn create_provider(
+    loader_type: &ModLoaderType,
+    client: reqwest::Client,
+) -> Result<Box<dyn ModLoaderProvider>> {
     match loader_type {
-        ModLoaderType::Fabric => Box::new(fabric::FabricInstaller::new(client)),
-        ModLoaderType::Forge => Box::new(forge::ForgeInstaller::new(client)),
-        ModLoaderType::NeoForge => Box::new(neoforge::NeoForgeInstaller::new(client)),
-        _ => panic!("Legacy provider not available for {loader_type:?}"),
+        ModLoaderType::Fabric => Ok(Box::new(fabric::FabricInstaller::new(client))),
+        ModLoaderType::Forge => Ok(Box::new(forge::ForgeInstaller::new(client))),
+        ModLoaderType::NeoForge => Ok(Box::new(neoforge::NeoForgeInstaller::new(client))),
+        _ => Err(RmcccError::Other(format!(
+            "Legacy provider not available for {loader_type:?}"
+        ))),
     }
 }
 
@@ -161,16 +182,43 @@ pub struct DependencyManager {
 impl DependencyManager {
     /// Create a new `DependencyManager` with all version lists pre-registered.
     pub fn new(client: reqwest::Client) -> Self {
-        let mut dm = Self { client: client.clone(), version_lists: HashMap::new() };
+        let mut dm = Self {
+            client: client.clone(),
+            version_lists: HashMap::new(),
+        };
 
-        dm.register("fabric", Arc::new(fabric::FabricVersionList::new(client.clone())));
-        dm.register("quilt", Arc::new(quilt::QuiltVersionList::new(client.clone())));
-        dm.register("forge", Arc::new(forge::ForgeVersionList::new(client.clone())));
-        dm.register("neoforge", Arc::new(neoforge::NeoForgeVersionList::new(client.clone())));
-        dm.register("liteloader", Arc::new(liteloader::LiteLoaderVersionList::new(client.clone())));
-        dm.register("optifine", Arc::new(optifine::OptiFineVersionList::new(client.clone())));
-        dm.register("legacyfabric", Arc::new(legacyfabric::LegacyFabricVersionList::new(client.clone())));
-        dm.register("cleanroom", Arc::new(cleanroom::CleanroomVersionList::new(client.clone())));
+        dm.register(
+            "fabric",
+            Arc::new(fabric::FabricVersionList::new(client.clone())),
+        );
+        dm.register(
+            "quilt",
+            Arc::new(quilt::QuiltVersionList::new(client.clone())),
+        );
+        dm.register(
+            "forge",
+            Arc::new(forge::ForgeVersionList::new(client.clone())),
+        );
+        dm.register(
+            "neoforge",
+            Arc::new(neoforge::NeoForgeVersionList::new(client.clone())),
+        );
+        dm.register(
+            "liteloader",
+            Arc::new(liteloader::LiteLoaderVersionList::new(client.clone())),
+        );
+        dm.register(
+            "optifine",
+            Arc::new(optifine::OptiFineVersionList::new(client.clone())),
+        );
+        dm.register(
+            "legacyfabric",
+            Arc::new(legacyfabric::LegacyFabricVersionList::new(client.clone())),
+        );
+        dm.register(
+            "cleanroom",
+            Arc::new(cleanroom::CleanroomVersionList::new(client.clone())),
+        );
 
         dm
     }
@@ -183,14 +231,22 @@ impl DependencyManager {
     ///
     /// # GUI usage
     /// Call this to populate version dropdowns.
-    pub async fn list_versions(&self, loader_type: &ModLoaderType, game_version: &str) -> Result<Vec<LoaderVersion>> {
+    pub async fn list_versions(
+        &self,
+        loader_type: &ModLoaderType,
+        game_version: &str,
+    ) -> Result<Vec<LoaderVersion>> {
         let id = loader_type.library_id();
         let vl = self.get_vl(id)?;
         vl.load(game_version).await?;
 
-        let versions: Vec<LoaderVersion> = vl.get_versions(game_version)
+        let versions: Vec<LoaderVersion> = vl
+            .get_versions(game_version)
             .iter()
-            .map(|rv| LoaderVersion { version: rv.self_version().to_string(), stable: true })
+            .map(|rv| LoaderVersion {
+                version: rv.self_version().to_string(),
+                stable: true,
+            })
             .collect();
         Ok(versions)
     }
@@ -204,22 +260,54 @@ impl DependencyManager {
         game_version: &str,
         base_version: &rmccc_version::GameVersion,
         loader_version: &str,
+        game_dir: &Path,
+        java_path: &Path,
+    ) -> Result<rmccc_version::GameVersion> {
+        self.install_with_patch(
+            loader_type,
+            game_version,
+            base_version,
+            loader_version,
+            game_dir,
+            java_path,
+        )
+        .await
+        .map(|(version, _)| version)
+    }
+
+    /// Install a modloader and return **both** the merged version and the
+    /// [`GameInstancePatch`].
+    ///
+    /// The patch enables the HMCL-aligned incremental model: the caller can
+    /// serialize a version JSON that carries `inheritsFrom` + `patches` instead
+    /// of a frozen merged manifest (rollback = remove the patch).
+    pub async fn install_with_patch(
+        &self,
+        loader_type: &ModLoaderType,
+        game_version: &str,
+        base_version: &rmccc_version::GameVersion,
+        loader_version: &str,
         _game_dir: &Path,
         _java_path: &Path,
-    ) -> Result<rmccc_version::GameVersion> {
+    ) -> Result<(rmccc_version::GameVersion, GameInstancePatch)> {
         let id = loader_type.library_id();
         let vl = self.get_vl(id)?;
         vl.load(game_version).await?;
 
-        let rv = vl.get_version(game_version, loader_version).ok_or_else(|| {
-            RmcccError::Other(format!("Version {loader_version} not found for {id} on MC {game_version}"))
-        })?;
+        let rv = vl
+            .get_version(game_version, loader_version)
+            .ok_or_else(|| {
+                RmcccError::Other(format!(
+                    "Version {loader_version} not found for {id} on MC {game_version}"
+                ))
+            })?;
 
-        let mut cleaned = self.remove_library(base_version, id);
+        let cleaned = self.remove_library(base_version, id);
         let mut task = rv.create_install_task(self, &cleaned)?;
         let patch = task.execute().await?;
-        patch.merge_into(&mut cleaned);
-        Ok(cleaned)
+        let mut merged = cleaned;
+        patch.merge_into(&mut merged);
+        Ok((merged, patch))
     }
 
     /// Auto-detect installer type from a local JAR file and install.
@@ -261,7 +349,10 @@ impl DependencyManager {
                 vl.load(&game_version).await?;
 
                 // Find matching version from install profile
-                let mc_ver = parsed.get("minecraft").and_then(|v| v.as_str()).unwrap_or(&game_version);
+                let mc_ver = parsed
+                    .get("minecraft")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or(&game_version);
                 let versions = vl.get_versions(mc_ver);
                 if let Some(rv) = versions.into_iter().next() {
                     let mut cleaned = self.remove_library(base_version, id);
@@ -296,7 +387,11 @@ impl DependencyManager {
     }
 
     /// Remove a previously installed modloader from a version.
-    pub fn remove_library(&self, version: &rmccc_version::GameVersion, library_id: &str) -> rmccc_version::GameVersion {
+    pub fn remove_library(
+        &self,
+        version: &rmccc_version::GameVersion,
+        library_id: &str,
+    ) -> rmccc_version::GameVersion {
         let game_version = version.id.clone();
         let mut analyzer = LibraryAnalyzer::analyze(version, &game_version);
         analyzer.remove(library_id);
@@ -304,7 +399,8 @@ impl DependencyManager {
     }
 
     fn get_vl(&self, id: &str) -> Result<&Arc<dyn VersionList>> {
-        self.version_lists.get(id)
+        self.version_lists
+            .get(id)
             .ok_or_else(|| RmcccError::Other(format!("Unknown library: {id}")))
     }
 }

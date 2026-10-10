@@ -6,10 +6,10 @@
 //! `number` (build number → version details). More comprehensive than
 //! the official `promotions_slim.json`.
 
-use crate::version_list::VersionList;
-use crate::remote_version::RemoteVersion;
 use crate::forge::remote_version::ForgeRemoteVersion;
-use rmccc_error::{RmcccError, Result};
+use crate::remote_version::RemoteVersion;
+use crate::version_list::VersionList;
+use rmccc_error::{Result, RmcccError};
 use serde::Deserialize;
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
@@ -107,16 +107,16 @@ impl VersionList for ForgeVersionList {
                                 "{}-{}{}",
                                 info.game_version,
                                 info.version,
-                                info.branch.as_ref()
+                                info.branch
+                                    .as_ref()
                                     .filter(|b| !b.is_empty())
                                     .map(|b| format!("-{b}"))
                                     .unwrap_or_default()
                             );
-                            let file_name = format!(
-                                "{}-{}-{}.{}",
-                                artifact, classifier, file[1], file[0]
-                            );
-                            installer_url = Some(format!("{}{}/{}", web_path, classifier, file_name));
+                            let file_name =
+                                format!("{}-{}-{}.{}", artifact, classifier, file[1], file[0]);
+                            installer_url =
+                                Some(format!("{}{}/{}", web_path, classifier, file_name));
                             break;
                         }
                     }
@@ -171,15 +171,12 @@ impl VersionList for ForgeVersionList {
         game_version: &str,
         remote_version: &str,
     ) -> Option<Arc<dyn RemoteVersion>> {
-        self.versions
-            .read()
-            .ok()
-            .and_then(|g| {
-                g.get(game_version).and_then(|rvs| {
-                    rvs.iter()
-                        .find(|rv| rv.self_version() == remote_version)
-                        .cloned()
-                })
+        self.versions.read().ok().and_then(|g| {
+            g.get(game_version).and_then(|rvs| {
+                rvs.iter()
+                    .find(|rv| rv.self_version() == remote_version)
+                    .cloned()
             })
+        })
     }
 }

@@ -13,10 +13,10 @@
 //! - Processor output SHA-1 verification with idempotency
 //! - DOWNLOAD_MOJMAPS task special handling
 
+use crate::analyzer::LibraryType;
 use crate::install_task::InstallTask;
 use crate::patch::{GameInstancePatch, PRIORITY_LOADER};
-use crate::analyzer::LibraryType;
-use rmccc_error::{RmcccError, Result};
+use rmccc_error::{Result, RmcccError};
 use std::collections::HashMap;
 use std::io::Read;
 use std::path::{Path, PathBuf};
@@ -48,10 +48,7 @@ impl InstallTask for ForgeNewInstallTask {
         let profile = self.parse_install_profile()?;
 
         // ── 3. Build template variables ──
-        let vars = build_template_vars(
-            &self.game_dir,
-            &self.installer_path,
-        );
+        let vars = build_template_vars(&self.game_dir, &self.installer_path);
 
         tracing::info!(
             processor_count = profile.processors.len(),
@@ -79,7 +76,8 @@ impl InstallTask for ForgeNewInstallTask {
 
             tracing::info!(processor = i, jar = %processor.jar, "Executing processor");
 
-            self.execute_processor(processor, &vars, &profile.data).await?;
+            self.execute_processor(processor, &vars, &profile.data)
+                .await?;
         }
 
         // ── 6. Build patch from the version JSON ──
@@ -109,9 +107,9 @@ impl ForgeNewInstallTask {
 
         let mut profile_json = String::new();
         {
-            let mut entry = archive.by_name("install_profile.json").map_err(|e| {
-                RmcccError::Other(format!("install_profile.json not found: {e}"))
-            })?;
+            let mut entry = archive
+                .by_name("install_profile.json")
+                .map_err(|e| RmcccError::Other(format!("install_profile.json not found: {e}")))?;
             entry.read_to_string(&mut profile_json)?;
         }
 
@@ -120,7 +118,10 @@ impl ForgeNewInstallTask {
     }
 
     /// Read the version JSON referenced by the install profile.
-    fn read_version_json(&self, profile: &ForgeNewInstallProfile) -> Result<rmccc_version::GameVersion> {
+    fn read_version_json(
+        &self,
+        profile: &ForgeNewInstallProfile,
+    ) -> Result<rmccc_version::GameVersion> {
         let file = std::fs::File::open(&self.installer_path)?;
         let mut archive = zip::ZipArchive::new(file)
             .map_err(|e| RmcccError::Other(format!("Cannot open installer ZIP: {e}")))?;
@@ -194,7 +195,7 @@ impl ForgeNewInstallTask {
         // Execute
         let mut cmd = tokio::process::Command::new(&self.java_path);
         cmd.arg("-cp")
-            .arg(classpath.join(&std::path::MAIN_SEPARATOR.to_string()))
+            .arg(classpath.join(std::path::MAIN_SEPARATOR_STR))
             .arg(&main_class)
             .args(&args)
             .stdout(std::process::Stdio::piped())
@@ -202,9 +203,10 @@ impl ForgeNewInstallTask {
 
         tracing::debug!(classpath = ?classpath, args = ?args, "Running processor");
 
-        let output = cmd.output().await.map_err(|e| {
-            RmcccError::Other(format!("Failed to run processor: {e}"))
-        })?;
+        let output = cmd
+            .output()
+            .await
+            .map_err(|e| RmcccError::Other(format!("Failed to run processor: {e}")))?;
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
@@ -240,14 +242,19 @@ impl ForgeNewInstallTask {
         let jar_path = maven_to_path(maven_coord, &libs_dir);
 
         let file = std::fs::File::open(&jar_path).map_err(|e| {
-            RmcccError::Other(format!("Processor JAR not found at {}: {e}", jar_path.display()))
+            RmcccError::Other(format!(
+                "Processor JAR not found at {}: {e}",
+                jar_path.display()
+            ))
         })?;
 
         let mut archive = zip::ZipArchive::new(file)
             .map_err(|e| RmcccError::Other(format!("Cannot read processor JAR: {e}")))?;
 
         let mut manifest_entry = archive.by_name("META-INF/MANIFEST.MF").map_err(|e| {
-            RmcccError::Other(format!("META-INF/MANIFEST.MF not found in processor JAR: {e}"))
+            RmcccError::Other(format!(
+                "META-INF/MANIFEST.MF not found in processor JAR: {e}"
+            ))
         })?;
 
         let mut content = String::new();
@@ -273,15 +280,9 @@ fn build_template_vars(game_dir: &Path, installer_path: &Path) -> HashMap<String
     vars.insert("SIDE".to_string(), "client".to_string());
     vars.insert(
         "MINECRAFT_JAR".to_string(),
-        game_dir
-            .join("versions")
-            .display()
-            .to_string(),
+        game_dir.join("versions").display().to_string(),
     );
-    vars.insert(
-        "ROOT".to_string(),
-        game_dir.display().to_string(),
-    );
+    vars.insert("ROOT".to_string(), game_dir.display().to_string());
     vars.insert(
         "INSTALLER".to_string(),
         installer_path.display().to_string(),
@@ -346,7 +347,11 @@ fn maven_to_path(maven: &str, libs_dir: &Path) -> PathBuf {
         format!("{}-{}.jar", artifact, version)
     };
 
-    libs_dir.join(group).join(artifact).join(version).join(jar_name)
+    libs_dir
+        .join(group)
+        .join(artifact)
+        .join(version)
+        .join(jar_name)
 }
 
 /// Compute the SHA-1 hash of a file.
@@ -366,10 +371,7 @@ mod tests {
     fn test_resolve_variable() {
         let vars = HashMap::from([("SIDE".to_string(), "client".to_string())]);
         let data = HashMap::new();
-        assert_eq!(
-            resolve_template("{SIDE}", &vars, &data).unwrap(),
-            "client"
-        );
+        assert_eq!(resolve_template("{SIDE}", &vars, &data).unwrap(), "client");
     }
 
     #[test]
@@ -386,7 +388,8 @@ mod tests {
     fn test_resolve_artifact() {
         let vars = HashMap::new();
         let data = HashMap::new();
-        let result = resolve_template("[net.minecraftforge:forge:1.21-49.0.50]", &vars, &data).unwrap();
+        let result =
+            resolve_template("[net.minecraftforge:forge:1.21-49.0.50]", &vars, &data).unwrap();
         assert_eq!(result, "net.minecraftforge:forge:1.21-49.0.50");
     }
 
@@ -396,7 +399,9 @@ mod tests {
         let path = maven_to_path("net.minecraftforge:forge:1.21-49.0.50", &libs);
         assert_eq!(
             path,
-            PathBuf::from("/game/libraries/net/minecraftforge/forge/1.21-49.0.50/forge-1.21-49.0.50.jar")
+            PathBuf::from(
+                "/game/libraries/net/minecraftforge/forge/1.21-49.0.50/forge-1.21-49.0.50.jar"
+            )
         );
     }
 

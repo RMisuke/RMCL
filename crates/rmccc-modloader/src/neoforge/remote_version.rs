@@ -1,7 +1,7 @@
 //! NeoForge remote version.
 
-use crate::remote_version::{RemoteVersion, VersionType};
 use crate::install_task::InstallTask;
+use crate::remote_version::{RemoteVersion, VersionType};
 use chrono::{DateTime, Utc};
 use rmccc_error::Result;
 
@@ -24,13 +24,8 @@ impl NeoForgeRemoteVersion {
     /// This mirrors HMCL's [`NeoForgeRemoteVersion.normalize()`].
     pub fn normalize(version: &str) -> String {
         let prefix = "1.20.1-";
-        if version.starts_with(prefix) {
-            let rest = &version[prefix.len()..];
-            if rest.starts_with("forge-") {
-                rest["forge-".len()..].to_string()
-            } else {
-                rest.to_string()
-            }
+        if let Some(rest) = version.strip_prefix(prefix) {
+            rest.strip_prefix("forge-").unwrap_or(rest).to_string()
         } else {
             version.to_string()
         }
@@ -38,18 +33,35 @@ impl NeoForgeRemoteVersion {
 }
 
 impl RemoteVersion for NeoForgeRemoteVersion {
-    fn library_id(&self) -> &str { "neoforge" }
-    fn game_version(&self) -> &str { &self.game_version }
-    fn self_version(&self) -> &str { &self.neo_version }
-    fn urls(&self) -> &[String] { &[] }
-    fn release_date(&self) -> Option<DateTime<Utc>> { None }
-    fn version_type(&self) -> VersionType { VersionType::Release }
+    fn library_id(&self) -> &str {
+        "neoforge"
+    }
+    fn game_version(&self) -> &str {
+        &self.game_version
+    }
+    fn self_version(&self) -> &str {
+        &self.neo_version
+    }
+    fn urls(&self) -> &[String] {
+        &[]
+    }
+    fn release_date(&self) -> Option<DateTime<Utc>> {
+        None
+    }
+    fn version_type(&self) -> VersionType {
+        VersionType::Release
+    }
 
-    fn create_install_task(&self, _dm: &super::super::DependencyManager, _manifest: &rmccc_version::GameVersion) -> Result<Box<dyn InstallTask>> {
+    fn create_install_task(
+        &self,
+        _dm: &super::super::DependencyManager,
+        _manifest: &rmccc_version::GameVersion,
+    ) -> Result<Box<dyn InstallTask>> {
         Ok(Box::new(super::install_task::NeoForgeInstallTask {
             game_version: self.game_version.clone(),
             neo_version: self.neo_version.clone(),
             installer_url: self.installer_url.clone(),
+            client: reqwest::Client::new(),
         }))
     }
 }

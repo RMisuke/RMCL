@@ -17,24 +17,24 @@
 //! [`ForgeInstaller`] still implements [`super::ModLoaderProvider`] for existing
 //! CLI and Tauri commands.
 
-pub mod profile;
-pub mod version_list;
-pub mod remote_version;
-pub mod old_install;
-pub mod new_install;
 pub mod install_task;
+pub mod new_install;
+pub mod old_install;
+pub mod profile;
+pub mod remote_version;
+pub mod version_list;
 
-pub use profile::{ForgeInstallProfile, ForgeNewInstallProfile, Processor, DataEntry};
-pub use version_list::ForgeVersionList;
-pub use remote_version::ForgeRemoteVersion;
-pub use old_install::ForgeOldInstallTask;
+pub use install_task::{ForgeInstallState, ForgeInstallTask};
 pub use new_install::ForgeNewInstallTask;
-pub use install_task::{ForgeInstallTask, ForgeInstallState};
+pub use old_install::ForgeOldInstallTask;
+pub use profile::{DataEntry, ForgeInstallProfile, ForgeNewInstallProfile, Processor};
+pub use remote_version::ForgeRemoteVersion;
+pub use version_list::ForgeVersionList;
 
 // ── Legacy ModLoaderProvider (backward compat) ──
 
 use crate::{LoaderVersion, ModLoaderProvider, ModLoaderType};
-use rmccc_error::{RmcccError, Result};
+use rmccc_error::{Result, RmcccError};
 use std::path::Path;
 
 const FORGE_METADATA_URL: &str = "https://hmcl.glavo.site/metadata/forge/";
@@ -82,11 +82,17 @@ impl ForgeInstaller {
             let latest_key = format!("{game_version}-latest");
             let recommended_key = format!("{game_version}-recommended");
             if let Some(latest) = promos.get(&latest_key).and_then(|v| v.as_str()) {
-                versions.push(LoaderVersion { version: latest.to_string(), stable: false });
+                versions.push(LoaderVersion {
+                    version: latest.to_string(),
+                    stable: false,
+                });
             }
             if let Some(recommended) = promos.get(&recommended_key).and_then(|v| v.as_str()) {
                 if versions.iter().all(|v| v.version != recommended) {
-                    versions.push(LoaderVersion { version: recommended.to_string(), stable: true });
+                    versions.push(LoaderVersion {
+                        version: recommended.to_string(),
+                        stable: true,
+                    });
                 }
             }
         }
@@ -174,7 +180,9 @@ impl ModLoaderProvider for ForgeInstaller {
         let installer_url = format!(
             "https://maven.minecraftforge.net/net/minecraftforge/forge/{forge_version}/forge-{forge_version}-installer.jar"
         );
-        let installer_path = game_dir.join(format!("forge-{game_version}-{loader_version}-installer.jar"));
+        let installer_path = game_dir.join(format!(
+            "forge-{game_version}-{loader_version}-installer.jar"
+        ));
 
         tracing::info!(url = %installer_url, "Downloading Forge installer");
         let resp = self
@@ -191,11 +199,18 @@ impl ModLoaderProvider for ForgeInstaller {
             });
         }
 
-        let bytes = resp.bytes().await.map_err(|e| RmcccError::Network(e.to_string()))?;
+        let bytes = resp
+            .bytes()
+            .await
+            .map_err(|e| RmcccError::Network(e.to_string()))?;
         let cursor = std::io::Cursor::new(&bytes);
         match zip::ZipArchive::new(cursor) {
             Ok(_) => tracing::debug!("Forge installer ZIP integrity check passed"),
-            Err(e) => return Err(RmcccError::Other(format!("Forge installer is not a valid ZIP/JAR: {e}"))),
+            Err(e) => {
+                return Err(RmcccError::Other(format!(
+                    "Forge installer is not a valid ZIP/JAR: {e}"
+                )))
+            }
         }
         std::fs::write(&installer_path, &bytes)?;
 
@@ -221,13 +236,25 @@ impl ModLoaderProvider for ForgeInstaller {
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
-            let exit_code = output.status.code().map(|c| c.to_string()).unwrap_or_else(|| "unknown".into());
-            return Err(RmcccError::Other(format!("Forge installer failed (exit {exit_code}): {stderr}")));
+            let exit_code = output
+                .status
+                .code()
+                .map(|c| c.to_string())
+                .unwrap_or_else(|| "unknown".into());
+            return Err(RmcccError::Other(format!(
+                "Forge installer failed (exit {exit_code}): {stderr}"
+            )));
         }
 
-        let version_json_path = game_dir.join("versions").join(&version_id).join(format!("{version_id}.json"));
+        let version_json_path = game_dir
+            .join("versions")
+            .join(&version_id)
+            .join(format!("{version_id}.json"));
         if !version_json_path.exists() {
-            tracing::warn!("Forge installer completed but version JSON not found at {}", version_json_path.display());
+            tracing::warn!(
+                "Forge installer completed but version JSON not found at {}",
+                version_json_path.display()
+            );
             let versions_dir = game_dir.join("versions");
             if let Ok(entries) = std::fs::read_dir(&versions_dir) {
                 for entry in entries.flatten() {

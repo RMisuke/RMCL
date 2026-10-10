@@ -16,3 +16,4 @@ tracing = { workspace = true }
 chrono = { workspace = true }
 zip = { workspace = true }
 sha1 = { workspace = true }
+ts-rs = { workspace = true }

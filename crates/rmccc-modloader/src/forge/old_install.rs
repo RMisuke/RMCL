@@ -3,10 +3,10 @@
 //! Extracts the universal JAR from the installer and directly uses
 //! the embedded `versionInfo` as the patch metadata source.
 
+use crate::analyzer::LibraryType;
 use crate::install_task::InstallTask;
 use crate::patch::{GameInstancePatch, PRIORITY_LOADER};
-use crate::analyzer::LibraryType;
-use rmccc_error::{RmcccError, Result};
+use rmccc_error::{Result, RmcccError};
 use std::io::Read;
 use std::path::PathBuf;
 
@@ -38,8 +38,11 @@ impl InstallTask for ForgeOldInstallTask {
 
         let mut profile_json = String::new();
         {
-            let mut entry = archive.by_name("install_profile.json")
-                .map_err(|e| RmcccError::Other(format!("install_profile.json not found in Forge installer: {e}")))?;
+            let mut entry = archive.by_name("install_profile.json").map_err(|e| {
+                RmcccError::Other(format!(
+                    "install_profile.json not found in Forge installer: {e}"
+                ))
+            })?;
             entry.read_to_string(&mut profile_json)?;
         }
 

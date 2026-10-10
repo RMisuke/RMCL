@@ -13,9 +13,7 @@
 //! | `PRIORITY_OPTIFINE` | 10000 | OptiFine (overrides mainClass) |
 //! | `PRIORITY_LITELOADER` | 60000 | LiteLoader (overrides everything) |
 
-use rmccc_version::{
-    ArgumentRule, AssetIndex, JavaRequirement, Library, VersionArguments,
-};
+use rmccc_version::{ArgumentRule, AssetIndex, JavaRequirement, Library, VersionArguments};
 use serde::{Deserialize, Serialize};
 
 /// Priority for the Minecraft base layer.
@@ -176,11 +174,29 @@ impl GameInstancePatch {
             version.minecraft_arguments = Some(ma.clone());
         }
 
-        // Append to patches list
-        version.patches.push(rmccc_version::GamePatch {
+        // Append to patches list (full patch — enables incremental round-trip).
+        version.patches.push(self.to_game_patch());
+    }
+
+    /// Convert this patch to the version-layer [`rmccc_version::GamePatch`],
+    /// preserving every field so it can be serialized into a version JSON's
+    /// `patches` array (HMCL incremental model — the original JSON is never
+    /// mutated; rollback = removing the patch).
+    pub fn to_game_patch(&self) -> rmccc_version::GamePatch {
+        rmccc_version::GamePatch {
             id: self.id.clone(),
             version: self.version.clone(),
-        });
+            priority: self.priority,
+            main_class: self.main_class.clone(),
+            arguments: self.arguments.clone(),
+            libraries: self.libraries.clone(),
+            asset_index: self.asset_index.clone(),
+            java_version: self.java_version.clone(),
+            inherits_from: self.inherits_from.clone(),
+            compatibility_rules: self.compatibility_rules.clone(),
+            hidden: self.hidden,
+            minecraft_arguments: self.minecraft_arguments.clone(),
+        }
     }
 }
 
@@ -206,9 +222,7 @@ impl Default for GameInstancePatch {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rmccc_version::{
-        ArgumentValue, ReleaseType, VersionArgument,
-    };
+    use rmccc_version::{ReleaseType, VersionArgument};
 
     fn make_vanilla_game_version() -> rmccc_version::GameVersion {
         rmccc_version::GameVersion {
@@ -217,22 +231,13 @@ mod tests {
             main_class: "net.minecraft.client.main.Main".into(),
             asset_index: AssetIndex {
                 id: "17".into(),
-                url: "https://...".into(),
-                sha1: "abc".into(),
-                size: 0,
-                total_size: 0,
+                ..Default::default()
             },
-            downloads: Default::default(),
-            libraries: vec![],
             java_version: Some(JavaRequirement {
                 major_version: 21,
                 component: None,
             }),
-            inherits_from: None,
-            patches: vec![],
-            arguments: None,
-            minecraft_arguments: None,
-            raw_json: None,
+            ..Default::default()
         }
     }
 
@@ -261,9 +266,7 @@ mod tests {
     fn test_patch_merge_arguments() {
         let mut version = make_vanilla_game_version();
 
-        let jvm_arg = VersionArgument::Simple(
-            "-Dforge.enabled=true".into(),
-        );
+        let jvm_arg = VersionArgument::Simple("-Dforge.enabled=true".into());
         let args = VersionArguments {
             jvm: Some(vec![jvm_arg]),
             game: None,
@@ -283,9 +286,9 @@ mod tests {
         let merged = version.arguments.unwrap();
         assert!(merged.jvm.is_some());
         let jvm_args = merged.jvm.unwrap();
-        assert!(jvm_args.iter().any(|a| {
-            matches!(a, VersionArgument::Simple(s) if s == "-Dforge.enabled=true")
-        }));
+        assert!(jvm_args
+            .iter()
+            .any(|a| { matches!(a, VersionArgument::Simple(s) if s == "-Dforge.enabled=true") }));
     }
 
     #[test]
@@ -293,14 +296,12 @@ mod tests {
         let mut version = make_vanilla_game_version();
         version.libraries.push(Library {
             name: "com.example:vanilla-lib:1.0".into(),
-            downloads: None,
-            rules: None,
+            ..Default::default()
         });
 
         let forge_lib = Library {
             name: "net.minecraftforge:forge:1.21-49.0.50".into(),
-            downloads: None,
-            rules: None,
+            ..Default::default()
         };
 
         let patch = GameInstancePatch::with_loader(
@@ -315,7 +316,10 @@ mod tests {
         patch.merge_into(&mut version);
 
         assert_eq!(version.libraries.len(), 2);
-        assert!(version.libraries.iter().any(|l| l.name.contains("vanilla-lib")));
+        assert!(version
+            .libraries
+            .iter()
+            .any(|l| l.name.contains("vanilla-lib")));
         assert!(version.libraries.iter().any(|l| l.name.contains("forge")));
     }
 }

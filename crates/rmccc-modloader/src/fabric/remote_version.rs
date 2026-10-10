@@ -3,8 +3,8 @@
 //! The URLs point to the launch metadata endpoint (`/v2/versions/loader/{game}/{loader}`)
 //! which returns a JSON with loader Maven coordinates, intermediary mappings, and launcher metadata.
 
-use crate::remote_version::{RemoteVersion, VersionType};
 use crate::install_task::InstallTask;
+use crate::remote_version::{RemoteVersion, VersionType};
 use chrono::{DateTime, Utc};
 use rmccc_error::Result;
 

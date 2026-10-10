@@ -2,10 +2,10 @@
 //!
 //! API: `GET https://meta.fabricmc.net/v2/versions/loader` + `/versions/game`
 
-use crate::version_list::VersionList;
-use crate::remote_version::RemoteVersion;
 use crate::fabric::remote_version::FabricRemoteVersion;
-use rmccc_error::{RmcccError, Result};
+use crate::remote_version::RemoteVersion;
+use crate::version_list::VersionList;
+use rmccc_error::{Result, RmcccError};
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 
@@ -145,15 +145,12 @@ impl VersionList for FabricVersionList {
         game_version: &str,
         remote_version: &str,
     ) -> Option<Arc<dyn RemoteVersion>> {
-        self.versions
-            .read()
-            .ok()
-            .and_then(|g| {
-                g.get(game_version).and_then(|rvs| {
-                    rvs.iter()
-                        .find(|rv| rv.self_version() == remote_version)
-                        .cloned()
-                })
+        self.versions.read().ok().and_then(|g| {
+            g.get(game_version).and_then(|rvs| {
+                rvs.iter()
+                    .find(|rv| rv.self_version() == remote_version)
+                    .cloned()
             })
+        })
     }
 }

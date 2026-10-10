@@ -10,18 +10,18 @@
 //! - [`NeoForgeInstallTask`] implements [`InstallTask`] — detects NEOFORGE.RSA
 //!   signature, routes to Forge's new/old install tasks with patch id renaming
 
-pub mod version_list;
-pub mod remote_version;
 pub mod install_task;
+pub mod remote_version;
+pub mod version_list;
 
-pub use version_list::NeoForgeVersionList;
-pub use remote_version::NeoForgeRemoteVersion;
 pub use install_task::NeoForgeInstallTask;
+pub use remote_version::NeoForgeRemoteVersion;
+pub use version_list::NeoForgeVersionList;
 
 // ── Legacy ModLoaderProvider (backward compat) ──
 
 use crate::{LoaderVersion, ModLoaderProvider, ModLoaderType};
-use rmccc_error::{RmcccError, Result};
+use rmccc_error::{Result, RmcccError};
 use std::path::Path;
 
 const NEOFORGE_MAVEN: &str = "https://maven.neoforged.net/releases/net/neoforged";
@@ -54,24 +54,47 @@ impl ModLoaderProvider for NeoForgeInstaller {
             game_version.to_string()
         };
 
-        let resp = self.client.get(NEOFORGE_VERSIONS_URL).send().await
+        let resp = self
+            .client
+            .get(NEOFORGE_VERSIONS_URL)
+            .send()
+            .await
             .map_err(|e| RmcccError::Network(e.to_string()))?;
 
         if !resp.status().is_success() {
-            return Err(RmcccError::HttpStatus { status: resp.status().as_u16(), url: NEOFORGE_VERSIONS_URL.to_string() });
+            return Err(RmcccError::HttpStatus {
+                status: resp.status().as_u16(),
+                url: NEOFORGE_VERSIONS_URL.to_string(),
+            });
         }
 
         #[derive(serde::Deserialize)]
-        struct MavenVersions { versions: Vec<String> }
+        struct MavenVersions {
+            versions: Vec<String>,
+        }
 
-        let data: MavenVersions = resp.json().await.map_err(|e| RmcccError::Network(e.to_string()))?;
-        Ok(data.versions.into_iter()
+        let data: MavenVersions = resp
+            .json()
+            .await
+            .map_err(|e| RmcccError::Network(e.to_string()))?;
+        Ok(data
+            .versions
+            .into_iter()
             .filter(|v| v.starts_with(&prefix))
-            .map(|v| LoaderVersion { stable: !v.contains("beta") && !v.contains("alpha"), version: v })
+            .map(|v| LoaderVersion {
+                stable: !v.contains("beta") && !v.contains("alpha"),
+                version: v,
+            })
             .collect())
     }
 
-    async fn install(&self, game_version: &str, loader_version: &str, game_dir: &Path, java_path: &Path) -> Result<String> {
+    async fn install(
+        &self,
+        game_version: &str,
+        loader_version: &str,
+        game_dir: &Path,
+        java_path: &Path,
+    ) -> Result<String> {
         let version_id = format!("{game_version}-neoforge-{loader_version}");
         tracing::info!(game_version = %game_version, loader_version = %loader_version, version_id = %version_id, "Installing NeoForge");
 
@@ -84,21 +107,26 @@ impl ModLoaderProvider for NeoForgeInstaller {
         let mut installer_bytes = None;
         let mut last_err = String::new();
         for url in &candidate_urls {
-            let resp = self.client.get(url).send().await
+            let resp = self
+                .client
+                .get(url)
+                .send()
+                .await
                 .map_err(|e| RmcccError::Network(e.to_string()))?;
             if resp.status().is_success() {
-                let bytes = resp.bytes().await.map_err(|e| RmcccError::Network(e.to_string()))?;
+                let bytes = resp
+                    .bytes()
+                    .await
+                    .map_err(|e| RmcccError::Network(e.to_string()))?;
                 installer_bytes = Some((bytes, url.clone()));
                 break;
             }
             last_err = format!("{} — HTTP {}", url, resp.status());
         }
 
-        let (bytes, used_url) = installer_bytes.ok_or_else(|| {
-            RmcccError::DownloadFailed {
-                url: candidate_urls[0].clone(),
-                reason: format!("All URLs failed. Last error: {last_err}"),
-            }
+        let (bytes, used_url) = installer_bytes.ok_or_else(|| RmcccError::DownloadFailed {
+            url: candidate_urls[0].clone(),
+            reason: format!("All URLs failed. Last error: {last_err}"),
         })?;
 
         tracing::info!(url = %used_url, "NeoForge installer downloaded");
@@ -112,15 +140,22 @@ impl ModLoaderProvider for NeoForgeInstaller {
         }
 
         let output = tokio::process::Command::new(java_path)
-            .arg("-jar").arg(&installer_path).arg("--installClient").arg(game_dir)
-            .stdout(std::process::Stdio::piped()).stderr(std::process::Stdio::piped())
-            .output().await
+            .arg("-jar")
+            .arg(&installer_path)
+            .arg("--installClient")
+            .arg(game_dir)
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .output()
+            .await
             .map_err(|e| RmcccError::Other(format!("Failed to run NeoForge installer: {e}")))?;
 
         let _ = std::fs::remove_file(&installer_path);
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
-            return Err(RmcccError::Other(format!("NeoForge installer failed: {stderr}")));
+            return Err(RmcccError::Other(format!(
+                "NeoForge installer failed: {stderr}"
+            )));
         }
 
         // Detect the actual version ID created by the installer

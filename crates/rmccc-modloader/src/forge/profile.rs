@@ -195,7 +195,10 @@ mod tests {
         let profile: ForgeInstallProfile = serde_json::from_str(json).unwrap();
         assert_eq!(profile.install.minecraft, "1.12.2");
         assert_eq!(profile.version_info.id, "1.12.2-forge-14.23.5.2859");
-        assert_eq!(profile.version_info.main_class, "net.minecraft.launchwrapper.Launch");
+        assert_eq!(
+            profile.version_info.main_class,
+            "net.minecraft.launchwrapper.Launch"
+        );
         assert!(profile.version_info.minecraft_arguments.is_some());
     }
 

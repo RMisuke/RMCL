@@ -8,11 +8,11 @@
 //! 3. Build a [`GameInstancePatch`] with mainClass, libraries, and arguments
 //! 4. The caller is responsible for merging the patch and downloading libraries
 
+use crate::analyzer::LibraryType;
 use crate::install_task::InstallTask;
 use crate::patch::{GameInstancePatch, PRIORITY_LOADER};
-use crate::analyzer::LibraryType;
-use rmccc_error::{RmcccError, Result};
-use rmccc_version::{Library, VersionArguments, VersionArgument};
+use rmccc_error::{Result, RmcccError};
+use rmccc_version::{Library, VersionArgument, VersionArguments};
 use serde::Deserialize;
 
 /// A Fabric install task that fetches launch metadata and builds a patch.
@@ -64,17 +64,12 @@ impl InstallTask for FabricInstallTask {
             });
         }
 
-        let fabric_info: FabricInfo = resp
-            .json()
-            .await
-            .map_err(|e| RmcccError::Other(format!("Failed to parse Fabric launch metadata: {e}")))?;
+        let fabric_info: FabricInfo = resp.json().await.map_err(|e| {
+            RmcccError::Other(format!("Failed to parse Fabric launch metadata: {e}"))
+        })?;
 
         // Build the patch
-        let patch = build_patch(
-            &self.loader_version,
-            &self.game_version,
-            &fabric_info,
-        )?;
+        let patch = build_patch(&self.loader_version, &self.game_version, &fabric_info)?;
 
         tracing::info!(
             version = %self.loader_version,
@@ -141,11 +136,10 @@ fn build_patch(
                 for entry in arr {
                     // Each entry is a Library JSON object with "name" field
                     if let Some(name) = entry.get("name").and_then(|v| v.as_str()) {
-                        let lib: Library = serde_json::from_value(entry.clone())
-                            .unwrap_or_else(|_| Library {
+                        let lib: Library =
+                            serde_json::from_value(entry.clone()).unwrap_or_else(|_| Library {
                                 name: name.into(),
-                                downloads: None,
-                                rules: None,
+                                ..Default::default()
                             });
                         libraries.push(lib);
                     }
@@ -157,13 +151,11 @@ fn build_patch(
     // Add loader and intermediary as Maven libraries
     let loader_lib = Library {
         name: info.loader.maven.clone(),
-        downloads: None,
-        rules: None,
+        ..Default::default()
     };
     let intermediary_lib = Library {
         name: info.intermediary.maven.clone(),
-        downloads: None,
-        rules: None,
+        ..Default::default()
     };
     libraries.push(loader_lib);
     libraries.push(intermediary_lib);
@@ -219,8 +211,14 @@ mod tests {
         );
         // Should have common lib + loader + intermediary = 3
         assert_eq!(patch.libraries.len(), 3);
-        assert!(patch.libraries.iter().any(|l| l.name.contains("fabric-loader")));
-        assert!(patch.libraries.iter().any(|l| l.name.contains("intermediary")));
+        assert!(patch
+            .libraries
+            .iter()
+            .any(|l| l.name.contains("fabric-loader")));
+        assert!(patch
+            .libraries
+            .iter()
+            .any(|l| l.name.contains("intermediary")));
     }
 
     #[test]
@@ -283,11 +281,11 @@ mod tests {
         let args = patch.arguments.unwrap();
         let game_args = args.game.unwrap();
         // Should contain --tweakClass and the tweaker
-        assert!(game_args.iter().any(|a| {
-            matches!(a, VersionArgument::Simple(s) if s == "--tweakClass")
-        }));
-        assert!(game_args.iter().any(|a| {
-            matches!(a, VersionArgument::Simple(s) if s.contains("FabricTweaker"))
-        }));
+        assert!(game_args
+            .iter()
+            .any(|a| { matches!(a, VersionArgument::Simple(s) if s == "--tweakClass") }));
+        assert!(game_args
+            .iter()
+            .any(|a| { matches!(a, VersionArgument::Simple(s) if s.contains("FabricTweaker")) }));
     }
 }

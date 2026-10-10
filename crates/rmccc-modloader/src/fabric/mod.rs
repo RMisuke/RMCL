@@ -14,18 +14,18 @@
 //! [`FabricInstaller`] still implements [`super::ModLoaderProvider`] for existing
 //! CLI and Tauri commands that haven't migrated to the new trait architecture.
 
-pub mod version_list;
-pub mod remote_version;
 pub mod install_task;
+pub mod remote_version;
+pub mod version_list;
 
-pub use version_list::FabricVersionList;
-pub use remote_version::FabricRemoteVersion;
 pub use install_task::FabricInstallTask;
+pub use remote_version::FabricRemoteVersion;
+pub use version_list::FabricVersionList;
 
 // ── Legacy ModLoaderProvider (backward compat) ──
 
 use crate::{LoaderVersion, ModLoaderProvider, ModLoaderType};
-use rmccc_error::{RmcccError, Result};
+use rmccc_error::{Result, RmcccError};
 use std::path::Path;
 
 const FABRIC_META_BASE: &str = "https://meta.fabricmc.net/v2";
@@ -145,7 +145,9 @@ impl ModLoaderProvider for FabricInstaller {
             "Installing Fabric"
         );
 
-        let profile = self.fetch_profile_json(game_version, loader_version).await?;
+        let profile = self
+            .fetch_profile_json(game_version, loader_version)
+            .await?;
 
         let main_class = match &profile["mainClass"] {
             serde_json::Value::String(s) => s.clone(),
@@ -159,8 +161,14 @@ impl ModLoaderProvider for FabricInstaller {
 
         let mut version_json = profile;
         if let Some(obj) = version_json.as_object_mut() {
-            obj.insert("id".to_string(), serde_json::Value::String(version_id.clone()));
-            obj.insert("mainClass".to_string(), serde_json::Value::String(main_class));
+            obj.insert(
+                "id".to_string(),
+                serde_json::Value::String(version_id.clone()),
+            );
+            obj.insert(
+                "mainClass".to_string(),
+                serde_json::Value::String(main_class),
+            );
         }
 
         let json_path = versions_dir.join(format!("{version_id}.json"));
