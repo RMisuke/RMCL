@@ -11,7 +11,8 @@ RMCCC（Rust Minecraft Core Client）是一个使用 **Rust** 编写的 Minecraf
 - **资源管理**：游戏文件完整性检查、按需下载、SHA1 校验与自动修复。
 - **模组加载器**：安装/列出版本，支持 Fabric、Forge、NeoForge、Quilt、LiteLoader、OptiFine、Cleanroom、LegacyFabric。
 - **智能启动**：Java 版本自适应（`find_java` 自动选择最接近的兼容版本）、响应文件（Response file）传递 JVM 参数防止 `ps aux` 泄露 token、`--add-opens`/`--add-exports` 可重复参数正确保留。
-- **桌面 GUI（Tauri）**：SolidJS 前端，Dashboard / 登录 / 设置页面，通过 IPC 命令调用后端。
+- **桌面 GUI（Tauri）**：SolidJS 前端，Dashboard / 登录 / 设置 / 实例设置 / Mod 浏览器 / 插件页面，通过 IPC 命令调用后端。
+- **声明式插件（Phase 2）**：`.rmcpkg` 包（无第三方代码）、权限审查与审计、生命周期状态机、schema 校验配置；`rmcli plugin …` 与 `/plugins` 页面。
 
 ## 技术栈
 
@@ -119,8 +120,8 @@ rmcli
 
 | 指标 | 结果 |
 |------|------|
-| 单元测试 | 全部 120+ 通过（含 rmccc-modloader 36 个），零失败 |
-| 编译 | `cargo build --release` 无错误、无警告 |
+| 单元/集成测试 | **468 passed / 0 failed**（含插件 74 项、IPC 契约 37 项） |
+| 编译 | `cargo build --release` 通过；`strip = true` 仍因缺 `libLLVM.dylib` 告警，需手动 strip（ADR-011） |
 | 全量安装 | `cargo install --path src-cli` 成功，`rmcli` 位于 `~/.cargo/bin` |
 | 安装后验证 | 版本/帮助、实例列表、认证状态、Fabric/NeoForge 版本列表均正常 |
 | Bug 统计 | 累计发现 19 个，已修复 18 个（修复率 94.74%） |
@@ -137,12 +138,17 @@ rmcli
 - **NeoForge 双 Maven API**：当前通过 BMCLAPI 代理获取版本，后续可对接 `net/neoforged/forge` + `net/neoforged/neoforge` 双端点。
 - **Forge/NeoForge Processor**：当前使用 `java -jar installer.jar --installClient` 整包安装，后续可改为进程内逐 processor 执行以支持幂等性检查。
 - **体积红线**：持续通过 `cargo bloat` 评估依赖体积，确保最终二进制 < 10MB。
-- **后续 Phase**：按 `docs/DEVELOPMENT_PLAN.md` 推进（Mods API、GUI 完善、配置 Schema 版本化、Task 框架等）。
+- **后续 Phase**：按 `docs/roadmap/` 推进 Phase 3–7（Dashboard 布局/主题、隔离 UI、逻辑运行时、Agent、签名分发）。
 
 ## 文档索引
 
-- [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) — 完整架构设计
+- [`docs/AUDIT_2026-10-20.md`](docs/AUDIT_2026-10-20.md) — **系统架构 + 实现 + 功能矩阵 + 技术债审计（全景，先读这个）**
+- [`docs/PROJECT_STATUS.md`](docs/PROJECT_STATUS.md) — 现状交接与按轮次的变更记录
+- [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) — 设计基线（架构决策的权威来源）
 - [`docs/DEVELOPMENT_PLAN.md`](docs/DEVELOPMENT_PLAN.md) — 开发路线图
+- [`docs/PLUGIN_AUTHORING.md`](docs/PLUGIN_AUTHORING.md) — 插件编写指南（Manifest/权限/配置/打包）
+- [`docs/roadmap/`](docs/roadmap/) — Phase 0–7 细化执行计划（含 Phase 2 插件协议）
+- [`docs/adr/`](docs/adr/) — 架构决策记录（ADR-002/003/004/011 已 accepted）
 - [`docs/test_log.md`](docs/test_log.md) — 测试日志与 Bug 记录
 - [`docs/MODLOADER_IMPLEMENTATION_PLAN.md`](docs/MODLOADER_IMPLEMENTATION_PLAN.md) — 模组加载器实现方案
 - [`AGENTS.md`](AGENTS.md) — AI 协作规范

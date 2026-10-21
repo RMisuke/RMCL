@@ -96,6 +96,13 @@ RMCL/
 │   │       └── modrinth.rs       # Modrinth search / versions / download
 │   ├── rmccc-profile/            # Profile/instance management
 │   │   └── src/lib.rs            # ProfileStore JSON CRUD + launch options
+│   ├── rmccc-platform/           # 平台适配层（Phase 1，指南 §5.7）
+│   │   └── src/                  # descriptor / fs / process / shell / java
+│   │                             # macOS 后端 + Windows/Linux 占位 + mock
+│   ├── rmccc-plugin/             # 声明式插件系统（Phase 2，ADR-003/004）
+│   │   └── src/                  # manifest / version / capability / package /
+│   │                             # installer / registry / permissions /
+│   │                             # config / manager
 │   └── rmccc-core/               # Core orchestrator + DI container
 │       └── src/
 │           ├── lib.rs            # CoreContext, re-exports
@@ -109,7 +116,7 @@ RMCL/
 │   │   ├── registry.rs           # help/completion metadata (sync-asserted)
 │   │   ├── output.rs             # Unified result envelope + plain mode
 │   │   ├── error.rs              # CliError + stable exit codes
-│   │   ├── context.rs            # CliContext — backend API facade
+│   │   ├── context/              # CliContext — backend API facade（按域拆分）
 │   │   ├── repl.rs               # Interactive REPL
 │   │   └── commands/             # auth config profile instance resource
 │   │                             # modloader mod launch system
@@ -1347,9 +1354,9 @@ User clicks "Launch" on a profile
 
 ## 11. IPC Command Table
 
-48 commands, all registered in `src-tauri/src/main.rs` `generate_handler!`.
-Definition count and registration count are verified equal (see
-`PROJECT_STATUS.md` §5.3).
+46 commands, all registered in `src-tauri/src/main.rs` `generate_handler!`.
+Definition count and registration count are verified equal (2026-10-20 实测：
+`grep -c 'commands::' main.rs` = 46，与 `commands/*.rs` 中 `pub fn` 数一致).
 
 | Command | Handler | Description |
 |---------|---------|-------------|
@@ -1400,8 +1407,11 @@ Definition count and registration count are verified equal (see
 | `log_clear` | `logs.rs` | Clear/truncate log file |
 | `open_external_url` | `external.rs` | Open a URL in the system browser (deep-link) |
 
-> 前端现状：`src/ipc/api.ts` + 路由页共调用其中 41 个；`instance_paths` 与实例设置页
-> `/instances/:id` 见 §9.1。
+> 前端现状（2026-10-20 实测）：**UI 可直达 27 个**（Dashboard 11 / InstanceSettings 8 /
+> Login 3 / Settings 5）；另有 15 个只在 `src/ipc/api.ts` 有 wrapper 但无页面调用
+> （`mod_search` 等 4 个、`download_pause/resume`、4 个账户管理、`log_get/clear`、
+> `instance_check_completion/repair/refresh`）；`instance_list/duplicate/rename/remove`
+> 连 wrapper 都没有——它们操作的是"版本 id"而非 profile，见审计文档 §7.4。
 
 ## 12. Size Budget
 
@@ -1598,6 +1608,8 @@ strategy:
     "loader_type": "fabric",
     "loader_version": "0.15.6"
   },
+  "isolation": null,
+  "override_properties": ["java_path", "memory_mb"],
   "java_path": null,
   "jvm_args": ["-XX:+UseG1GC", "-XX:+ParallelRefProcEnabled"],
   "game_args": [],
@@ -1609,6 +1621,10 @@ strategy:
 }
 ```
 
+> `isolation`（`never`/`modded`/`always`，`null` = 跟随全局 `default_isolation`）与
+> `override_properties`（覆盖名单，见 §3.4）是继承模型的一部分：名单内的字段取实例值，
+> 其余取全局默认值；**实例里填过的值即使不覆盖也保留在文件中**。
+>
 > 扩展字段（全部 `#[serde(default)]`，旧 JSON 可无损加载）：`min_memory_mb`、
 > `metaspace_mb`、`process_priority`、`width` / `height` / `fullscreen`、
 > `use_native_glfw` / `use_native_openal` / `use_custom_natives`、
@@ -1796,3 +1812,51 @@ Logging is infrastructure, not polish. Adding it late means retrofitting spans i
 
 ### Why response files for game launch arguments?
 `--accessToken` in process args is visible via `ps aux` / Task Manager. Writing args to a temporary file and passing `@filepath` to Java keeps tokens out of process listings. File is deleted immediately after spawn.
+
+## 20. 插件系统（Phase 2 已实现）
+
+> 目标架构与阶段路线见指南 §6–§14；协议细节以
+> [ADR-003](adr/ADR-003-plugin-package-and-install-transaction.md) /
+> [ADR-004](adr/ADR-004-plugin-manifest-and-versioning.md) 为准。本节只记录落地形态。
+
+### 20.1 边界
+
+- **Phase 2 不执行第三方代码**：只支持数据型插件（主题、翻译、声明式卡片/页面）。
+  `entry.ui` / `entry.logic` 在 Manifest 校验阶段拒绝；包内出现 `ui/`、`logic/`、
+  脚本或可执行文件直接拒绝。隔离 UI 在 Phase 4，逻辑运行时在 Phase 5。
+- 插件**拿不到 `CoreContext`/Token**；权限由后端 `PluginManager`/`PermissionStore` 判定。
+- 损坏插件/注册表只产生诊断，不阻断主应用启动。
+
+### 20.2 目录与事实来源
+
+```text
+<data_dir>/
+  plugins/<plugin-id>/<version>/...     # 不可变版本目录（可并存，支持回滚）
+  plugin-data/<plugin-id>/config.json   # 用户配置（卸载默认保留）
+  plugin-state/registry.json            # 安装/启用状态唯一来源
+  plugin-state/permissions.json         # 授权（与 Manifest 声明分离）
+  plugin-state/audit.jsonl              # 权限审计（只追加）
+  plugin-state/staging/<uuid>/          # 安装暂存（成功后删除）
+```
+
+**不维护 `enabled.json`**：启用状态是 `registry.json` 生命周期状态的一部分。
+
+### 20.3 安装事务
+
+`inspect(.rmcpkg)` → staging 解压 → Manifest/限额/路径/类型校验 → 依赖/循环检查 →
+`rename` 到 `plugins/<id>/<version>` → 原子写注册表 → 原子写权限 → 删除 staging。
+任一步失败：删除新版本目录并恢复注册表/权限内存快照。升级保留旧版本目录与
+`previousVersion`；新权限一律进入 pending，插件回到 `installed_disabled` 等待审查。
+
+### 20.4 IPC / CLI / UI
+
+- CLI：`rmcli plugin …`（13 子命令）。
+- IPC：15 条 `plugin_*` 命令；`/plugins` 页面负责安装、权限审查、配置、回滚、卸载。
+- 贡献项（`dashboardCards` / `settingsPages` / `themes`）只汇总**已启用**插件，
+  注册键为 `<pluginId>/<localId>`，供 Phase 3 的 Dashboard 布局引擎消费。
+
+### 20.5 平台归属
+
+路径/zip 校验是 OS 无关逻辑；**原子替换**与权限收紧经
+[`PlatformFs`](../crates/rmccc-platform/src/fs.rs)（`atomic_replace` / `restrict_owner_only`），
+`rmccc-plugin` 内零 `#[cfg]`。Windows/Linux 后端返回 `UnsupportedPlatform`，原生验证 deferred。

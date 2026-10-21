@@ -1,12 +1,249 @@
-# RMCCC 项目现状与继续开发交接（2026-10-10 实测）
+# RMCCC 项目现状与继续开发交接（2026-10-21 更新）
 
-> 本文档是**当前状态的单一入口**，用实测结果取代此前各审计快照对"当前状态"的表述。
+> 本文档是**变更记录与交接入口**，按轮次记录"这轮改了什么"。
+> **完整架构说明 + 功能矩阵 + 技术债台账**见 [`AUDIT_2026-10-20.md`](AUDIT_2026-10-20.md)（横切全景，不按轮次组织）。
 > 历史审计与整改台账仍然有效作为**问题溯源**（见 §6），但其"当前状态"结论已过期。
-> 本文所有数字均由本次在本机实际执行命令得到，未采信文档自述。
+> 本文所有数字均由本机实际执行命令得到，未采信文档自述。
 
 ---
 
 ## 0. 更新记录
+
+**2026-10-20（第 8 轮）**：执行 **Phase 0 基线重建**（`docs/roadmap/01_phase0_baseline.md` 切片 0.1+0.2+0.3），
+产出可信基线，未做业务重构。
+
+- **工具链**：Homebrew rustup 1.29.1 下重装 stable **1.99.1** 到 `~/.rustup/toolchains/stable-aarch64-apple-darwin`
+  （原 1.98.1 已随环境回归丢失）。`~/.cargo/bin` shim 未生成，调用须显式
+  `export PATH="$HOME/.rustup/toolchains/stable-aarch64-apple-darwin/bin:$PATH"`。
+- **五门禁复跑全绿**：`cargo fmt` ✅、`clippy --all-targets` ✅、`clippy --lib --bins` panic/unwrap ✅、
+  `cargo test --workspace` **300 passed / 0 failed**（含 1 doc-test）、`pnpm typecheck` ✅、`pnpm build` ✅。
+- **工具链升级回归**：1.99 新 lint `clippy::double_must_use` 击中 5 处 async_trait trait
+  （`DownloadManager`/`VersionProvider`/`AuthProvider`/`ModSource`/`ModLoaderProvider` 等），
+  已加 1 处 trait 级 + 4 处 crate 级 `#[allow]`（注释"1.99.1 兼容、非业务逻辑"），零行为变更。
+- **体积基线**（本机实测）：GUI `rmccc` 未剥离 10,498,088 B（10.01 MiB）/ 手动 strip 7,170,752 B（6.84 MiB）；
+  CLI `rmcli` 未剥离 6,156,904 B（5.87 MiB）/ 手动 strip 4,485,120 B（4.28 MiB）。
+  `strip = true` 仍失效（`rust-objcopy` SIGABRT，缺 `libLLVM.dylib`），可系统 `strip` 手动后处理。
+  `<10MB` 度量对象待 ADR-011 定稿（GUI 未剥离 10.01 MiB 恰在红线）。
+- **Phase 0 状态**：0.1–0.5 全部完成。0.4 平台执行散落清单由 `docs/roadmap/PLATFORM_ADAPTATION.md` 的 grep 映射覆盖；
+  0.5 已在 `docs/adr/` 建立索引 + ADR-001（OS 最低版本）、ADR-011（<10MB = stripped 主可执行，**已 accepted**）、
+  ADR-012（macOS Intel 策略）、ADR-002 占位。ADR-011 accepted 后 `AGENTS.md` 体积红线已同步为
+  "strip 后的主可执行 < 10 MiB"；其余 ADR 仍 `proposed`。
+- **Phase 0.5.1 前端契约统一（同日）**：26 处裸 `safeInvoke` 改用 `api.ts` 分域 wrapper；
+  `api.ts` wrapper 全部改为 `safeInvoke` 返回 `{ok,error}`（统一错误处理）；`i18n` 3 处适配；
+  `events.ts` 补 `INSTANCES_REFRESHED`；`mods` 在实例设置页以 `mods as modsApi` 别名避开局部 signal 遮蔽。
+  `pnpm typecheck` ✅、`pnpm build` ✅（JS 118.59KB gzip 34.91KB）。`AUDIT` §10.2 与 P2-11 已回填。
+- **Phase 0.5.2 Mod 浏览器（同日）**：新增 `/mods` 页（`src/routes/ModBrowser.tsx`）——实例选择 +
+  Modrinth 搜索 + 分页 + 展开版本列表 + 安装；Dashboard 实例面板加入口。复用 `mods.search/getVersions/install`。
+  类型桥补 `ModInfo` / `ModSearchResult` 的 ts-rs 导出（`u64` 字段以 `#[ts(type = "number")]` 修正为 number，
+  避免生成 `bigint` 与 JSON 实际不符），`types.ts` 重新生成，`bindings.rs` 数组 24→26。
+  `pnpm typecheck` ✅、`build` ✅（JS 123.80KB gzip 36.41KB / CSS 32.99KB gzip 7.17KB）；
+  `cargo fmt` / `clippy` 通过。UI 可直达命令 **27 → 30**，`AUDIT` §1.1/§1.2/§10.5/P1-1/P2-6 已同步。
+- **Phase 0.5.3 / 0.5.5 / 0.5.6（同日）**：Settings 页新增「账户管理」分区（列表 / 切换 / 删除 / 刷新令牌，
+  复用 `auth_list/switch/remove/refresh`）与「日志」分区（读取 200 行 / 清空，复用 `log_get/clear`）；
+  实例设置页新增「完整性」分区（检查 / 修复，复用 `instance_check_completion/repair`）。
+  `pnpm typecheck` / `build` 通过（JS 130.64KB gzip 37.97KB）。UI 可直达 **30 → 38**；
+  `AUDIT` §1.1/§1.2/§10.5/P1-2/P2-6 已同步。
+- **Phase 0.5.4 本地 mod 安装（同日，方案 A）**：引入 `tauri-plugin-dialog`（`dialog:allow-open` capability），
+  新增命令 `mod_pick_and_install`（Rust 侧原生文件选择器 + 复制到 `instance_mods_dir`）与
+  `mod_install_local`（按路径复制，备用）；实例设置页「模组」分区加「从本地文件安装…」按钮。
+  IPC 命令 **46 → 48**，UI 可直达 **38 → 39**。体积：unstripped 10.30 MiB / **stripped 7.03 MiB**
+  （dialog 依赖 +0.19 MiB，仍 < ADR-011 的 10 MiB 红线）。`cargo fmt`/`clippy`、`pnpm typecheck` 通过。
+  **Phase 0.5 全部切片（0.5.1–0.5.6）完成。**
+- **修复：Mod 下载 `error decoding response body`（同日）**：根因是 `reqwest` 只启用
+  `rustls-tls/json/stream`，**缺 `gzip`/`brotli`**，Modrinth/CDN 的压缩响应用 `.text()`/`.bytes()`
+  解码时报错。已在 workspace `Cargo.toml` 加 `gzip`/`brotli` feature，并让 `download_bytes` /
+  `get_download_url` 的错误保留底层 source（含 HTTP status）便于诊断。体积 strip 后 **7.03 → 7.20 MiB**
+  （仍 < ADR-011 的 10 MiB）。
+- **Phase 1.5 zip-slip 修复（2026-10-21，审计 P2-4）**：`rmccc-launch/src/natives.rs` 新增
+  `safe_relative_entry()`，拒绝绝对路径、`..`、Windows 盘符前缀与空路径；`decompress_natives`
+  只接受安全相对路径拼接目标目录，恶意条目记 warn 并跳过。新增正负向单测（`rmccc-launch` 50→51）。
+  `cargo fmt`/`clippy` 通过。**Phase 1 开始（1.5 完成）**。
+- **修复：Mod 安装 `TimedOut`（同日）**：`error decoding response body` 修好后暴露第二个问题——
+  `rmccc-core` 的 reqwest 设了 **总超时 120s**（`.timeout`），慢速 CDN 下载大 jar 时 body 读到一半
+  被 `TimedOut` 误杀（`kind: Body`）。改为 **`read_timeout(120s)`**（单次读间隔）+ `connect_timeout(15s)`，
+  移除总超时：只要仍在收数据就能续传式读完，真正卡死才失败。
+
+- **Phase 1.2 编排层收口（2026-10-21，审计 P1-3，最高优先级结构债）**：`rmccc-core::pipeline` 成为
+  Tauri 与 CLI **唯一**的业务编排入口。
+  - `install_game`：三类别下载合并为**单批次**（进度单调，百分比不再回弹）+ 磁盘空间预检（120% 余量）
+    + natives 解压；返回 `SetupReport { total_files, failed_files }`。删除旧的 `repair_resources`
+    （第三份分叉实现、0 调用方）。
+  - 新增 `repair_instance`（版本 id 入口，Tauri `instance_repair` 与 CLI `resource repair` /
+    `ensure_launch_ready` 共用）、`ensure_launch_ready` 改为其 profile 视图薄委托。
+  - 新增 `commit_install`（重读 profile → 写 `game_version` → 刷索引）与 `refresh_repository`，
+    两端共用同一提交路径。
+  - `launch_game` 改为返回 `Arc<ManagedProcess>`（**不阻塞**），CLI 与 Tauri 各自只需提供
+    `ProcessListener`；`last_played` 在启动成功处统一更新。
+  - 顺带修掉的行为差异：GUI 安装原先**不解压 natives**；安装提交原先用几秒前的 profile 快照覆盖用户设置；
+    Tauri 自定义 Java 路径不存在时要到 spawn 才失败（现立即 `JavaNotFound`）；
+    `wait_for_batch` 通知早于最终进度回调（失败计数读取竞态），已把 `notify_one` 移到回调之后。
+  - 代码量：删掉三处复刻（约 400 行），`version.rs` 309→203 行、`launch.rs` 309→168 行。
+  - `cargo fmt` ✅、`clippy --workspace --all-targets -D warnings` ✅、`cargo test --workspace`
+    **311 passed / 0 failed**（`rmccc-core` 新增 10 个编排/工具单测）、`pnpm typecheck` ✅、`pnpm build` ✅。
+
+- **Phase 1.1a 平台适配层骨架（2026-10-21，指南 §5.7）**：新建 `crates/rmccc-platform`（第 11 个
+  workspace crate），把"平台执行"从领域 crate 抽成可注入的 trait：
+  - `PlatformDescriptor`：os/arch、`classpath_separator`、`exe_suffix`、`default_encoding`、
+    `native_classifier_candidates`、`matches_rule_os/arch`（`osx`/`macos`、`arm64`/`aarch64` 均兼容）。
+    领域层日后判断 Mojang `rules[].os` 一律经它，不再裸写 `cfg!`。
+  - `PlatformFs`（`restrict_owner_only` / `make_executable` / `symlink` / `remove_symlink`）、
+    `PlatformProcessControl`（`terminate_tree` / `set_priority` / `priority_command_prefix` /
+    `configure_child_process_group`）、`PlatformShell`（`open_url` 白名单 http(s) + `open_path`）。
+  - macOS 后端全部落地（`chmod 600/755`、`killpg`、`setpriority`、`nice` 前缀、`process_group(0)`、`open`）；
+    Windows/Linux 后端为 `UnsupportedFs/Process/Shell`，一律返回 `UnsupportedPlatform`（deferred 待原生 CI）。
+  - `Platform::current()` 是 crate 内**唯一**的 `#[cfg]` 选择器；`Platform::mock()` + `MockPlatform`
+    可断言调用序列、可模拟单次失败，供领域层单测使用。
+  - `CoreContext.platform: Arc<Platform>` 在组装层注入一次（指南 §5.7.1 第 5 条）。
+  - `rmccc-error` 新增 `Validation` / `UnsupportedPlatform` 变体，`ErrorCode::UnsupportedPlatform`
+    （CLI 退出码 11），`types.ts` 已重新生成。
+  - **故意未做**：`CredentialStore`（指南要求先评估 Keychain；现有 AES vault 除 chmod 外与平台无关）、
+    `JavaDetector`（`rmccc-launch/java.rs` 已是 per-OS 分文件，随 1.1d 提升为 trait）。
+  - 门禁：`cargo test --workspace` **335 passed / 0 failed**（平台 crate 23 + doc-test 1）、
+    `fmt` ✅、`clippy --all-targets -D warnings` ✅、`clippy --lib --bins -D panic -D unwrap_used` ✅、
+    `pnpm typecheck` ✅、`pnpm build` ✅。
+  - 下一步：**1.1b 数据筛选切换**（`rmccc-version` 去裸 `cfg!`）→ 1.1c 执行迁移 → 1.1d Java trait → 1.1e 分隔符。
+
+- **Phase 1.1b 数据筛选去裸 `cfg!`（2026-10-21，指南 §5.7.1 第 3 条，审计 P2-12）**：
+  `rmccc-version` 现在**零平台 `#[cfg]`**。
+  - `libraries` / `arguments` / `compatibility` / `file_layout` / `completion` /
+    `default_game_repository` 全部改收 `&PlatformDescriptor`；
+    删掉 3 个 `cfg` 函数（`current_os_name`×2 / `current_arch`×2 / `minecraft_arch`）与 per-OS classifier 分支。
+  - native classifier 的**唯一事实来源**收归 `PlatformDescriptor::native_classifier_candidates()`
+    （含 `natives-osx` / `natives-windows-64` / `natives-unix` 等历史别名），新增
+    `accepts_native_classifier` / `minecraft_arch()`。
+  - 注入路径：`CoreContext.platform` → `pipeline` / `LaunchOptions.platform`（新增字段）/
+    `DefaultGameRepository::with_platform`。
+  - 测试改造：所有 `#[cfg(target_os)] assert!` 删除，改为显式描述符**双向断言**
+    （同一份 manifest 喂 macOS / Windows 描述符，结果互补）——原先那些断言在非 macOS 上从未执行过。
+  - **顺带修掉真实 bug（P2-12）**：`library_applies` 默认值反了。Mojang
+    `Library.isRulesSatisfied` / HMCL `appliesToCurrentEnvironment` 是 **default-deny**，
+    本项目原为 default-allow → 有 `rules` 但无命中的库也被选中。用真实 1.20.4 manifest 实测：
+    修复前 macOS 选中 **88/88** 个 library（含 30 个 `natives-windows*` / `netty…:linux-x86_64`），
+    修复后 **58** 个，异平台 natives 正确排除（每次安装少下 30 个无用 jar，classpath 不再被污染）。
+    已加回归测试 `test_library_selection_matches_real_1_20_4_semantics`。
+  - 门禁：`cargo test --workspace` **339 passed / 0 failed**、`fmt` ✅、
+    `clippy --all-targets -D warnings` ✅、`clippy --lib --bins -D panic -D unwrap_used` ✅、
+    `pnpm typecheck` ✅、`pnpm build` ✅。
+  - 下一步：**1.1c 执行迁移**（`terminate_tree` / `restrict_owner_only` / `make_executable` /
+    `symlink` / 进程组）→ 1.1d Java trait → 1.1e 分隔符。
+
+- **Phase 1.1c 执行迁移（2026-10-21，指南 §5.7.2，真机烟测通过）**：把"随 OS 改变的系统调用"
+  全部迁入平台适配层，领域 crate 只剩 `java.rs` 4 处 `#[cfg]`（属 1.1d）。
+  - 进程终止：Tauri `launch_kill` / CLI `launch_stop` → `platform.process.terminate_tree(pid)`；
+    `libc::kill` 与 `taskkill` 分支删除，`src-tauri` + `src-cli` 的 `libc` 依赖一并移除。
+  - 进程组：`spawn_game(.., &Platform)` → `configure_child_process_group`。
+  - 优先级：`nice -n N` 前缀 → `priority_command_prefix`；`ProcessPriority` 定义收归平台 crate。
+  - 文件权限：`TokenVault::init(path, fs)` 与 argfile → `restrict_owner_only`（0600）；
+    启动脚本 → `make_executable`（0755）。
+  - 符号链接：natives 临时链接 → `symlink` / `remove_symlink`。
+  - 平台数据去内联：`-Xdock:name` → `descriptor.extra_jvm_args()`（`{instance}` 模板）、
+    `-Duser.home` → `is_windows()`、分隔符 → `classpath_separator()`、
+    `-Dfile.encoding` → `default_encoding()`、非 ASCII natives 兜底 → `needs_non_ascii_natives_workaround()`。
+  - 顺带：`decompress_natives` 按平台过滤 native jar → 安装日志里 **30 条**
+    "Native library JAR not found" 噪音归零。
+  - **真机烟测（macOS Apple Silicon）**：`rmcli` 新建实例 → `resource install` 1.20.4
+    **3870 文件 / 0 失败 / natives 16 个**；`launch run` **启动到主菜单**
+    （OpenAL 初始化「外置耳机」、全部纹理图集创建、正常 `exit_code 0` 退出）；
+    `.key` 权限实测 `-rw-------`。
+  - 门禁：`cargo test --workspace` **341 passed / 0 failed**（新增真实子进程
+    `setpgid`+`killpg` 烟测）、`fmt` ✅、`clippy --all-targets -D warnings` ✅、
+    `clippy --lib --bins -D panic -D unwrap_used` ✅。
+  - 下一步：**1.1d Java 探测提升为 `JavaDetector` trait**（`rmccc-launch/java.rs` 最后 4 处
+    `#[cfg]`）→ 1.1e 分隔符收尾 → 1.3 loader 单体系。
+
+- **Phase 1.1d 平台适配层收尾 + 1.3 loader 单体系 + 1.4 context 拆分（2026-10-21，一口气完成）**
+  - **1.1d Java 探测提升为 trait**：`JavaInstallation` + `JavaDetector` 迁入 `rmccc-platform::java`；
+    `select_for()` 选版规则是纯函数（精确匹配 > 最近的更高版本 > `JavaVersionMismatch`）。
+    macOS 后端 `java_home -V` + `JAVA_HOME` + Homebrew 路径；Windows/Linux 返回 `UnsupportedPlatform`。
+    `rmccc-launch/src/java.rs` 265→80 行（只留 re-export），**最后 4 处 `#[cfg(target_os)]` 消失**。
+  - **1.1e 分隔符**：随 1.1c 已完成，核对销账。**`crates/*/src` 除 `rmccc-platform` 外零平台 `#[cfg]`。**
+  - **1.3 loader 单体系（P1-4）**：删 `ModLoaderProvider` / `create_provider` / 三个 `*Installer`
+    与 `CoreContext.modloader_providers`；新增 `rmccc-modloader::installer`（官方安装器运行器）
+    与 `DependencyManager::install_loader`（唯一路由）；新增 `rmccc-core::modloader::install_loader`
+    （Tauri/CLI 都只调它）。顺带修两处不一致：CLI 原先写合并 JSON（丢 HMCL 回滚/叠加语义）；
+    装完 loader 不下载自带库 → `--no-repair` 启动 `ClassNotFoundException: KnotClient`（已修，安装末尾补 8 个库）。
+  - **1.4 context.rs 拆分（P2-1）**：1,450 行 → `context/mod.rs` **93 行** + 10 个域文件
+    （`auth/config/profile/version/resource/modloader/mods/launch/system/helpers`，最大 253 行）。
+    `CliContext` 仍是唯一入口，命令层零改动。
+  - **真机验证**：`rmcli` 新建实例 → 安装 1.20.4（3870 文件 / 0 失败）→ 安装 Fabric 0.15.11
+    （增量 JSON + 自动补 8 个 loader 库）→ `--no-repair` 启动到主菜单
+    （Fabric Loader 0.15.11 / Mixin 0.8.5 / OpenAL 就绪）→ `modloader remove` 恢复正常。
+  - 门禁：`cargo test --workspace` **356 passed / 0 failed**、`fmt` ✅、
+    `clippy --all-targets -D warnings` ✅、`clippy --lib --bins -D panic -D unwrap_used` ✅、
+    `pnpm typecheck` ✅、`pnpm build` ✅。
+  - Phase 1 剩余：**1.6 IPC 契约测试**（`src-tauri` 2→≥46）、**1.7 ADR-002**（profile/instance 语义）、
+    **1.8 生效值单一来源**。
+
+- **Phase 1.6–1.8 完成（2026-10-21）—— Phase 1 全部切片收尾**
+  - **1.6 IPC 契约测试（P2-2）**：新增 `handlers.rs`（`generate_handler!` 单一注册表 +
+    `IPC_COMMANDS` 清单）与 `ipc_tests.rs`（37 测试）。覆盖三层契约：注册表一致性
+    （含与前端 `src/ipc/api.ts` 交叉校验）、参数校验（mod 文件名 / URL scheme / loader 类型 /
+    profile id 解析 / 日志行数 clamp）、错误码（19 个 `RmcccError` 变体映射 + `retryable` 语义 +
+    `{code,message,retryable}` 形状）。`src-tauri` 测试 **2 → 39**。
+    测试过程中修掉 3 个真实问题：`mod_install_local` 注册但前端从不调用（白名单+理由）；
+    `sanitize_filename("../x")` 产出 `.._x`（现剥前导点、空名回落 `mod`）；
+    `account_repo.remove(未知 id)` 实为幂等 no-op（按契约修正测试）。
+    **已知缺口**：运行级 mock-app 测试需把 49 个命令泛型化到 `Runtime`，记为 deferred；
+    前端组件测试 0 个（Phase 3 补）。
+  - **1.7 ADR-002 定稿（P2-10）**：profile 为唯一用户实体，`instance_*` 按"是否依赖 profile 字段"
+    分两组并逐条写明 id 语义。修掉一个真实功能缺陷：实例设置页用 profile id 调
+    `instance_check_completion`/`instance_repair`，而它们按版本 id 查仓库 → 一直 `NotFound`，
+    "完整性检查/修复"其实不可用；现在 profile 优先、版本 id 回落。
+    `ProfileStore::delete(cleanup=true)` 增加**共享根保护**（否则会删掉所有实例的游戏文件）。
+  - **1.8 生效值单一来源（P2-8/P2-9）**：新增 IPC `instance_resolved_settings`
+    （`ResolvedInstanceSettings` 加 `Serialize+TS`，`types.ts` 重生成、`bindings.rs` 26→27）；
+    实例设置页在字段继承时显示后端算出的「生效值」，TS 侧零继承规则。
+    安装目标确认单一取值点（`profile.game_dir` == `resolved_game_root()`）。
+  - 门禁：`cargo test --workspace` **394 passed / 0 failed**、`fmt` ✅、
+    `clippy --all-targets -D warnings` ✅、`clippy --lib --bins -D panic -D unwrap_used` ✅、
+    `pnpm typecheck` ✅、`pnpm build` ✅。CLI 烟测（`system info` / `resource check`）无回归。
+  - **Phase 1 验收**：三链路单一编排 ✅、平台适配层 ✅、loader 单体系 ✅、`context.rs` 93 行 ✅、
+    zip-slip ✅、IPC 契约 ✅、ADR-002 ✅、生效值单一来源 ✅。
+    遗留：前端组件测试 0 个（Phase 3）、Windows/Linux 后端 deferred（release-blocked）。
+
+- **Phase 2 声明式插件系统完成（2026-10-21）—— 2.1–2.6 + 2.7 IPC/UI**
+  - **新增 `crates/rmccc-plugin`（第 12 个 crate，14 个 workspace 成员）**：
+    `manifest`（严格 v1 + 12 条校验）、`version`（SemVer 2.0 + 受限范围）、`capability`（18 项能力/风险/host 策略）、
+    `package`（`.rmcpkg` 包级限额与路径/类型检查）、`installer`（staging）、`registry`（11 状态机）、
+    `permissions`（授予/撤销/每次复核/审计）、`config`（schema 子集 + 版本迁移）、`manager`（窄门面）。
+  - **ADR-003 / ADR-004 accepted**：包格式 = 无加密 ZIP；`plugin-state/registry.json` 为唯一状态来源
+    （**不建 `enabled.json`**）；Phase 2 无签名通道，安装一律 `trust=development` 并显示风险提示；
+    `ui/`、`logic/` 与脚本/可执行文件在包校验阶段拒绝。
+  - **安装事务**：staging → 校验 → `rename` 原子提交 → 原子写注册表/权限；失败删除新版本目录并恢复快照；
+    升级保留 `previousVersion` 与旧目录；`plugin rollback` 交换版本并重新计算待审权限。
+    升级**不自动扩张任何权限**，新权限进入 pending，插件保持 `installed_disabled`。
+  - **损坏隔离**：损坏的 `registry.json`/插件 manifest 只产生诊断并备份 `.bak-<ts>`，
+    `PluginManager::load` 永不返回 Err，其它插件与主应用照常启动。
+  - **平台归属**：新增 `PlatformFs::atomic_replace`（Unix rename / Windows 待 ReplaceFile），
+    插件 crate 零 `#[cfg]`；`PlatformDescriptor::plugin_platform_id()` 统一平台标识。
+  - **CLI**：`rmcli plugin list|inspect|install|enable|disable|remove|rollback|grant|revoke|
+    config|capabilities|pack`（13 个子命令）；真实烟测覆盖 pack→install→pending→grant→enable→config。
+  - **IPC + UI（额外切片 2.7）**：15 条命令（注册表 49→64）；`/plugins` 页面支持安装/状态、
+    权限审查（风险/作用域/授予/撤销）、依赖状态、配置编辑、回滚、卸载与诊断。
+  - **样例**：`examples/plugins/theme-midnight`（纯主题）与 `server-dashboard`
+    （卡片 + 设置页 + 受限 `network.request`）；`example_plugins_pack_and_install` 锁定真实样例可安装。
+  - 门禁：`cargo test --workspace` **468 passed / 0 failed**（新增 74 项插件测试）、`fmt` ✅、
+    `clippy --all-targets -D warnings` ✅、`clippy --lib --bins -D panic -D unwrap_used` ✅、
+    `pnpm typecheck` ✅、`pnpm build` ✅（JS 150.42 kB / gzip 43.20 kB；CSS 37.47 kB / gzip 8.01 kB）。
+  - 遗留（明确 deferred）：签名/可信目录（Phase 7）、隔离 UI（Phase 4）、逻辑运行时（Phase 5）、
+    插件仓库与依赖自动下载（Phase 7）、Windows/Linux 安装事务实测（原生 CI）、前端组件测试（Phase 3）。
+  - **下一步**：Phase 3（Dashboard 卡片与主题引擎），先建 ADR-005（Layout Schema / 冲突算法）。
+
+**2026-10-20（第 7 轮）**：产出**全量架构与审计文档** [`AUDIT_2026-10-20.md`](AUDIT_2026-10-20.md)，
+并修正本文档与 `ARCHITECTURE.md`、`DEVELOPMENT_PLAN.md` 中过期的数字。
+
+审计新增的关键发现（此前未记录）：
+
+1. **编排层被绕过**：`pipeline` 的 `resolve_version` / `repair_resources` / `launch_game` 均为**零调用方**；
+   Tauri 的 `version_install`、`instance_repair`、`launch_start` 各自复刻了一遍流程（只有
+   `ensure_launch_ready` 被两端共用）。
+2. **两套"实例"概念并存**：`profile`（UUID，前端实例卡片）与 `instance`（版本 id，`versions/{id}/`）。
+   `instance_rename/duplicate/remove` 操作的是后者，这解释了它们为何在前端零调用。
+3. **环境回归**：Homebrew 升级 rustup 后 `/opt/homebrew/opt/rustup/toolchains/` 失效
+   （实体在 `Cellar/rustup/1.29.1/toolchains/…`），且 `~/.cargo` 已不存在
+   → §7.3 记的工具链路径已过期；当前 `cargo test` 需联网重建依赖缓存。
+4. 数字校正：IPC **46**（非 42/45/48）、UI 直达 **27**、前端 **17 文件 4,279 行**、
+   测试 **299 个 `#[test]`**（上次全量 300 passed）。
 
 **2026-10-10（第 6 轮）**：实现**每实例独立设置**（参考 HMCL），含实例卡片入口与全局/实例分层。
 
@@ -170,18 +407,18 @@ Game repository refreshed game_dir=.../instances instances=1        ← 修复 1
 | 编译 | `cargo check --workspace --all-targets` **通过**；clippy 无 warning |
 | 前端类型 | `pnpm typecheck` **通过** |
 | CI lint 三门禁 | `cargo fmt --check` / `clippy --all-targets -D warnings` / `clippy --lib --bins -D clippy::panic -D clippy::unwrap_used` **全部本地通过** |
-| 测试 | **300 passed / 0 failed**（修复 CLI 致命 bug 前为 256 / 28，见 §0/§3/§4） |
-| 版本控制 | ✅ **已按主题提交为 10 个 commit**，工作区干净（原为 110 改 + 52 新增、零提交） |
-| 发布体积 | CLI release 二进制 5.74MB；手工 strip 后 **4.09MB**（`strip = true` 在本机失效，见 §7.3） |
-| 代码规模 | Rust 133 文件 / **29,284 行**（不含 `tests/` 为 28,431 行）；前端 12 文件 / 3,203 行 |
-| 文档同步 | `ARCHITECTURE.md` / `DEVELOPMENT_PLAN.md` 已对齐实现；历史文档已加取代横幅 |
-| 阶段判断 | **Phase 1–2 完成；Phase 3 后端完成、前端未做；Phase 4 后端基本完成、UI 未做；Phase 5 配置齐备但端到端未验证** |
+| 测试 | **468 passed / 0 failed**（2026-10-21 全量复跑；含插件 74 项） |
+| 版本控制 | HEAD = `80887ce`；Phase 1/2 变更**尚未提交**（80+ 路径，待用户决定提交粒度） |
+| 发布体积 | GUI 未剥离 11.10 MiB / 手动 strip **7.61 MiB**；CLI 手动 strip **4.48 MiB**（ADR-011：stripped < 10 MiB ✅；`strip = true` 仍失效） |
+| 代码规模 | Rust 173 文件 / **40,926 行**；前端 19 文件 / **5,823 行**（详见 [`AUDIT_2026-10-20.md`](AUDIT_2026-10-20.md)） |
+| 文档同步 | `ARCHITECTURE.md` / `AUDIT` / `roadmap` 已按 Phase 1/2 实现回填；ADR-002/003/004/011 accepted |
+| 阶段判断 | **Phase 0 / 0.5 / 1 / 2 完成**；下一步 Phase 3（Dashboard 布局与主题引擎，先建 ADR-005） |
 
 **最重要的三个判断**：
 
-1. **代码质量高于文档所描述的状态**。后端在 2026-08-05 已完成两轮大重构（启动模块重写、版本管理本地仓库化、认证/配置对齐 HMCL），crate 级单测全绿。
-2. **工程管理风险已清除**：数千行改动此前零提交、CI 实际为红、文档与代码漂移。现均已处理：工作区已分主题提交、284 项测试全绿、CI lint 三门禁本地通过、`ARCHITECTURE.md` 漂移已同步。
-3. **前后端严重不对称**：后端 45 个 IPC 命令已实现并注册，前端只调用 36 个，整个"实例管理/修复"与"ModLoader 安装"两条链路在 GUI 上完全不存在。
+1. **结构债已清偿**：pipeline 单一编排、平台适配层、loader 单体系、`context.rs` 93 行、IPC 契约测试、ADR-002 生效值单一来源——Phase 1 全部验收项完成。
+2. **插件平台第一阶段已交付**：Manifest v1 + `.rmcpkg` 事务 + 生命周期 + 权限/审计 + 配置 schema + CLI + `/plugins` 页面；损坏插件隔离、安装失败回滚、升级不扩张权限均有测试。
+3. **剩余缺口是"生态与分发"而非地基**：Dashboard 布局/主题（Phase 3）、隔离 UI（Phase 4）、逻辑运行时（Phase 5）、Agent（Phase 6）、签名/目录/公证（Phase 7），以及前端组件测试（当前 0）。
 
 ---
 
@@ -296,33 +533,39 @@ $ rmcli -o plain --version      # -o 也被忽略
 ```
 rmccc-core（编排 + DI 容器 CoreContext）
 ├── rmccc-error        0.2k 行  统一错误 + ErrorCode（snake_case，ts-rs 导出）
-├── rmccc-config       2.0k 行  $schema 版本化 / SettingFile / FileSaver 防抖 / paths
+├── rmccc-config       2.3k 行  $schema 版本化 / AppConfig·UserSettings / FileSaver 防抖 / paths
 ├── rmccc-auth         2.9k 行  AccountID + Account/AccountFactory + AccountRepository + TokenVault
 ├── rmccc-download     1.2k 行  并发下载 / Range 续传 / SHA1 / CacheRepository / DownloadProvider
-├── rmccc-version      4.2k 行  GameRepository（本地索引 + resolve 双视图）+ manifest/assets/libraries
-├── rmccc-launch       3.8k 行  DefaultLauncher（HMCL 20 步命令行）+ natives/log4j/ProcessListener
+├── rmccc-version      4.4k 行  GameRepository（本地索引 + resolve 双视图）+ manifest/assets/libraries
+├── rmccc-launch       4.0k 行  DefaultLauncher（HMCL 同构命令行）+ natives/log4j/ProcessListener
 ├── rmccc-modloader    5.6k 行  8 种 loader（Fabric/Forge/NeoForge/Quilt/LiteLoader/OptiFine/Cleanroom/LegacyFabric）
 ├── rmccc-mods         0.5k 行  ModSource trait + Modrinth 实现
-└── rmccc-profile      0.3k 行  Profile JSON 存储（原子写）
-src-tauri  2.6k 行  45 个 IPC 命令 + AppState + 事件常量 + ts-rs 绑定导出（21 类型）
-src-cli    4.3k 行  clap 命令面 + CliContext 门面 + registry（帮助/补全）+ 统一输出信封
+└── rmccc-profile      0.6k 行  Profile JSON 存储（原子写）+ 继承/覆盖模型
+src-tauri  2.7k 行  46 个 IPC 命令 + AppState + 事件常量 + ts-rs 绑定导出（24 类型）
+src-cli    5.3k 行  clap 命令面 + CliContext 门面 + registry（帮助/补全）+ 统一输出信封
 ```
 
 ### 5.2 关键设计（与 ARCHITECTURE.md 一致且已落地）
 
 - **单一编排层**：`CoreContext` 持有全部 `dyn` provider（download / version / auth / modloader / mod source / account repo / file saver），命令层只做参数适配与输出。
+  ⚠ 但 `pipeline` 的 `launch_game` / `repair_resources` / `resolve_version` **零调用方**，Tauri 侧自行复刻了安装/修复/启动——详见审计文档 §5.3、P1-3。
 - **本地磁盘为中心**：`DefaultGameRepository` 扫描 `versions/` 建索引，离线 `resolve` 出 `launch` / `standalone` 双视图；网络 `MojangVersionProvider` 只在安装时取元数据。
 - **启动链路 HMCL 同构**：`DefaultLauncher` 负责命令行生成、`natives-{platform}` 解压、log4j 提取、`.abnormal` 崩溃标记、环境变量注入、启动脚本生成。
-- **持久化收口两条通路**：账户走 `AccountRepository`（明文 metadata + 加密 private 分离），配置/状态走 `SettingFile` + `FileSaver`（200ms 防抖）。
-- **安全**：AES-256-GCM + 本地 `.key`（Windows `icacls`）；token 经 response file 传递且 spawn 后立即删除；capability 禁通用 `fs`/`shell`。
-- **类型桥**：ts-rs 自动生成 19 个类型到 `src/ipc/types.ts`（259 行），CI 用 `git diff` 断言其最新。
+- **持久化收口两条通路**：账户走 `AccountRepository`（明文 metadata + 加密 private 分离），配置/状态走 `FileSaver`（200ms 防抖）。
+- **安全**：AES-256-GCM + 本地 `.key`（Windows `icacls`）；token 经 response file 传递且**延迟**删除（JVM 解析完参数后）；capability 禁通用 `fs`/`shell`。
+- **类型桥**：ts-rs 自动生成 24 个类型到 `src/ipc/types.ts`（439 行），CI 用 `git diff` 断言其最新。
 
 ### 5.3 IPC 面实测
 
-- 定义 42 个 `#[tauri::command]`，注册 42 个（`src-tauri/src/main.rs:65-108`），**差集为空**。
-- 前端实际调用 36 个；**9 个后端命令前端零调用**：`instance_list/refresh/rename/duplicate/remove/check_completion/repair`（`commands/instance.rs`，253 行）与 `modloader_list/install`（`commands/modloader.rs`，237 行）。
-- 事件常量 Rust 侧 11 个、前端 10 个，缺 `INSTANCES_REFRESHED = "instances://refreshed"`（`src-tauri/src/events.rs:34`）。
-- `src/ipc/api.ts` 手工重定义了 `SettingsUpdate` / `ProfileUpdateOpts`（`api.ts:39-55`），**遮蔽**了 ts-rs 已生成的同名类型；`InstanceInfo` / `MissingFileInfo` / `LauncherState` / `UserSettings` 未 re-export，前端拿不到实例类型。
+- 定义 46 个 `#[tauri::command]`，注册 46 个（`src-tauri/src/main.rs`），**差集为空**。
+- **UI 可直达 27 个**（Dashboard 11 / InstanceSettings 8 / Login 3 / Settings 5）。
+- 15 个仅有 `api.ts` wrapper、无页面调用：`mod_search/get_versions/get_download_url/install`、
+  `download_pause/resume`、`auth_list_accounts/switch_account/remove_account/refresh_token`、
+  `log_get/clear`、`instance_check_completion/repair/refresh`。
+- 4 个连 wrapper 都没有：`instance_list/duplicate/rename/remove`——它们操作的是"版本 id"
+  而非 profile，属概念未收敛（审计文档 §7.4）。
+- 事件常量 Rust 侧 12 个、前端 11 个，缺 `INSTANCES_REFRESHED = "instances://refreshed"`（`src-tauri/src/events.rs:34`）。
+- `src/ipc/api.ts` 已不再手写 `SettingsUpdate` / `ProfileUpdateOpts`，改为 `Partial<ts-rs 生成类型>`（第 6 轮修复）。
 
 ---
 
@@ -332,8 +575,8 @@ src-cli    4.3k 行  clap 命令面 + CliContext 门面 + registry（帮助/补�
 |-------|------------------|------|
 | **1 Foundation** | 编译通过、下载引擎、认证（MS device flow + 离线 + 加密 vault）、日志、IPC 框架、SolidJS 布局与登录页均就绪 | ✅ 完成 |
 | **2 Core Game** | Mojang API、版本列表缓存、assets/libraries、Java 检测、response file 启动参数、进程管理、Profile CRUD 均就绪；CLI 曾端到端启动原版 26.2 | ✅ 完成（GUI 侧启动面板已在 Dashboard 中） |
-| **3 Mod Loaders** | 后端 8 种 loader 安装任务齐备；**前端无 loader 选择/安装 UI** | ⚠️ 后端完成，前端 0% |
-| **4 Mod Management** | Modrinth 搜索/版本/下载/安装/启停/移除 + 本地 mod 管理后端齐备；**无 Mod 浏览/详情/管理 UI** | ⚠️ 后端 ~完成，前端 0% |
+| **3 Mod Loaders** | 后端 8 种 loader 安装任务齐备；**实例设置页已有 loader 选择 + 版本列表 + 安装**（Cleanroom 仍为 stub） | ✅ 后端完成，前端已接（未逐项实机点击） |
+| **4 Mod Management** | Modrinth 搜索/版本/下载/安装/启停/移除 + 本地 mod 管理后端齐备；**实例页已有已装模组列表（启停/删除），仍缺 Mod 浏览/详情页** | ⚠️ 后端完成，前端缺浏览器 |
 | **5 Polish & Ship** | CI（lint + 三平台 test + e2e job）、release.yml（三平台打包 + macOS 公证 + updater 签名）、运维手册、updater 配置齐备 | ⚠️ 配置齐备，但 CI 实为红、证书/Secret 未配、无体积审计记录 |
 
 **结构性欠账**（跨 Phase）：
@@ -348,7 +591,7 @@ src-cli    4.3k 行  clap 命令面 + CliContext 门面 + registry（帮助/补�
 response file 竞态、argfile 首行混入 java 路径——全部修复；"安装 → 仓库索引 → 启动游戏"全链路
 已实机跑通（Minecraft 26.3 进入渲染线程并创建窗口），创建实例的版本选择闭环也已完成。
 
-**测试覆盖薄弱处**：`src-tauri/src/commands/` 45 个命令 **0 个单测**；`rmccc-mods` 4、`rmccc-profile` 3、`rmccc-core` 3、`rmccc-error` 0。
+**测试覆盖薄弱处**：`src-tauri/src/commands/` **46 个命令 0 个单测**；前端 0 测试；crate 侧 `rmccc-mods` 4、`rmccc-core` 5、`rmccc-error` 0。
 
 ---
 
@@ -433,7 +676,7 @@ export CARGO_HOME=$HOME/.cargo
 1. 拆分 `src-cli/src/context.rs`（1,511 行）为按域的门面（auth/instance/version/mod/modloader/launch/system）。
 2. 统一编排：让 CLI 与 Tauri 都经由 `pipeline::launch_game`（当前无调用方），消除两条分叉。
 3. 收敛 modloader 双体系：删除旧 `ModLoaderProvider` + `create_provider`，或在 `core` 侧也改用 `DependencyManager`。
-4. 补 `src-tauri/src/commands/` 的单元测试（当前 45 个命令 0 测试）。
+4. 补 `src-tauri/src/commands/` 的单元测试（当前 46 个命令 0 测试）。
 
 ### 第 3 步：发布工程
 

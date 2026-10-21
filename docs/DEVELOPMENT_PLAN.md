@@ -4,7 +4,10 @@
 >
 > **当前状态入口**：各 Phase 的实际完成情况见下方每个 Phase 的「状态」块。
 > 完整的实测数据、架构 as-built 与待办优先级见 [`PROJECT_STATUS.md`](PROJECT_STATUS.md)。
-> 最后回填：2026-10-10（`cargo test --workspace` 284 passed / 0 failed，CI lint 三门禁本地通过）。
+> 最后回填：2026-10-20（`cargo test --workspace` 300 passed / 0 failed，CI lint 三门禁本地通过）。
+> 完整功能矩阵与技术债台账见 [`AUDIT_2026-10-20.md`](AUDIT_2026-10-20.md)。
+>
+> **后续细化计划**：本文件覆盖 Phase 1–5（既有主线）。插件平台、Agent、平台适配层与生产分发的**细化分阶段执行计划**见 [`roadmap/`](roadmap/) 目录（Phase 0–7 + [`PLATFORM_ADAPTATION.md`](roadmap/PLATFORM_ADAPTATION.md)），服从 [`RMCCC_PLUGIN_PLATFORM_ARCHITECTURE_GUIDE.md`](RMCCC_PLUGIN_PLATFORM_ARCHITECTURE_GUIDE.md) §1.4（当前本机仅 macOS 开发、不跨平台编译/实测）与 §5.7（平台特定能力归档到适配层、核心只定义 trait）。
 
 ---
 
@@ -99,11 +102,12 @@
 
 ## Phase 3: Mod Loaders（Week 5–6）
 
-> **状态：⚠️ 后端完成，前端未做**
+> **状态：✅ 后端完成，前端已接（未逐项实机点击）**
 > 后端支持 8 种 loader（Fabric / Forge / NeoForge / Quilt / LiteLoader / OptiFine / Cleanroom / LegacyFabric），
 > 其中 Cleanroom 仍是 stub。已有记录：Fabric / NeoForge 安装后可正常启动（`docs/test_log.md`）。
-> **未达成**：前端「Mod loader 选择 UI」与「安装进度」——
-> `modloader_list` / `modloader_install` 两个 IPC 命令在前端零调用（见 `PROJECT_STATUS.md` §5.3）。
+> **已达成**：实例设置页 `/instances/:id` 的「加载器」分区已可选择 loader 类型、列出稳定/预览版本并安装
+> （`modloader_list` / `modloader_install` 已在 `InstanceSettings.tsx` 调用）。
+> **未达成**：安装进度事件 `modloader://progress` 尚未被页面订阅（目前只有 toast 结果）。
 
 **目标**：支持 Fabric / Forge / NeoForge 安装。
 
@@ -135,10 +139,11 @@
 
 ## Phase 4: Mod Management（Week 7–8）
 
-> **状态：⚠️ 后端基本完成，前端未做**
+> **状态：⚠️ 后端完成，前端缺浏览器**
 > Modrinth 搜索/版本/下载链接/安装/启停/移除与本地 mod 管理（`mods/disabled/`）已落地并注册 IPC。
-> **未达成**：CurseForge 源（仅有本地 mod 路径）、依赖提示（`ModDependency` 类型已定义但未接入解析）、
-> 以及全部前端 UI（Mod 浏览器 / 详情页 / 管理列表）。
+> **已达成**：实例设置页「模组」分区已有已装列表（启用 / 禁用 / 删除三态可见可操作）。
+> **未达成**：Mod 浏览器（搜索 + 详情 + 安装）、本地文件安装（缺 `tauri-plugin-dialog`）、
+> CurseForge 源、依赖提示（`ModDependency` 类型已定义但未接入解析）。
 
 **目标**：搜索、安装、管理 Mod。
 
