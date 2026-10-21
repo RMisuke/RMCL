@@ -1055,17 +1055,12 @@ per-file cancel command.
 当前实现（`src/main.tsx`）：
 
 ```
-/              → Dashboard (accounts, profiles, version install, launch/stop)
+/              → Dashboard（布局网格：账户/实例/版本 Widget + 插件卡片；启动/停止/日志）
 /login         → Login (Microsoft device code / offline)
-/settings      → Settings (launcher settings, language, Java detection, global game defaults)
+/settings      → Settings (launcher settings, language, theme, Java detection, global defaults)
 /instances/:id → InstanceSettings (per-instance overrides, isolation, Java, args, loader, mods)
-```
-
-规划中但尚未实现（Phase 3/4 前端缺口，见 `PROJECT_STATUS.md` §8）：
-
-```
-/profiles/:id → Profile Detail (mod loader install, repair)
-/mods         → Mod Browser (search, install, manage)
+/mods          → ModBrowser (Modrinth search / versions / install)
+/plugins       → Plugins (declarative plugin manager, Phase 2)
 ```
 
 ### 9.2 State Management
@@ -1860,3 +1855,45 @@ Logging is infrastructure, not polish. Adding it late means retrofitting spans i
 路径/zip 校验是 OS 无关逻辑；**原子替换**与权限收紧经
 [`PlatformFs`](../crates/rmccc-platform/src/fs.rs)（`atomic_replace` / `restrict_owner_only`），
 `rmccc-plugin` 内零 `#[cfg]`。Windows/Linux 后端返回 `UnsupportedPlatform`，原生验证 deferred。
+
+## 21. Dashboard 布局引擎与主题（Phase 3）
+
+> 协议与算法以 [ADR-005](adr/ADR-005-dashboard-layout-and-theme.md) 为准。本节只记录落地形态。
+
+### 21.1 分层
+
+| 模块 | 职责 |
+|---|---|
+| `rmccc-dashboard::layout` | 布局 Schema、确定性归一化（去重/钳制/换行/push-down/压缩）、断点 |
+| `rmccc-dashboard::widget` | `WidgetRegistry`：内置 `org.rmccc.core-ui` + 插件 `dashboardCards` |
+| `rmccc-dashboard::theme` | 主题令牌 + 安全语义色边界 |
+| `rmccc-dashboard::store` | `dashboard/layouts/<id>.json` 读取/保存/损坏恢复 |
+
+### 21.2 布局文件
+
+`<data_dir>/dashboard/layouts/<layoutId>.json`：
+
+```json
+{ "schemaVersion": 1, "layoutId": "default",
+  "grid": { "columns": 12, "gap": 16 },
+  "widgets": [{ "instanceId": "core-launcher", "pluginId": "org.rmccc.core-ui",
+                "widgetId": "instance-launcher", "enabled": true,
+                "position": { "x": 0, "y": 0 }, "size": { "w": 8, "h": 4 } }] }
+```
+
+写入前归一化；损坏 → `.bak-<ts>` + 默认布局；未知版本拒绝。
+
+### 21.3 渲染与交互
+
+- 前端 CSS Grid（`repeat(columns, 1fr)`，120px 行高）；`grid-column/row` 由 `position/size` 计算。
+- 断点：≥1280 wide（声明列数）/ 768–1279 medium（≤8）/ <768 compact（≤4）。
+- 卡片头：拖动（HTML5 drag/drop）、宽度循环、隐藏；工具栏：添加插件卡片、恢复隐藏、恢复默认。
+- 每卡片 `ErrorBoundary`；插件卸载/禁用后 descriptor 缺失 → 保位占位。
+
+### 21.4 主题
+
+- `--rmccc-*` 令牌（background/surface/surfaceElevated/text/textMuted/accent/accentContrast/border），
+  同时桥接旧 `--surface-*`/`--text-*` 变量。
+- 内置 light/dark + 已启用插件的 `contributes.themes`（JSON，无 JS）；偏好存入 `UserSettings.theme`。
+- `follow_system` 监听 `prefers-color-scheme`；未知/无效主题回退安全主题。
+- 安全语义色（danger/success/warning）由宿主控制，主题 JSON 中出现时忽略。

@@ -8,7 +8,7 @@
 
 ## 1. 当前起点一句话
 
-引擎层（安装→索引→启动）已贯通并实机验证；**468 项测试**（含 74 项插件测试）+
+引擎层（安装→索引→启动）已贯通并实机验证；**485 项测试**（含 74 项插件测试 + 17 项 Dashboard 布局测试）+
 CI 三门禁本地全绿。Phase 0/0.5/1 的结构债已清偿，Phase 2 的声明式插件系统
 （Manifest/权限/生命周期/`.rmcpkg` 安装事务/CLI/UI）已落地。
 **还没做的是 Dashboard 布局引擎、隔离 UI、逻辑运行时、Agent 与生产分发**——
@@ -61,10 +61,11 @@ Phase 7  插件目录 / 签名 / 生产分发（registry / 签名 / updater / �
 | 维度 | 当前事实 | 来源 |
 |------|---------|------|
 | Workspace | 14 成员（12 crates + `src-tauri` + `src-cli`），新增 `rmccc-plugin` | Cargo.toml |
-| 测试 | 468 passed（2026-10-21 全量复跑）；新增 74 项插件测试 | `cargo test --workspace` |
+| 测试 | 485 passed（2026-10-21 全量复跑）；插件 74 项 + Dashboard 17 项 | `cargo test --workspace` |
 | IPC | 64 定义 = 64 注册；前端 `api.ts` 全覆盖（除显式白名单） | `handlers.rs` / `ipc_tests` |
 | 结构债 | ✅ pipeline 收口（P1-3）；✅ 平台适配层 + 领域零 `cfg`（1.1）；✅ loader 单体系（P1-4）；✅ context.rs 93 行（P2-1）；✅ 修 P2-12 | 审计 §5.3、§15.1/§15.2 |
 | 插件系统 | ✅ Phase 2：Manifest v1 / `.rmcpkg` 事务 / 状态机 / 权限 / 配置 / CLI / UI | ADR-003、ADR-004 |
+| Dashboard | ✅ Phase 3.1–3.5：布局 Schema/归一化/网格/拖放/主题令牌 | ADR-005、`rmccc-dashboard` |
 | 安全缺口 | ✅ natives zip-slip（P1.5）；✅ 插件包 zip-slip/zip bomb/路径/类型限制（2.2） | 审计 §15.4 |
 | 平台执行散落 | ✅ 领域 crate 无平台 `#[cfg]`；插件原子替换经 `PlatformFs` | PLATFORM_ADAPTATION.md |
 | 环境回归 | Homebrew rustup 路径失效、`~/.cargo` 缺失、strip 失效（缺 libLLVM） | 审计 §15.5 |
@@ -73,11 +74,10 @@ Phase 7  插件目录 / 签名 / 生产分发（registry / 签名 / updater / �
 ## 5. 并行与串行
 
 - **可并行**：Phase 0.5（前端缺口，纯既有后端接线）与 Phase 1 前半（pipeline 收敛）。建议先做 Phase 0.5 见效快，Phase 1 重构同步推进。
-- **进度**：Phase 0 ✅、Phase 0.5 ✅、Phase 1.1–1.8 ✅（平台适配层 / pipeline / loader /
-  context / zip-slip / IPC 契约 / ADR-002 / 生效值）、**Phase 2.1–2.6 ✅**（Manifest v1 +
-  ADR-004、`.rmcpkg` 事务 + ADR-003、注册表状态机、权限/审计、配置 schema、样例插件 + CLI），
-  额外完成 **2.7 IPC + 插件管理 UI**。**Phase 1 与 Phase 2 全部切片完成**；下一步 Phase 3
-  （Dashboard 卡片与主题引擎，需先建 ADR-005）。
+- **进度**：Phase 0 ✅、Phase 0.5 ✅、Phase 1.1–1.8 ✅、Phase 2.1–2.6 ✅（+2.7 IPC/UI）、
+  **Phase 3.1–3.5 ✅**（ADR-005、布局归一化、Widget Registry、CSS Grid + 拖放、主题令牌 +
+  浅/深/跟随系统、插件卡片占位）。**Phase 1/2/3 主体完成**；下一步 Phase 4（隔离 UI + SDK，
+  需先建 ADR-006）。
 - **强串行**：Phase 2 依赖 Phase 1 的 Core Service 窄门面；Phase 3 依赖 Phase 2 注册表；Phase 4 依赖 Phase 2+3；Phase 5 依赖 Phase 1 适配层；Phase 6 依赖 Phase 1 Core + Phase 2/5 权限；Phase 7 依赖全链路 + 原生 CI。
 - **平台验证串行**：所有 Windows/Linux 原生验证推迟到原生 CI runner 触达后统一在 Phase 7 验收；在此之前各阶段只做 macOS 本机验收 + 适配层 trait 占位。
 
@@ -115,7 +115,7 @@ Phase 7  插件目录 / 签名 / 生产分发（registry / 签名 / updater / �
 | M1 主线闭环补齐 | UI 可直达 ≥ 40/46 命令；Mod 浏览器可用 | Phase 0.5 |
 | M2 单一编排 | Tauri/CLI 同操作走同一 Core；context.rs < 600 行；适配层 trait 落地 | Phase 1 |
 | M3 声明式插件 ✅ | 损坏插件不影响主应用；声明式插件可装/禁/卸 | Phase 2 |
-| M4 可定制 Dashboard | 卡片注册 + 布局持久化 + 主题令牌 | Phase 3 |
+| M4 可定制 Dashboard ✅ | 卡片注册 + 布局持久化 + 主题令牌 | Phase 3 |
 | M5 第三方隔离 UI | 外部样例可独立构建/打包/安装；无法越权 | Phase 4 |
 | M6 逻辑运行时 | 运行时 PoC + ADR-007；插件崩溃不崩主程序 | Phase 5 |
 | M7 Agent 只读 | 只读工具 + 计划预览 + 审批可审计 | Phase 6（前半） |

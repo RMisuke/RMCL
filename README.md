@@ -11,8 +11,9 @@ RMCCC（Rust Minecraft Core Client）是一个使用 **Rust** 编写的 Minecraf
 - **资源管理**：游戏文件完整性检查、按需下载、SHA1 校验与自动修复。
 - **模组加载器**：安装/列出版本，支持 Fabric、Forge、NeoForge、Quilt、LiteLoader、OptiFine、Cleanroom、LegacyFabric。
 - **智能启动**：Java 版本自适应（`find_java` 自动选择最接近的兼容版本）、响应文件（Response file）传递 JVM 参数防止 `ps aux` 泄露 token、`--add-opens`/`--add-exports` 可重复参数正确保留。
-- **桌面 GUI（Tauri）**：SolidJS 前端，Dashboard / 登录 / 设置 / 实例设置 / Mod 浏览器 / 插件页面，通过 IPC 命令调用后端。
+- **桌面 GUI（Tauri）**：SolidJS 前端，Dashboard（可拖放布局 + 主题）/ 登录 / 设置 / 实例设置 / Mod 浏览器 / 插件页面，通过 IPC 命令调用后端。
 - **声明式插件（Phase 2）**：`.rmcpkg` 包（无第三方代码）、权限审查与审计、生命周期状态机、schema 校验配置；`rmcli plugin …` 与 `/plugins` 页面。
+- **Dashboard 布局/主题（Phase 3）**：12 列网格、拖放/宽度/隐藏/恢复、浅色/深色/跟随系统 + 插件主题令牌。
 
 ## 技术栈
 
@@ -138,7 +139,7 @@ rmcli
 - **NeoForge 双 Maven API**：当前通过 BMCLAPI 代理获取版本，后续可对接 `net/neoforged/forge` + `net/neoforged/neoforge` 双端点。
 - **Forge/NeoForge Processor**：当前使用 `java -jar installer.jar --installClient` 整包安装，后续可改为进程内逐 processor 执行以支持幂等性检查。
 - **体积红线**：持续通过 `cargo bloat` 评估依赖体积，确保最终二进制 < 10MB。
-- **后续 Phase**：按 `docs/roadmap/` 推进 Phase 3–7（Dashboard 布局/主题、隔离 UI、逻辑运行时、Agent、签名分发）。
+- **后续 Phase**：按 `docs/roadmap/` 推进 Phase 4–7（隔离 UI、逻辑运行时、Agent、签名分发）。
 
 ## 文档索引
 

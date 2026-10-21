@@ -229,6 +229,26 @@
     插件仓库与依赖自动下载（Phase 7）、Windows/Linux 安装事务实测（原生 CI）、前端组件测试（Phase 3）。
   - **下一步**：Phase 3（Dashboard 卡片与主题引擎），先建 ADR-005（Layout Schema / 冲突算法）。
 
+- **Phase 3 Dashboard 布局与主题引擎（2026-10-21）—— 3.1–3.5 完成**
+  - **新增 `crates/rmccc-dashboard`**：布局 Schema + 确定性归一化算法（去重/尺寸钳制/
+    换行/排序/push-down/压缩）、Widget Registry（内置 `org.rmccc.core-ui` + 插件卡片）、
+    布局持久化（损坏备份 + 默认恢复）、主题令牌与安全语义色边界。17 项单测。
+  - **ADR-005 accepted** + `schemas/dashboard-layout.schema.json`：
+    12 列网格、`(x,y,w,h)` 逻辑坐标、断点 wide/medium/compact（12/8/4 列）。
+  - **9 条 IPC**：`dashboard_get_layout/save_layout/reset_layout/list_widgets/list_themes/
+    get_theme_tokens/set_theme_preference/get_theme_preference/get_theme_json`；
+    `UserSettings` 新增 `theme` 偏好（light/dark/跟随系统/插件主题 key）。
+  - **前端迁移**：Dashboard 从固定 240px/1fr/260px 三列改为注册表驱动 CSS Grid；
+    三块内置面板成为 `org.rmccc.core-ui` Widget；支持拖放、宽度循环、隐藏/恢复/重置、
+    添加插件卡片；`ErrorBoundary` 隔离单卡片失败，卸载插件卡片显示保位占位。
+  - **主题令牌**：`--rmccc-*` 新令牌 + 桥接旧 `--surface-*`/`--text-*`；
+    内置 light/dark + 插件 `contributes.themes`；安全色由宿主控制，主题不可覆盖。
+  - 门禁：`cargo test --workspace` **485 passed / 0 failed**（新增 17 项 Dashboard 测试）、
+    `fmt`/`clippy` ✅、`pnpm typecheck` ✅、`pnpm build` ✅（JS 163.64 kB / gzip 47.35 kB；
+    CSS 41.12 kB / gzip 8.55 kB）。
+  - 遗留：插件卡片真实渲染在 Phase 4（当前占位）；高 DPI/Windows WebView2 差异 deferred；
+    前端组件测试仍为 0。
+
 **2026-10-20（第 7 轮）**：产出**全量架构与审计文档** [`AUDIT_2026-10-20.md`](AUDIT_2026-10-20.md)，
 并修正本文档与 `ARCHITECTURE.md`、`DEVELOPMENT_PLAN.md` 中过期的数字。
 
@@ -407,18 +427,18 @@ Game repository refreshed game_dir=.../instances instances=1        ← 修复 1
 | 编译 | `cargo check --workspace --all-targets` **通过**；clippy 无 warning |
 | 前端类型 | `pnpm typecheck` **通过** |
 | CI lint 三门禁 | `cargo fmt --check` / `clippy --all-targets -D warnings` / `clippy --lib --bins -D clippy::panic -D clippy::unwrap_used` **全部本地通过** |
-| 测试 | **468 passed / 0 failed**（2026-10-21 全量复跑；含插件 74 项） |
+| 测试 | **485 passed / 0 failed**（2026-10-21 全量复跑；插件 74 项 + Dashboard 17 项） |
 | 版本控制 | HEAD = `80887ce`；Phase 1/2 变更**尚未提交**（80+ 路径，待用户决定提交粒度） |
-| 发布体积 | GUI 未剥离 11.10 MiB / 手动 strip **7.61 MiB**；CLI 手动 strip **4.48 MiB**（ADR-011：stripped < 10 MiB ✅；`strip = true` 仍失效） |
+| 发布体积 | GUI 未剥离 11.32 MiB / 手动 strip **7.73 MiB**；CLI 手动 strip **4.48 MiB**（ADR-011：stripped < 10 MiB ✅；`strip = true` 仍失效） |
 | 代码规模 | Rust 173 文件 / **40,926 行**；前端 19 文件 / **5,823 行**（详见 [`AUDIT_2026-10-20.md`](AUDIT_2026-10-20.md)） |
 | 文档同步 | `ARCHITECTURE.md` / `AUDIT` / `roadmap` 已按 Phase 1/2 实现回填；ADR-002/003/004/011 accepted |
-| 阶段判断 | **Phase 0 / 0.5 / 1 / 2 完成**；下一步 Phase 3（Dashboard 布局与主题引擎，先建 ADR-005） |
+| 阶段判断 | **Phase 0 / 0.5 / 1 / 2 完成；Phase 3.1–3.5 完成**；下一步 Phase 4（隔离 UI + SDK，先建 ADR-006） |
 
 **最重要的三个判断**：
 
 1. **结构债已清偿**：pipeline 单一编排、平台适配层、loader 单体系、`context.rs` 93 行、IPC 契约测试、ADR-002 生效值单一来源——Phase 1 全部验收项完成。
 2. **插件平台第一阶段已交付**：Manifest v1 + `.rmcpkg` 事务 + 生命周期 + 权限/审计 + 配置 schema + CLI + `/plugins` 页面；损坏插件隔离、安装失败回滚、升级不扩张权限均有测试。
-3. **剩余缺口是"生态与分发"而非地基**：Dashboard 布局/主题（Phase 3）、隔离 UI（Phase 4）、逻辑运行时（Phase 5）、Agent（Phase 6）、签名/目录/公证（Phase 7），以及前端组件测试（当前 0）。
+3. **剩余缺口是"生态与分发"而非地基**：隔离 UI（Phase 4）、逻辑运行时（Phase 5）、Agent（Phase 6）、签名/目录/公证（Phase 7），以及前端组件测试（当前 0）。Dashboard 布局/主题（Phase 3）已交付。
 
 ---
 

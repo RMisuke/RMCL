@@ -35,7 +35,7 @@
 | [02_phase0.5_product_gaps.md](02_phase0.5_product_gaps.md) ✅ | 既有产品缺口补齐 | P1-1 Mod 浏览器、P1-2 多账号 UI、P1-5 本地 mod 安装、P2-6 |
 | [03_phase1_core_convergence.md](03_phase1_core_convergence.md) ✅ | Phase 1 | P1-3 pipeline 绕过、P1-4 loader 双体系、P2-1 context.rs、P2-2 IPC 测试、P2-4 zip-slip、P2-8/P2-9/P2-10/P2-11、ADR-002 |
 | [04_phase2_plugin_protocol.md](04_phase2_plugin_protocol.md) ✅ | Phase 2 | ADR-003/004、Manifest/权限/生命周期契约 |
-| [05_phase3_dashboard.md](05_phase3_dashboard.md) | Phase 3 | ADR-005、Widget/布局/主题 |
+| [05_phase3_dashboard.md](05_phase3_dashboard.md) ✅ | Phase 3 | ADR-005、Widget/布局/主题 |
 | [06_phase4_isolated_ui_sdk.md](06_phase4_isolated_ui_sdk.md) | Phase 4 | ADR-006、隔离 UI + SDK |
 | [07_phase5_logic_runtime.md](07_phase5_logic_runtime.md) | Phase 5 | ADR-007、运行时 PoC |
 | [08_phase6_agent.md](08_phase6_agent.md) | Phase 6 | ADR-009/010、Agent 工具管线 |
