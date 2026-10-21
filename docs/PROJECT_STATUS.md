@@ -287,7 +287,9 @@
   - **测试**：插件 106 项（新增逻辑包校验/升级/撤销）、Tauri 57 项（新增调用白名单、
     错误映射、能力目录、**真实 helper 的安装→授权→执行→取消 E2E**）、逻辑运行时 17 项。
   - 门禁：`cargo test --workspace` **554 passed / 0 failed**、`fmt`/`clippy --all-targets -D warnings`/
-    严格 clippy ✅、`pnpm typecheck` ✅。
+    严格 clippy ✅、`pnpm typecheck` ✅、`pnpm build` ✅（JS 171.71 kB / gzip 50.01 kB）。
+  - 体积：主可执行 **7.91 MiB stripped**（+0.06 MiB；`strings` 确认 wasmi crate 未进主程序（唯一命中是 `.wasm` 扩展名字符串）），
+    helper（wasmi）作为独立产物计 2.25 MiB，两者合计仍低于旧版 ADR-011 单二进制预算。
   - 遗留：helper 打包/签名/三平台 runner 在 Phase 7；逻辑插件暂无官方样例与 UI 入口。
 
 - **Phase 5 逻辑运行时（2026-10-21）—— 5.1–5.3 完成**
@@ -537,7 +539,7 @@ Game repository refreshed game_dir=.../instances instances=1        ← 修复 1
 | CI lint 三门禁 | `cargo fmt --check` / `clippy --all-targets -D warnings` / `clippy --lib --bins -D clippy::panic -D clippy::unwrap_used` **全部本地通过** |
 | 测试 | **554 passed / 0 failed**（2026-10-21 全量复跑；插件 106 项 + Dashboard 17 项 + SDK 契约 4 项 + 逻辑运行时 17 项） |
 | 版本控制 | HEAD = `80887ce`；Phase 1/2 变更**尚未提交**（80+ 路径，待用户决定提交粒度） |
-| 发布体积 | GUI 未剥离 11.53 MiB / 手动 strip **7.85 MiB**；CLI 手动 strip **4.48 MiB**（ADR-011：stripped < 10 MiB ✅；`strip = true` 仍失效） |
+| 发布体积 | GUI 未剥离 ~11.6 MiB / 手动 strip **7.91 MiB**；CLI 手动 strip **4.48 MiB**；逻辑 helper（独立）**2.25 MiB**（ADR-011：主可执行 stripped < 10 MiB ✅；`strip = true` 仍失效） |
 | 代码规模 | Rust **187 文件 / 45,600+ 行**（含 `rmccc-logic` 与 `src-logic-host`）；前端 22 文件 / 7,105 行；SDK 19 文件 / 1,306 行（详见 [`AUDIT_2026-10-20.md`](AUDIT_2026-10-20.md)） |
 | 文档同步 | `ARCHITECTURE.md` / `AUDIT` / `roadmap` 已按 Phase 1/2 实现回填；ADR-002/003/004/011 accepted |
 | 阶段判断 | **Phase 0–4 完成；Phase 5.1–5.5 完成**（helper 进程 + wasmi + 限流 + `logic.invoke` + 只读扩展）；下一步 Phase 6（Agent）或 Phase 7（分发/签名） |
