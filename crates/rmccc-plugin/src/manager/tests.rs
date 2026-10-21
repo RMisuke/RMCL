@@ -770,10 +770,10 @@ fn a_logic_entry_pointing_at_a_missing_module_is_rejected() {
 fn revoking_logic_invoke_blocks_the_next_call() {
     let dir = temp_dir("logic-revoke");
     let mut mgr = manager(&dir);
-    let bytes = pack(&logic_manifest("dev.rmccc.revoke-logic"), &[(
-        "logic/plugin.wasm",
-        "\0asm\x01\0\0\0",
-    )]);
+    let bytes = pack(
+        &logic_manifest("dev.rmccc.revoke-logic"),
+        &[("logic/plugin.wasm", "\0asm\x01\0\0\0")],
+    );
     mgr.install_from_bytes(&bytes, "revoke.rmcpkg", false)
         .unwrap();
     mgr.grant("dev.rmccc.revoke-logic", "logic.invoke").unwrap();
@@ -781,7 +781,8 @@ fn revoking_logic_invoke_blocks_the_next_call() {
     mgr.authorize("dev.rmccc.revoke-logic", "logic.invoke", None, None)
         .expect("granted");
 
-    mgr.revoke("dev.rmccc.revoke-logic", "logic.invoke").unwrap();
+    mgr.revoke("dev.rmccc.revoke-logic", "logic.invoke")
+        .unwrap();
     let error = mgr
         .authorize("dev.rmccc.revoke-logic", "logic.invoke", None, None)
         .expect_err("revoked capability must be denied");
