@@ -347,4 +347,27 @@ export const zhCN: Messages = {
   "plugins.actionFailed": "插件操作失败",
   "plugins.installedAt": "安装于 {date}",
   "plugins.requiredBy": "被以下插件依赖",
+
+  // ── 主题（Phase 3）──
+  "settings.theme.title": "主题",
+  "settings.theme.desc": "选择启动器外观。插件主题仅在启用时可用。",
+  "settings.theme.followSystem": "跟随系统",
+  "settings.theme.light": "浅色",
+  "settings.theme.dark": "深色",
+  "settings.theme.saved": "主题已更新",
+  "settings.theme.saveFailed": "主题保存失败",
+
+  // ── Dashboard 布局（Phase 3）──
+  "dashboard.account.title": "账户",
+  "dashboard.layout.hint": "拖动 ⠿ 手柄移动卡片；↔ 调整宽度；× 隐藏。",
+  "dashboard.layout.reset": "恢复默认布局",
+  "dashboard.layout.drag": "拖动移动",
+  "dashboard.layout.resize": "调整尺寸",
+  "dashboard.layout.hide": "隐藏卡片",
+  "dashboard.pluginCard.placeholder": "该卡片由插件贡献，Phase 4 的隔离 UI 宿主会渲染实际内容。",
+  "dashboard.pluginCard.unavailable": "该卡片不可用（插件已禁用或卸载），位置会保留以便重新安装。",
+  "dashboard.widget.error": "该卡片渲染失败",
+
+  "dashboard.layout.addWidgets": "添加插件卡片",
+  "dashboard.layout.restoreHidden": "恢复隐藏卡片",
 };

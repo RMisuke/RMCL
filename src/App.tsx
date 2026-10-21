@@ -22,6 +22,7 @@ import { availableMonitors, getCurrentWindow } from "@tauri-apps/api/window";
 import TitleBar from "./components/TitleBar";
 import { ToastContainer } from "./components/Toast";
 import { initI18n } from "./i18n";
+import { initTheme } from "./theme";
 
 type AppWindow = Awaited<ReturnType<typeof getCurrentWindow>>;
 
@@ -62,6 +63,8 @@ const App: ParentComponent = (props) => {
       // Resolve the UI language before revealing the window, so the first paint
       // is already in the user's language instead of flashing the default.
       await initI18n();
+      // Theme tokens must be applied before the first paint to avoid a flash.
+      await initTheme();
       // The window is created hidden, so the frontend reveals it once the shell
       // has rendered (`ready-to-show` pattern).
       await win.show();

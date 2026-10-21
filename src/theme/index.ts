@@ -1,0 +1,182 @@
+/**
+ * Theme token application (Phase 3, ADR-005).
+ *
+ * The backend owns token validation; this module maps tokens to CSS variables
+ * and bridges them to the legacy `--surface-*` / `--text-*` variables so the
+ * existing stylesheet keeps working while new widgets use `--rmccc-*`.
+ */
+
+import { dashboard } from "../ipc/api";
+import type { ThemeInfo, ThemeTokens } from "../ipc/types";
+
+const DARK_FALLBACK: ThemeTokens = {
+  background: "#0b1020",
+  surface: "#141a2e",
+  surfaceElevated: "#1c2440",
+  text: "#e6e9f2",
+  textMuted: "#8b93a8",
+  accent: "#7c6cff",
+  accentContrast: "#ffffff",
+  border: "#2a3352",
+};
+
+const LIGHT_FALLBACK: ThemeTokens = {
+  background: "#f2f2f4",
+  surface: "#ffffff",
+  surfaceElevated: "#fafafa",
+  text: "#1a1a2e",
+  textMuted: "#888888",
+  accent: "#1a56db",
+  accentContrast: "#ffffff",
+  border: "#e0e0e4",
+};
+
+/** Effective mode for host-owned safety colors. */
+export type ThemeMode = "light" | "dark";
+
+let currentPreference: string | null = null;
+let systemMedia: MediaQueryList | null = null;
+let modeChangeListener: ((mode: ThemeMode) => void) | null = null;
+
+function isDark(hex: string): boolean {
+  const value = hex.replace("#", "");
+  if (value.length !== 6 && value.length !== 3) return true;
+  const full =
+    value.length === 3
+      ? value
+          .split("")
+          .map((c) => c + c)
+          .join("")
+      : value;
+  const r = parseInt(full.slice(0, 2), 16);
+  const g = parseInt(full.slice(2, 4), 16);
+  const b = parseInt(full.slice(4, 6), 16);
+  // Relative luminance (sRGB approximation).
+  return (0.2126 * r + 0.7152 * g + 0.0722 * b) / 255 < 0.5;
+}
+
+function setVar(name: string, value: string) {
+  document.documentElement.style.setProperty(name, value);
+}
+
+/** Apply theme tokens + host-owned safety colors. */
+export function applyThemeTokens(tokens: ThemeTokens): ThemeMode {
+  const root = document.documentElement;
+  const mode: ThemeMode = isDark(tokens.background) ? "dark" : "light";
+
+  // New token namespace.
+  setVar("--rmccc-background", tokens.background);
+  setVar("--rmccc-surface", tokens.surface);
+  setVar("--rmccc-surface-elevated", tokens.surfaceElevated);
+  setVar("--rmccc-text", tokens.text);
+  setVar("--rmccc-text-muted", tokens.textMuted);
+  setVar("--rmccc-accent", tokens.accent);
+  setVar("--rmccc-accent-contrast", tokens.accentContrast);
+  setVar("--rmccc-border", tokens.border);
+
+  // Bridge to the legacy variables used by app.css.
+  setVar("--surface-bg", tokens.background);
+  setVar("--surface-card", tokens.surface);
+  setVar("--surface-raised", tokens.surfaceElevated);
+  setVar("--surface-input", tokens.surfaceElevated);
+  setVar("--surface-hover", tokens.surfaceElevated);
+  setVar("--text-primary", tokens.text);
+  setVar("--text-secondary", tokens.textMuted);
+  setVar("--text-on-input", tokens.text);
+  setVar("--color-blue", tokens.accent);
+  setVar("--border-default", tokens.border);
+  setVar("--border-subtle", tokens.border);
+
+  // Host-owned safety colors — never taken from the theme JSON.
+  if (mode === "dark") {
+    setVar("--color-red", "#ff6b6b");
+    setVar("--color-red-light", "rgba(255,107,107,0.12)");
+    setVar("--color-red-border", "rgba(255,107,107,0.4)");
+    setVar("--color-green", "#4ade80");
+    setVar("--color-yellow", "#f5a524");
+  } else {
+    setVar("--color-red", "#dc2626");
+    setVar("--color-red-light", "#fef2f2");
+    setVar("--color-red-border", "#fca5a5");
+    setVar("--color-green", "#16a34a");
+    setVar("--color-yellow", "#d97706");
+  }
+
+  root.dataset.themeMode = mode;
+  if (modeChangeListener) modeChangeListener(mode);
+  return mode;
+}
+
+function fallbackFor(mode: ThemeMode): ThemeTokens {
+  return mode === "dark" ? DARK_FALLBACK : LIGHT_FALLBACK;
+}
+
+function systemMode(): ThemeMode {
+  return window.matchMedia?.("(prefers-color-scheme: dark)").matches
+    ? "dark"
+    : "light";
+}
+
+async function resolveTokens(preference: string | null): Promise<ThemeTokens> {
+  if (preference === "light") return LIGHT_FALLBACK;
+  if (preference === "dark") return DARK_FALLBACK;
+  if (preference === "system" || preference === null) {
+    return fallbackFor(systemMode());
+  }
+  const res = await dashboard.getThemeTokens(preference);
+  if (!res.ok) {
+    console.warn("theme: could not load tokens", res.error);
+    return fallbackFor(systemMode());
+  }
+  return res.data;
+}
+
+/** Apply a preference (null = follow system) and return the effective mode. */
+export async function applyThemePreference(
+  preference: string | null
+): Promise<ThemeMode> {
+  currentPreference = preference;
+  const tokens = await resolveTokens(preference);
+  return applyThemeTokens(tokens);
+}
+
+export function getThemePreference(): string | null {
+  return currentPreference;
+}
+
+/** Subscribe to effective-mode changes (used by the title bar / status UI). */
+export function onThemeModeChange(listener: (mode: ThemeMode) => void): void {
+  modeChangeListener = listener;
+}
+
+/** Initialize on app start; follows system changes when not pinned. */
+export async function initTheme(): Promise<void> {
+  const res = await dashboard.getThemePreference();
+  const preference = res.ok ? res.data : null;
+  await applyThemePreference(preference);
+
+  systemMedia = window.matchMedia?.("(prefers-color-scheme: dark)") ?? null;
+  systemMedia?.addEventListener("change", () => {
+    if (currentPreference === null || currentPreference === "system") {
+      void applyThemePreference(currentPreference);
+    }
+  });
+}
+
+/** Persist + apply a selection. `""` = follow system. */
+export async function setThemePreference(
+  preference: string | null
+): Promise<{ ok: boolean; error?: string }> {
+  const res = await dashboard.setTheme(preference ?? "");
+  if (!res.ok) {
+    return { ok: false, error: res.error.message };
+  }
+  await applyThemePreference(preference);
+  return { ok: true };
+}
+
+/** Theme options for the settings page. */
+export async function listThemes(): Promise<ThemeInfo[]> {
+  const res = await dashboard.listThemes();
+  return res.ok ? res.data : [];
+}

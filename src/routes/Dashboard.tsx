@@ -1,5 +1,6 @@
 import {
   Component,
+  ErrorBoundary,
   createSignal,
   Show,
   For,
@@ -9,6 +10,7 @@ import {
 import { useNavigate } from "@solidjs/router";
 import {
   auth,
+  dashboard,
   profiles,
   versions,
   launch,
@@ -17,6 +19,9 @@ import {
   type Profile,
   type VersionInfo,
   type DownloadProgressPayload,
+  type DashboardLayout,
+  type WidgetDescriptor,
+  type WidgetInstance,
 } from "../ipc/api";
 import { showToast } from "../components/Toast";
 import { EVENTS } from "../ipc/events";
@@ -68,6 +73,14 @@ const Dashboard: Component = () => {
   const [selectedProfileId, setSelectedProfileId] = createSignal<string | null>(null);
   const [newProfileName, setNewProfileName] = createSignal("");
   const [showCreateProfile, setShowCreateProfile] = createSignal(false);
+
+  // ── Dashboard layout (Phase 3, ADR-005) ──
+  const [layout, setLayout] = createSignal<DashboardLayout | null>(null);
+  const [breakpoint, setBreakpoint] = createSignal<"wide" | "medium" | "compact">("wide");
+  const [savingLayout, setSavingLayout] = createSignal(false);
+  const [draggingId, setDraggingId] = createSignal<string | null>(null);
+  const [widgetDescriptors, setWidgetDescriptors] = createSignal<WidgetDescriptor[]>([]);
+  let gridRef: HTMLDivElement | undefined;
   const [creatingProfile, setCreatingProfile] = createSignal(false);
   /// Version picked in the create dialog. Creating an instance without an
   /// explicit version is not allowed — the version determines what gets
@@ -171,6 +184,9 @@ const Dashboard: Component = () => {
   onMount(async () => {
     await loadSession();
     await Promise.all([loadProfiles(), loadVersions(), loadRunningStatus()]);
+    updateBreakpoint();
+    window.addEventListener("resize", updateBreakpoint);
+    await loadDashboardLayout();
 
     // Listen for launch events
     try {
@@ -280,6 +296,7 @@ const Dashboard: Component = () => {
   });
 
   onCleanup(() => {
+    window.removeEventListener("resize", updateBreakpoint);
     unlisteners.forEach((u) => u());
   });
 
@@ -386,13 +403,180 @@ const Dashboard: Component = () => {
     }
   };
 
-  // ── Render ──
+  // ── Layout logic (Phase 3) ──
 
-  return (
-    <Show when={!authLoading()} fallback={<LoadingScreen message={t("dashboard.account.loadingSession")} />}>
-      <Show when={session()} fallback={<LoadingScreen message={t("dashboard.account.redirecting")} />}>
-        <div class="launcher-root">
-          {/* ── Left Column: Account ── */}
+  const loadDashboardLayout = async () => {
+    const [layoutRes, widgetsRes] = await Promise.all([
+      dashboard.getLayout(),
+      dashboard.listWidgets(),
+    ]);
+    if (layoutRes.ok) setLayout(layoutRes.data);
+    else showToast(layoutRes.error);
+    if (widgetsRes.ok) setWidgetDescriptors(widgetsRes.data);
+  };
+
+  const updateBreakpoint = () => {
+    const width = window.innerWidth;
+    setBreakpoint(width >= 1280 ? "wide" : width >= 768 ? "medium" : "compact");
+  };
+
+  const effectiveColumns = () => {
+    const cols = layout()?.grid.columns ?? 12;
+    if (breakpoint() === "medium") return Math.min(cols, 8);
+    if (breakpoint() === "compact") return Math.min(cols, 4);
+    return cols;
+  };
+
+  const widgetSize = (w: WidgetInstance) => {
+    const override =
+      breakpoint() === "medium"
+        ? w.breakpointOverrides?.medium
+        : breakpoint() === "compact"
+          ? w.breakpointOverrides?.compact
+          : undefined;
+    const size = override ?? w.size;
+    return {
+      w: Math.max(1, Math.min(size.w, effectiveColumns())),
+      h: Math.max(1, size.h),
+    };
+  };
+
+  const visibleWidgets = () => (layout()?.widgets ?? []).filter((w) => w.enabled);
+
+  const gridStyle = () => {
+    const gap = layout()?.grid.gap ?? 16;
+    return `display: grid; grid-template-columns: repeat(${effectiveColumns()}, minmax(0, 1fr)); gap: ${gap}px; grid-auto-rows: 120px;`;
+  };
+
+  const slotStyle = (w: WidgetInstance) => {
+    const size = widgetSize(w);
+    return `grid-column: ${w.position.x + 1} / span ${size.w}; grid-row: ${w.position.y + 1} / span ${size.h};`;
+  };
+
+  const widgetLabel = (w: WidgetInstance) => {
+    const key = `${w.pluginId}/${w.widgetId}`;
+    if (key === "org.rmccc.core-ui/account-card") return t("dashboard.account.title");
+    if (key === "org.rmccc.core-ui/instance-launcher") return t("dashboard.profile.title");
+    if (key === "org.rmccc.core-ui/version-browser") return t("dashboard.version.title");
+    if (w.widgetId.startsWith("dashboard-card:")) {
+      return w.widgetId.slice("dashboard-card:".length);
+    }
+    return w.widgetId;
+  };
+
+  const persistLayout = async (next: DashboardLayout) => {
+    setSavingLayout(true);
+    const res = await dashboard.saveLayout(next);
+    setSavingLayout(false);
+    if (res.ok) setLayout(res.data.layout);
+    else showToast(res.error);
+  };
+
+  const handleDragStart = (e: DragEvent, w: WidgetInstance) => {
+    setDraggingId(w.instanceId);
+    e.dataTransfer?.setData("text/plain", w.instanceId);
+  };
+
+  const handleDrop = async (e: DragEvent) => {
+    e.preventDefault();
+    const id = draggingId() ?? e.dataTransfer?.getData("text/plain");
+    if (!id || !gridRef || !layout()) return;
+    const rect = gridRef.getBoundingClientRect();
+    const gap = layout()!.grid.gap;
+    const cols = effectiveColumns();
+    const cellW = (rect.width - gap * (cols - 1)) / cols;
+    const rowH = 120 + gap;
+    const x = Math.max(
+      0,
+      Math.min(cols - 1, Math.floor((e.clientX - rect.left) / (cellW + gap)))
+    );
+    const y = Math.max(0, Math.floor((e.clientY - rect.top) / rowH));
+    const next: DashboardLayout = {
+      ...layout()!,
+      widgets: layout()!.widgets.map((w) =>
+        w.instanceId === id ? { ...w, position: { x, y } } : w
+      ),
+    };
+    setDraggingId(null);
+    await persistLayout(next);
+  };
+
+  const cycleWidgetWidth = async (w: WidgetInstance) => {
+    const widths = [1, 2, 3, 4, 6, 8, 12];
+    const nextW = widths.find((n) => n > w.size.w) ?? widths[0];
+    const next: DashboardLayout = {
+      ...layout()!,
+      widgets: layout()!.widgets.map((item) =>
+        item.instanceId === w.instanceId
+          ? { ...item, size: { ...item.size, w: nextW } }
+          : item
+      ),
+    };
+    await persistLayout(next);
+  };
+
+  const hideWidget = async (w: WidgetInstance) => {
+    const next: DashboardLayout = {
+      ...layout()!,
+      widgets: layout()!.widgets.map((item) =>
+        item.instanceId === w.instanceId ? { ...item, enabled: false } : item
+      ),
+    };
+    await persistLayout(next);
+  };
+
+  const handleResetLayout = async () => {
+    const res = await dashboard.resetLayout();
+    if (res.ok) setLayout(res.data);
+    else showToast(res.error);
+  };
+
+  const restoreHiddenWidgets = async () => {
+    if (!layout()) return;
+    const next: DashboardLayout = {
+      ...layout()!,
+      widgets: layout()!.widgets.map((w) => ({ ...w, enabled: true })),
+    };
+    await persistLayout(next);
+  };
+
+  const addMissingWidgets = async () => {
+    if (!layout()) return;
+    const existing = new Set(
+      layout()!.widgets.map((w) => `${w.pluginId}/${w.widgetId}`)
+    );
+    const missing = widgetDescriptors().filter(
+      (d) => !existing.has(`${d.pluginId}/${d.widgetId}`)
+    );
+    if (missing.length === 0) return;
+    const maxY = layout()!.widgets.reduce(
+      (acc, w) => Math.max(acc, w.position.y + w.size.h),
+      0
+    );
+    const additions = missing.map((d, index) => ({
+      instanceId: `${d.pluginId}-${d.widgetId}`
+        .replace(/[^a-z0-9-]/g, "-")
+        .slice(0, 64),
+      pluginId: d.pluginId,
+      widgetId: d.widgetId,
+      enabled: true,
+      position: { x: 0, y: maxY + index * 2 },
+      size: {
+        w: Math.min(d.defaultSize.w, layout()!.grid.columns),
+        h: d.defaultSize.h,
+      },
+      breakpointOverrides: { medium: null, compact: null },
+      configuration: {},
+    }));
+    await persistLayout({
+      ...layout()!,
+      widgets: [...layout()!.widgets, ...additions],
+    });
+  };
+
+  // ── Built-in widget panels (reuse the existing markup) ──
+
+  const accountPanel = () => (
           <div class="col-left">
             <div class="card card-account">
               <div class="account-avatar">
@@ -422,83 +606,11 @@ const Dashboard: Component = () => {
               </button>
             </div>
 
-            {/* Create Profile Modal */}
-            <Show when={showCreateProfile()}>
-              <div
-                class="modal-overlay"
-                onClick={() => setShowCreateProfile(false)}
-              >
-                <div class="modal-card" onClick={(e) => e.stopPropagation()}>
-                  <h3 class="modal-title">{t("dashboard.profile.create.title")}</h3>
-                  <input
-                    type="text"
-                    class="modal-input"
-                    placeholder={t("dashboard.profile.create.placeholder")}
-                    value={newProfileName()}
-                    onInput={(e) => setNewProfileName(e.currentTarget.value)}
-                    onKeyDown={(e) => {
-                      if (e.key === "Enter") handleCreateProfile();
-                    }}
-                    autofocus
-                  />
 
-                  {/* Game version is mandatory: it decides what gets downloaded
-                      right after the instance is created. */}
-                  <label class="modal-field-label" for="create-version">
-                    {t("dashboard.profile.create.versionLabel")}
-                  </label>
-                  <select
-                    id="create-version"
-                    class="modal-input"
-                    onChange={(e) => setCreateVersion(e.currentTarget.value)}
-                  >
-                    <option value="" selected={createVersion() === ""}>
-                      {t("dashboard.profile.create.versionPlaceholder")}
-                    </option>
-                    <For each={createVersionOptions()}>
-                      {(v) => (
-                        <option value={v.id} selected={createVersion() === v.id}>
-                          {v.id}
-                        </option>
-                      )}
-                    </For>
-                  </select>
-                  <label class="modal-checkbox">
-                    <input
-                      type="checkbox"
-                      checked={createIncludeSnapshots()}
-                      onChange={(e) =>
-                        setCreateIncludeSnapshots(e.currentTarget.checked)
-                      }
-                    />
-                    {t("dashboard.profile.create.includeSnapshots")}
-                  </label>
-
-                  <div class="modal-actions">
-                    <button
-                      class="modal-btn-cancel"
-                      onClick={() => setShowCreateProfile(false)}
-                    >
-                      {t("common.cancel")}
-                    </button>
-                    <button
-                      class="modal-btn-primary"
-                      onClick={handleCreateProfile}
-                      disabled={
-                        creatingProfile() ||
-                        !newProfileName().trim() ||
-                        !createVersion()
-                      }
-                    >
-                      {creatingProfile() ? t("dashboard.profile.create.busy") : t("dashboard.profile.create.submit")}
-                    </button>
-                  </div>
-                </div>
-              </div>
-            </Show>
           </div>
+  );
 
-          {/* ── Center Column: Profiles + Launch ── */}
+  const profilesPanel = () => (
           <div class="col-center">
             <div class="card card-server">
               <div class="card-server-header">
@@ -674,8 +786,9 @@ const Dashboard: Component = () => {
                 </div>
               </Show>
           </div>
+  );
 
-          {/* ── Right Column: Versions ── */}
+  const versionsPanel = () => (
           <div class="col-right">
             <div class="card card-version">
               <div class="ver-header">
@@ -770,6 +883,187 @@ const Dashboard: Component = () => {
               </div>
             </Show>
           </div>
+  );
+
+  const renderWidget = (w: WidgetInstance) => {
+    const key = `${w.pluginId}/${w.widgetId}`;
+    switch (key) {
+      case "org.rmccc.core-ui/account-card":
+        return accountPanel();
+      case "org.rmccc.core-ui/instance-launcher":
+        return profilesPanel();
+      case "org.rmccc.core-ui/version-browser":
+        return versionsPanel();
+      default: {
+        if (w.widgetId.startsWith("dashboard-card:")) {
+          const descriptor = widgetDescriptors().find(
+            (d) => d.pluginId === w.pluginId && d.widgetId === w.widgetId
+          );
+          if (descriptor) {
+            return <PluginDashCard widget={w} descriptor={descriptor} />;
+          }
+        }
+        return <UnknownWidget widget={w} />;
+      }
+    }
+  };
+
+  const createProfileModal = () => (
+    <>
+            {/* Create Profile Modal */}
+            <Show when={showCreateProfile()}>
+              <div
+                class="modal-overlay"
+                onClick={() => setShowCreateProfile(false)}
+              >
+                <div class="modal-card" onClick={(e) => e.stopPropagation()}>
+                  <h3 class="modal-title">{t("dashboard.profile.create.title")}</h3>
+                  <input
+                    type="text"
+                    class="modal-input"
+                    placeholder={t("dashboard.profile.create.placeholder")}
+                    value={newProfileName()}
+                    onInput={(e) => setNewProfileName(e.currentTarget.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") handleCreateProfile();
+                    }}
+                    autofocus
+                  />
+
+                  {/* Game version is mandatory: it decides what gets downloaded
+                      right after the instance is created. */}
+                  <label class="modal-field-label" for="create-version">
+                    {t("dashboard.profile.create.versionLabel")}
+                  </label>
+                  <select
+                    id="create-version"
+                    class="modal-input"
+                    onChange={(e) => setCreateVersion(e.currentTarget.value)}
+                  >
+                    <option value="" selected={createVersion() === ""}>
+                      {t("dashboard.profile.create.versionPlaceholder")}
+                    </option>
+                    <For each={createVersionOptions()}>
+                      {(v) => (
+                        <option value={v.id} selected={createVersion() === v.id}>
+                          {v.id}
+                        </option>
+                      )}
+                    </For>
+                  </select>
+                  <label class="modal-checkbox">
+                    <input
+                      type="checkbox"
+                      checked={createIncludeSnapshots()}
+                      onChange={(e) =>
+                        setCreateIncludeSnapshots(e.currentTarget.checked)
+                      }
+                    />
+                    {t("dashboard.profile.create.includeSnapshots")}
+                  </label>
+
+                  <div class="modal-actions">
+                    <button
+                      class="modal-btn-cancel"
+                      onClick={() => setShowCreateProfile(false)}
+                    >
+                      {t("common.cancel")}
+                    </button>
+                    <button
+                      class="modal-btn-primary"
+                      onClick={handleCreateProfile}
+                      disabled={
+                        creatingProfile() ||
+                        !newProfileName().trim() ||
+                        !createVersion()
+                      }
+                    >
+                      {creatingProfile() ? t("dashboard.profile.create.busy") : t("dashboard.profile.create.submit")}
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </Show>
+    </>
+  );
+
+  // ── Render ──
+
+  return (
+    <Show when={!authLoading()} fallback={<LoadingScreen message={t("dashboard.account.loadingSession")} />}>
+      <Show when={session()} fallback={<LoadingScreen message={t("dashboard.account.redirecting")} />}>
+        <div class="dashboard-page">
+          <div class="dashboard-toolbar">
+            <span class="dashboard-hint">{t("dashboard.layout.hint")}</span>
+            <div class="dashboard-toolbar-actions">
+              <button
+                class="settings-refresh-btn"
+                onClick={addMissingWidgets}
+                disabled={savingLayout()}
+              >
+                {t("dashboard.layout.addWidgets")}
+              </button>
+              <button
+                class="settings-refresh-btn"
+                onClick={restoreHiddenWidgets}
+                disabled={savingLayout()}
+              >
+                {t("dashboard.layout.restoreHidden")}
+              </button>
+              <button
+                class="settings-refresh-btn"
+                onClick={handleResetLayout}
+                disabled={savingLayout()}
+              >
+                {t("dashboard.layout.reset")}
+              </button>
+            </div>
+          </div>
+          <div
+            class="dashboard-grid"
+            ref={(el) => (gridRef = el)}
+            style={gridStyle()}
+            onDragOver={(e) => e.preventDefault()}
+            onDrop={handleDrop}
+          >
+            <For each={visibleWidgets()}>
+              {(w) => (
+                <div class="dashboard-slot" style={slotStyle(w)}>
+                  <div class="dashboard-widget-head">
+                    <span
+                      class="dashboard-drag"
+                      draggable={true}
+                      onDragStart={(e) => handleDragStart(e, w)}
+                      title={t("dashboard.layout.drag")}
+                    >
+                      ⠿
+                    </span>
+                    <span class="dashboard-widget-label">{widgetLabel(w)}</span>
+                    <button
+                      class="dashboard-widget-btn"
+                      onClick={() => cycleWidgetWidth(w)}
+                      title={t("dashboard.layout.resize")}
+                    >
+                      ↔
+                    </button>
+                    <button
+                      class="dashboard-widget-btn"
+                      onClick={() => hideWidget(w)}
+                      title={t("dashboard.layout.hide")}
+                    >
+                      ×
+                    </button>
+                  </div>
+                  <ErrorBoundary
+                    fallback={(err) => <WidgetError message={String(err)} />}
+                  >
+                    {renderWidget(w)}
+                  </ErrorBoundary>
+                </div>
+              )}
+            </For>
+          </div>
+          {createProfileModal()}
         </div>
       </Show>
     </Show>
@@ -809,6 +1103,32 @@ const EmptyState: Component<{
         {props.buttonLabel}
       </button>
     </Show>
+  </div>
+);
+
+// ── Plugin / placeholder widgets (Phase 3) ──
+
+const PluginDashCard: Component<{
+  widget: WidgetInstance;
+  descriptor: WidgetDescriptor;
+}> = (props) => (
+  <div class="card dashboard-plugin-card">
+    <div class="dashboard-plugin-title">{props.descriptor.displayName}</div>
+    <p class="dashboard-plugin-desc">{t("dashboard.pluginCard.placeholder")}</p>
+  </div>
+);
+
+const UnknownWidget: Component<{ widget: WidgetInstance }> = (props) => (
+  <div class="card dashboard-plugin-card is-missing">
+    <div class="dashboard-plugin-title">{props.widget.widgetId}</div>
+    <p class="dashboard-plugin-desc">{t("dashboard.pluginCard.unavailable")}</p>
+  </div>
+);
+
+const WidgetError: Component<{ message: string }> = (props) => (
+  <div class="card dashboard-plugin-card is-error">
+    <div class="dashboard-plugin-title">{t("dashboard.widget.error")}</div>
+    <p class="dashboard-plugin-desc">{props.message}</p>
   </div>
 );
 

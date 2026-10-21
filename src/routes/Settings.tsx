@@ -4,11 +4,14 @@ import {
   settings,
   auth,
   logs,
+  dashboard,
   type AppConfig,
   type JavaInfo,
   type SettingsUpdate,
   type AccountMetadata,
 } from "../ipc/api";
+import type { ThemeInfo } from "../ipc/types";
+import { listThemes, setThemePreference } from "../theme";
 import { showToast } from "../components/Toast";
 import {
   t,
@@ -53,6 +56,17 @@ const Settings: Component = () => {
   const [defaultPriority, setDefaultPriority] = createSignal("normal");
   const [autoMemory, setAutoMemory] = createSignal(false);
 
+  const handleThemeChange = async (value: string) => {
+    const pref = value === "" ? null : value;
+    const res = await setThemePreference(pref);
+    if (res.ok) {
+      setThemePreferenceState(pref);
+      showToast({ code: "success", message: t("settings.theme.saved"), retryable: false });
+    } else {
+      showToast({ code: "error", message: res.error ?? t("settings.theme.saveFailed"), retryable: false });
+    }
+  };
+
   // ── Accounts (0.5.3) ──
   const [accounts, setAccounts] = createSignal<AccountMetadata[]>([]);
   const [accountsLoading, setAccountsLoading] = createSignal(false);
@@ -61,6 +75,10 @@ const Settings: Component = () => {
   // ── Logs (0.5.5) ──
   const [logsText, setLogsText] = createSignal("");
   const [logsLoading, setLogsLoading] = createSignal(false);
+
+  // ── Theme (Phase 3) ──
+  const [themePreference, setThemePreferenceState] = createSignal<string | null>(null);
+  const [themeOptions, setThemeOptions] = createSignal<ThemeInfo[]>([]);
 
   onMount(async () => {
     const result = await settings.get();
@@ -85,6 +103,9 @@ const Settings: Component = () => {
     setLoading(false);
     await detectJava();
     await loadAccounts();
+    const pref = await dashboard.getThemePreference();
+    if (pref.ok) setThemePreferenceState(pref.data);
+    setThemeOptions(await listThemes());
   });
 
   const detectJava = async () => {
@@ -251,6 +272,39 @@ const Settings: Component = () => {
                   </For>
                 </select>
               </Show>
+            </div>
+          </div>
+
+          {/* ── Theme (Phase 3) ── */}
+          <div class="settings-section">
+            <h3 class="settings-section-title">{t("settings.theme.title")}</h3>
+            <p class="settings-section-desc">{t("settings.theme.desc")}</p>
+
+            <div class="settings-field">
+              <select
+                class="settings-input"
+                onChange={(e) => handleThemeChange(e.currentTarget.value)}
+              >
+                <option value="" selected={themePreference() === null}>
+                  {t("settings.theme.followSystem")}
+                </option>
+                <option value="builtin:light" selected={themePreference() === "builtin:light"}>
+                  {t("settings.theme.light")}
+                </option>
+                <option value="builtin:dark" selected={themePreference() === "builtin:dark"}>
+                  {t("settings.theme.dark")}
+                </option>
+                <For each={themeOptions().filter((theme) => !theme.isBuiltin)}>
+                  {(theme) => (
+                    <option
+                      value={theme.key}
+                      selected={themePreference() === theme.key}
+                    >
+                      {theme.name}
+                    </option>
+                  )}
+                </For>
+              </select>
             </div>
           </div>
 
