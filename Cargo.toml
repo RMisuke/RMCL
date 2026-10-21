@@ -13,8 +13,10 @@ members = [
     "crates/rmccc-platform",
     "crates/rmccc-plugin",
     "crates/rmccc-dashboard",
+    "crates/rmccc-logic",
     "src-tauri",
     "src-cli",
+    "src-logic-host",
 ]
 resolver = "2"
 
@@ -30,6 +32,9 @@ async-trait = "0.1"
 
 # HTTP
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json", "stream", "gzip", "brotli"] }
+
+# Logic plugins (Phase 5, ADR-007): only the helper binary links this.
+wasmi = "0.40"
 
 # Crypto & hashing
 sha1 = "0.10"
@@ -94,6 +99,7 @@ rmccc-profile = { path = "crates/rmccc-profile" }
 rmccc-config = { path = "crates/rmccc-config" }
 rmccc-platform = { path = "crates/rmccc-platform" }
 rmccc-plugin = { path = "crates/rmccc-plugin" }
+rmccc-logic = { path = "crates/rmccc-logic" }
 rmccc-dashboard = { path = "crates/rmccc-dashboard" }
 
 [profile.release]

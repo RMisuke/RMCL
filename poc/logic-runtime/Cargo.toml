@@ -1,0 +1,30 @@
+# Standalone PoC crate for ADR-007 (Phase 5). Deliberately NOT a workspace member:
+# it pulls in multi-megabyte engines that must never reach the shipped binaries.
+[workspace]
+
+[package]
+name = "logic-runtime-poc"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+wat = "1"
+
+[features]
+default = []
+wasmi-engine = ["dep:wasmi"]
+wasmtime-engine = ["dep:wasmtime"]
+
+[dependencies.wasmi]
+version = "0.40"
+optional = true
+
+[dependencies.wasmtime]
+version = "27"
+optional = true
+
+[profile.release]
+lto = true
+codegen-units = 1
+strip = true

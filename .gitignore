@@ -6,6 +6,7 @@
 
 # === Rust 构建产物 ===
 /target/
+/poc/*/target/
 **/*.rs.bk
 *.pdb
 
