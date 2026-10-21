@@ -1,136 +1,19 @@
 //! Launch IPC commands.
 //!
-//! Orchestration only — the actual launch pipeline (command-line generation,
-//! native extraction, log4j, process spawning and monitoring) lives in
-//! [`rmccc_launch::DefaultLauncher`] (HMCL `DefaultLauncher`). This module:
-//! - resolves the profile + local launch manifest,
-//! - runs the pre-launch completeness check & auto-repair (HMCL
-//!   `checkGameCompletionAsync`),
-//! - builds a [`rmccc_launch::ProcessListener`] forwarding game events to the UI,
-//! - guards against duplicate / excessive concurrent launches.
+//! Thin Tauri adapter over [`rmccc_core::pipeline::launch_game`] (P1-3). All
+//! orchestration — local manifest resolution, Java detection, auth resolution,
+//! command-line generation, native extraction, log4j, spawning and monitoring —
+//! lives in the core pipeline so the CLI and the GUI cannot drift apart.
+//!
+//! What remains here is genuinely Tauri/IPC specific:
+//! - duplicate / concurrent launch guards (UI state),
+//! - a [`rmccc_launch::ProcessListener`] forwarding game events to the frontend,
+//! - process group termination for `launch_kill`.
 
 use crate::state::AppState;
-use rmccc_auth::Account;
 use rmccc_error::IpcError;
-use rmccc_launch::{find_java, LaunchOptions};
-use rmccc_version::GameRepository as _;
-use rmccc_version::GameVersion;
-use std::path::PathBuf;
 use std::sync::Arc;
 use tauri::Emitter;
-
-/// Result of the profile + version resolution phase.
-struct ResolvedLaunch {
-    profile: rmccc_profile::Profile,
-    game_version: GameVersion,
-    required_java: u32,
-}
-
-/// Auth credentials extracted for the game launch.
-struct LaunchAuth {
-    username: String,
-    uuid: String,
-    access_token: String,
-    user_type: String,
-}
-
-/// Phase 1: Load profile from store and resolve game version metadata.
-///
-/// Resolves **locally** from the [`GameRepository`] (offline-capable) instead of
-/// the network `fetch_version` — the patched / inherited manifest written to
-/// disk is the source of truth for launching.
-async fn resolve_launch_profile(
-    state: &AppState,
-    profile_id: &str,
-) -> Result<ResolvedLaunch, IpcError> {
-    let core = state.core.read().await;
-    let profile = core
-        .profile_store
-        .get(profile_id)?
-        .ok_or_else(|| IpcError {
-            code: rmccc_error::ErrorCode::ProfileNotFound,
-            message: format!("Profile not found: {profile_id}"),
-            retryable: false,
-        })?;
-
-    // 从本地仓库解析（启动数据源 = 磁盘，而非网络）
-    let resolved = {
-        let repo = core
-            .game_repository
-            .read()
-            .map_err(|_| rmccc_error::RmcccError::Other("game repository lock poisoned".into()))?;
-        repo.get_resolved(&profile.game_version)
-            .map_err(|e| rmccc_error::RmcccError::Other(e.to_string()))?
-    };
-    let game_version = resolved.launch;
-
-    let required_java = game_version
-        .java_version
-        .as_ref()
-        .map(|j| j.major_version)
-        .unwrap_or_else(|| rmccc_version::java_version_for_mc(&profile.game_version));
-
-    Ok(ResolvedLaunch {
-        profile,
-        game_version,
-        required_java,
-    })
-}
-
-/// Phase 3: Detect Java installation (custom path or auto-detect).
-fn detect_java(
-    profile: &rmccc_profile::Profile,
-    required_java: u32,
-) -> Result<rmccc_launch::JavaInstallation, IpcError> {
-    match &profile.java_path {
-        Some(java_home) => {
-            let home = PathBuf::from(java_home);
-            let java_bin = if home.is_file() {
-                home.clone()
-            } else {
-                home.join("bin").join("java")
-            };
-            if !java_bin.exists() {
-                return Err(IpcError {
-                    code: rmccc_error::ErrorCode::JavaNotFound,
-                    message: format!("Java not found at: {}", java_bin.display()),
-                    retryable: false,
-                });
-            }
-            Ok(rmccc_launch::JavaInstallation {
-                path: java_bin,
-                major_version: required_java,
-                vendor: String::new(),
-                is_64bit: true,
-            })
-        }
-        None => find_java(required_java).map_err(IpcError::from),
-    }
-}
-
-/// Phase 5: Load auth session with offline fallback.
-async fn resolve_auth_session(state: &AppState) -> Result<LaunchAuth, IpcError> {
-    let core = state.core.read().await;
-    // 统一经 Account::log_in() 获取 AuthInfo（提前窗口 + 刷新 + uuid 一致性校验）。
-    match core.log_in_active_account().await? {
-        Some(info) => Ok(LaunchAuth {
-            username: info.username,
-            uuid: info.uuid,
-            access_token: info.access_token,
-            user_type: info.user_type,
-        }),
-        // 无账户回退到默认离线账户（对齐 HMCL：msa + 随机 token）。
-        None => {
-            let info = rmccc_auth::OfflineAccount::new("Player").play_offline();
-            Ok(LaunchAuth {
-                username: info.username,
-                uuid: info.uuid,
-                access_token: info.access_token,
-                user_type: info.user_type,
-            })
-        }
-    }
-}
 
 /// Forwards game process events to the UI (HMCL `ProcessListener`).
 ///
@@ -198,74 +81,44 @@ pub async fn launch_start(
         });
     }
 
-    // ── Phase 1: Resolve profile & version (offline local) ──
-    let resolved = resolve_launch_profile(&state, &profile_id).await?;
-
-    // ── Phase 2: Pre-launch completeness check & auto-repair (L5) ──
-    {
-        let core = state.core.read().await;
-        let _repaired =
-            rmccc_core::pipeline::ensure_launch_ready(&core, &resolved.profile, None).await?;
-    }
-
-    // ── Phase 3: Detect Java ──
-    let java_install = detect_java(&resolved.profile, resolved.required_java)?;
-    tracing::info!(
-        profile_id = %profile_id,
-        java_version = java_install.major_version,
-        java_path = %java_install.path.display(),
-        "Launching Minecraft"
-    );
-
-    // ── Phase 4: Resolve auth ──
-    let auth = resolve_auth_session(&state).await?;
-    let auth_info =
-        rmccc_launch::AuthInfo::new(auth.username, auth.uuid, auth.access_token, auth.user_type);
-    tracing::info!(
-        username = %auth_info.username,
-        uuid = %auth_info.uuid,
-        user_type = %auth_info.user_type,
-        "Using auth session for launch"
-    );
-
-    // ── Phase 5: Build options + launcher (HMCL DefaultLauncher) ──
-    // `from_profile` derives both the shared game root (versions/libraries/
-    // assets, where the resolved manifest lives) and the instance's run
-    // directory (which honours its isolation setting), so the launcher can no
-    // longer be handed a per-profile directory holding none of those files.
-    let options = {
-        let core = state.core.read().await;
-        LaunchOptions::from_profile(&resolved.profile, &core.config, java_install.clone())
-    };
     let listener: Arc<dyn rmccc_launch::ProcessListener> = Arc::new(TauriProcessListener {
         app_handle: state.app_handle.clone(),
         profile_id: profile_id.clone(),
         running_games: state.running_games.clone(),
     });
-    let launcher = rmccc_launch::DefaultLauncher::new(
-        resolved.profile.game_version.clone(),
-        resolved.game_version,
-        auth_info,
-        options,
-        Some(listener),
-    );
 
-    // ── Phase 6: Launch (natives + log4j + spawn + monitors) ──
-    let managed = launcher
-        .launch()
-        .await
-        .map_err(|e| IpcError::from(rmccc_error::RmcccError::Other(e.to_string())))?;
+    // ── 解析 profile → 启动前修复 → 启动（编排全在 pipeline）──
+    let pid = {
+        let core = state.core.read().await;
+        let profile = core
+            .profile_store
+            .get(&profile_id)?
+            .ok_or_else(|| IpcError {
+                code: rmccc_error::ErrorCode::ProfileNotFound,
+                message: format!("Profile not found: {profile_id}"),
+                retryable: false,
+            })?;
 
-    let pid = managed.pid();
+        // 启动前完整性检查与自动补齐（HMCL checkGameCompletionAsync）。
+        let repaired = rmccc_core::pipeline::ensure_launch_ready(&core, &profile, None).await?;
+        if !repaired.is_noop() {
+            tracing::info!(
+                profile_id = %profile_id,
+                files = repaired.total_files,
+                "Pre-launch resources repaired"
+            );
+        }
+
+        rmccc_core::pipeline::launch_game(&core, &profile, listener, None)
+            .await?
+            .pid()
+    };
+
     state.running_games.insert(profile_id.clone(), pid);
     let _ = state.app_handle.emit(
         crate::events::LAUNCH_STARTED,
         serde_json::json!({ "profile_id": profile_id, "pid": pid }),
     );
-
-    // ── Update last_played ──
-    let core = state.core.read().await;
-    core.profile_store.touch(&profile_id)?;
 
     Ok(())
 }
@@ -280,18 +133,10 @@ pub async fn launch_kill(
         let pid = *pid;
         tracing::info!(profile_id = %profile_id, pid = pid, "Killing game process");
 
-        #[cfg(unix)]
-        // SAFETY: kill(-pid, SIGKILL) 向 pid 所在进程组发信号。进程组由
-        // spawn_game 的 process_group(0) 建立，可同时终止 Java 及其子进程树（P2-17）。
-        unsafe {
-            libc::kill(-(pid as libc::pid_t), libc::SIGKILL);
-        }
-        #[cfg(windows)]
-        {
-            let _ = std::process::Command::new("taskkill")
-                .args(["/PID", &pid.to_string(), "/F"])
-                .output();
-        }
+        // 终止方式由平台后端决定（Unix 进程组 SIGKILL；Windows 待 Job Object）。
+        // 本层不再出现 `#[cfg(unix)]` / `taskkill`（指南 §5.7，P2-17）。
+        let core = state.core.read().await;
+        core.platform.process.terminate_tree(pid)?;
         state.running_games.remove(&profile_id);
     }
     Ok(())

@@ -19,6 +19,7 @@
     "process:default",
     "window-state:default",
     "opener:default",
+    "dialog:allow-open",
     "updater:default"
   ]
 }

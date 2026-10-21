@@ -1,8 +1,12 @@
 //! Instance IPC commands — the HMCL-aligned game instance management surface.
 //!
-//! These commands operate on the local [`GameRepository`] (indexed from
-//! `versions/` under the game root): listing, refreshing, renaming,
-//! duplicating, removing, and completeness-checking / repairing instances.
+//! # id 语义（ADR-002 决策 2）
+//!
+//! | 命令 | 参数 |
+//! |------|------|
+//! | [`instance_paths`] / [`instance_check_completion`] / [`instance_repair`] | **profile id**（后两者回落版本 id） |
+//! | [`instance_list`] / [`instance_refresh`] | 无参，返回**版本仓库**视图 |
+//! | [`instance_rename`] / [`instance_duplicate`] / [`instance_remove`] | **版本 id**（操作 `versions/{id}/`） |
 
 use crate::state::AppState;
 use rmccc_error::IpcError;
@@ -38,6 +42,30 @@ pub struct MissingFileInfo {
     pub path: String,
 }
 
+/// 把 `instance_*` 的 id 解析成**版本 id**（ADR-002 决策 2）。
+///
+/// 先按 profile id 查（UI 传的就是它），命中则用该实例的 `game_version`；
+/// 未命中再当作版本 id 直接查仓库；两者都不存在才报 `ProfileNotFound`。
+async fn resolve_version_id(core: &rmccc_core::CoreContext, id: &str) -> Result<String, IpcError> {
+    if let Some(profile) = core.profile_store.get(id)? {
+        return Ok(profile.game_version);
+    }
+
+    let known = {
+        let repo = core.game_repository.read().map_err(|_| locked_error())?;
+        repo.get_resolved(id).is_ok()
+    };
+    if known {
+        return Ok(id.to_string());
+    }
+
+    Err(IpcError {
+        code: rmccc_error::ErrorCode::ProfileNotFound,
+        message: format!("No profile or installed version with id '{id}'"),
+        retryable: false,
+    })
+}
+
 fn locked_error() -> IpcError {
     IpcError {
         code: rmccc_error::ErrorCode::InternalError,
@@ -65,7 +93,14 @@ pub async fn instance_list(
         let has_jar = rmccc_version::file_layout::instance_jar(&game_root, &id).exists();
         let missing_count = resolved
             .as_ref()
-            .map(|r| rmccc_version::completion::check_completion(&game_root, r).len())
+            .map(|r| {
+                rmccc_version::completion::check_completion(
+                    &game_root,
+                    r,
+                    &core.platform.descriptor,
+                )
+                .len()
+            })
             .unwrap_or(1);
         instances.push(InstanceInfo {
             id,
@@ -101,7 +136,14 @@ pub async fn instance_refresh(
             let resolved = repo.get_resolved(&id).ok();
             let missing_count = resolved
                 .as_ref()
-                .map(|r| rmccc_version::completion::check_completion(&game_root, r).len())
+                .map(|r| {
+                    rmccc_version::completion::check_completion(
+                        &game_root,
+                        r,
+                        &core.platform.descriptor,
+                    )
+                    .len()
+                })
                 .unwrap_or(1);
             let game_version = repo.get_game_version(&id);
             let modded = repo.is_modded(&id);
@@ -191,12 +233,18 @@ pub async fn instance_check_completion(
     id: String,
 ) -> Result<Vec<MissingFileInfo>, IpcError> {
     let core = state.core.read().await;
+    let version_id = resolve_version_id(&core, &id).await?;
+
     let repo = core.game_repository.read().map_err(|_| locked_error())?;
     let game_root = repo.game_dir().to_path_buf();
     let resolved = repo
-        .get_resolved(&id)
+        .get_resolved(&version_id)
         .map_err(|e| IpcError::from(rmccc_error::RmcccError::Other(e.to_string())))?;
-    let missing = rmccc_version::completion::check_completion(&game_root, &resolved);
+    let missing = rmccc_version::completion::check_completion(
+        &game_root,
+        &resolved,
+        &core.platform.descriptor,
+    );
     let info = missing
         .into_iter()
         .map(|m| MissingFileInfo {
@@ -214,41 +262,44 @@ pub async fn instance_repair(
     state: tauri::State<'_, AppState>,
     id: String,
 ) -> Result<usize, IpcError> {
-    // Collect the resolved manifest + game root under the lock, then release it
-    // before awaiting downloads (std::sync::RwLock guards are not Send).
-    let (game_root, resolved, http_client) = {
-        let core = state.core.read().await;
-        let repo = core.game_repository.read().map_err(|_| locked_error())?;
-        let game_root = repo.game_dir().to_path_buf();
-        let resolved = repo
-            .get_resolved(&id)
-            .map_err(|e| IpcError::from(rmccc_error::RmcccError::Other(e.to_string())))?;
-        (game_root, resolved, core.http_client.clone())
-    };
+    // P1-3：修复编排收归 `pipeline::repair_instance`（与 CLI 的
+    // `resource repair`、启动前的 `ensure_launch_ready` 同一份实现）。
+    let core = state.core.read().await;
+    let version_id = resolve_version_id(&core, &id).await?;
+    let report = rmccc_core::pipeline::repair_instance(&core, &version_id, None).await?;
 
-    let items =
-        rmccc_version::completion::build_completion_downloads(&http_client, &game_root, &resolved)
-            .await?;
-
-    if items.is_empty() {
-        tracing::info!(id = %id, "Instance is complete — nothing to repair");
-        return Ok(0);
+    if !report.is_complete() {
+        return Err(IpcError {
+            code: rmccc_error::ErrorCode::DownloadFailed,
+            message: format!(
+                "{} of {} files failed to download",
+                report.failed_files, report.total_files
+            ),
+            retryable: true,
+        });
     }
 
-    let count = items.len();
+    tracing::info!(id = %id, version = %version_id, files = report.total_files, "Instance repair completed");
+    Ok(report.total_files)
+}
+
+/// Effective (inherited-or-overridden) launch values for an instance.
+///
+/// 前端设置页用它显示"该字段当前继承时生效值是多少"，从而不必在 TS 里再实现
+/// 一遍继承规则（审计 P2-8）。
+#[tauri::command]
+#[tracing::instrument(skip(state))]
+pub async fn instance_resolved_settings(
+    state: tauri::State<'_, AppState>,
+    id: String,
+) -> Result<rmccc_profile::ResolvedInstanceSettings, IpcError> {
     let core = state.core.read().await;
-    core.download_manager
-        .download_batch(items, std::sync::Arc::new(|_| {}))
-        .await?;
-
-    // Re-scan the repository so missing counts refresh.
-    core.game_repository
-        .write()
-        .map_err(|_| locked_error())?
-        .refresh()?;
-
-    tracing::info!(id = %id, files = count, "Instance repair completed");
-    Ok(count)
+    let profile = core.profile_store.get(&id)?.ok_or_else(|| IpcError {
+        code: rmccc_error::ErrorCode::ProfileNotFound,
+        message: format!("Profile not found: {id}"),
+        retryable: false,
+    })?;
+    Ok(profile.resolve(&core.config))
 }
 
 /// Effective on-disk locations for an instance, so the settings page can show

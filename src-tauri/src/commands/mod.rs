@@ -8,6 +8,7 @@ pub mod launch;
 pub mod logs;
 pub mod modloader;
 pub mod mods;
+pub mod plugin;
 pub mod profile;
 pub mod settings;
 pub mod version;

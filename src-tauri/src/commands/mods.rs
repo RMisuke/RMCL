@@ -190,8 +190,9 @@ pub async fn mod_toggle(
 }
 
 /// Sanitize a filename: keep ASCII alphanumerics and `-_.`, replace the rest with `_`.
-fn sanitize_filename(name: &str) -> String {
-    name.chars()
+pub(crate) fn sanitize_filename(name: &str) -> String {
+    let cleaned: String = name
+        .chars()
         .map(|c| {
             if c.is_ascii_alphanumeric() || "-_.".contains(c) {
                 c
@@ -199,11 +200,19 @@ fn sanitize_filename(name: &str) -> String {
                 '_'
             }
         })
-        .collect()
+        .collect();
+    // 去掉开头的点：`..` 本身不含分隔符、逃不出目录，但生成 `.._x.jar` 这种
+    // 隐藏文件既难排查也没意义（审计 P2-11 的同类问题）。
+    let trimmed = cleaned.trim_start_matches('.').to_string();
+    if trimmed.is_empty() {
+        "mod".to_string()
+    } else {
+        trimmed
+    }
 }
 
 /// Reject path traversal / invalid chars in user-supplied filenames.
-fn validate_mod_filename(name: &str) -> Result<(), IpcError> {
+pub(crate) fn validate_mod_filename(name: &str) -> Result<(), IpcError> {
     if name.is_empty()
         || name.contains('/')
         || name.contains('\\')
@@ -268,6 +277,125 @@ pub async fn mod_install(
 
     tracing::info!(profile_id = %profile_id, filename = %filename, "Mod installed");
     Ok(filename)
+}
+
+/// 本地 jar 安装：把用户通过文件选择器选中的 jar 复制到实例 mods 目录（P1-5）。
+#[tauri::command]
+#[tracing::instrument(skip(state))]
+pub async fn mod_install_local(
+    state: tauri::State<'_, AppState>,
+    profile_id: String,
+    source_path: String,
+) -> Result<String, IpcError> {
+    let core = state.core.read().await;
+    let profile = core
+        .profile_store
+        .get(&profile_id)?
+        .ok_or_else(|| IpcError {
+            code: rmccc_error::ErrorCode::ProfileNotFound,
+            message: format!("Profile not found: {profile_id}"),
+            retryable: false,
+        })?;
+
+    let src = std::path::Path::new(&source_path);
+    if !src.is_file() {
+        return Err(IpcError {
+            code: rmccc_error::ErrorCode::ValidationError,
+            message: format!("Not a file: {source_path}"),
+            retryable: false,
+        });
+    }
+
+    let mods_dir = rmccc_launch::instance_mods_dir(&core.config, &profile);
+    std::fs::create_dir_all(&mods_dir)?;
+
+    let filename = src
+        .file_name()
+        .and_then(|n| n.to_str())
+        .map(sanitize_filename)
+        .ok_or_else(|| IpcError {
+            code: rmccc_error::ErrorCode::ValidationError,
+            message: "Invalid file name".into(),
+            retryable: false,
+        })?;
+    let filename = if filename.ends_with(".jar") {
+        filename
+    } else {
+        format!("{filename}.jar")
+    };
+    validate_mod_filename(&filename)?;
+
+    let dest = mods_dir.join(&filename);
+    std::fs::copy(src, &dest)?;
+    tracing::info!(profile_id = %profile_id, filename = %filename, "Local mod installed");
+    Ok(filename)
+}
+
+/// 本地 jar 安装（方案 A）：弹原生文件选择器，把选中的 jar 复制到实例 mods 目录（P1-5）。
+#[tauri::command]
+#[tracing::instrument(skip(state, app))]
+pub async fn mod_pick_and_install(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, AppState>,
+    profile_id: String,
+) -> Result<Option<String>, IpcError> {
+    use tauri_plugin_dialog::DialogExt;
+
+    let picked = tauri::async_runtime::spawn_blocking(move || {
+        app.dialog()
+            .file()
+            .add_filter("Mod jar", &["jar"])
+            .blocking_pick_file()
+    })
+    .await
+    .map_err(|e| IpcError {
+        code: rmccc_error::ErrorCode::Unknown,
+        message: format!("file dialog failed: {e}"),
+        retryable: false,
+    })?;
+
+    let Some(file) = picked else {
+        return Ok(None);
+    };
+    let source = file.into_path().map_err(|e| IpcError {
+        code: rmccc_error::ErrorCode::ValidationError,
+        message: format!("invalid path: {e}"),
+        retryable: false,
+    })?;
+
+    let core = state.core.read().await;
+    let profile = core
+        .profile_store
+        .get(&profile_id)?
+        .ok_or_else(|| IpcError {
+            code: rmccc_error::ErrorCode::ProfileNotFound,
+            message: format!("Profile not found: {profile_id}"),
+            retryable: false,
+        })?;
+
+    let mods_dir = rmccc_launch::instance_mods_dir(&core.config, &profile);
+    std::fs::create_dir_all(&mods_dir)?;
+
+    let filename = source
+        .file_name()
+        .and_then(|n| n.to_str())
+        .map(sanitize_filename)
+        .ok_or_else(|| IpcError {
+            code: rmccc_error::ErrorCode::ValidationError,
+            message: "Invalid file name".into(),
+            retryable: false,
+        })?;
+    let filename = if filename.ends_with(".jar") {
+        filename
+    } else {
+        format!("{filename}.jar")
+    };
+    validate_mod_filename(&filename)?;
+
+    let dest = mods_dir.join(&filename);
+    std::fs::copy(&source, &dest)?;
+    tracing::info!(profile_id = %profile_id, filename = %filename, "Local mod installed via picker");
+    Ok(Some(filename))
 }
 
 /// 移除 Mod：删除 `{game_dir}/mods/{name}` 或 `{game_dir}/mods/disabled/{name}`（P0-02）。

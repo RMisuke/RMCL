@@ -137,9 +137,12 @@ pub async fn settings_set(
 }
 
 #[tauri::command]
-#[tracing::instrument(skip(_state))]
-pub async fn java_detect(_state: tauri::State<'_, AppState>) -> Result<Vec<JavaInfo>, IpcError> {
-    let installations = rmccc_launch::detect_java_installations();
+#[tracing::instrument(skip(state))]
+pub async fn java_detect(state: tauri::State<'_, AppState>) -> Result<Vec<JavaInfo>, IpcError> {
+    let installations = {
+        let core = state.core.read().await;
+        core.platform.java.detect_all()?
+    };
     let infos: Vec<JavaInfo> = installations
         .into_iter()
         .map(|j| JavaInfo {

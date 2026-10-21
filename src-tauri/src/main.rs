@@ -1,6 +1,9 @@
 mod bindings;
 mod commands;
 mod events;
+mod handlers;
+#[cfg(test)]
+mod ipc_tests;
 mod state;
 
 use rmccc_config::logging::init_logging;
@@ -15,7 +18,11 @@ fn main() {
 
     // Initialize logging
     let log_dir = paths::log_dir();
-    init_logging(&log_dir).expect("Failed to initialize logging");
+    // Logging must not take the whole app down: an unavailable log directory
+    // (sandbox / read-only mount / permission issue) degrades to stderr only.
+    if let Err(e) = init_logging(&log_dir) {
+        eprintln!("Warning: failed to initialize logging: {e}");
+    }
 
     // P3-13：崩溃上报（本地）——panic hook 将崩溃信息写入日志文件，便于排障。
     // 未引入 Sentry/OTel（体积红线 <10MB）；后续可在此扩展为远程上报。
@@ -41,6 +48,7 @@ fn main() {
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_dialog::init())
         // P2-25：启用自动更新（需 release CI 生成 latest.json + 签名密钥）
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(
@@ -62,54 +70,7 @@ fn main() {
 
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![
-            commands::external::open_external_url,
-            commands::auth::auth_microsoft_login,
-            commands::auth::auth_offline_login,
-            commands::auth::auth_logout,
-            commands::auth::auth_get_session,
-            commands::auth::auth_refresh_token,
-            commands::auth::auth_list_accounts,
-            commands::auth::auth_switch_account,
-            commands::auth::auth_remove_account,
-            commands::download::download_cancel,
-            commands::download::download_pause,
-            commands::download::download_resume,
-            commands::launch::launch_start,
-            commands::launch::launch_kill,
-            commands::launch::launch_status,
-            commands::logs::log_get,
-            commands::logs::log_clear,
-            commands::modloader::modloader_list,
-            commands::modloader::modloader_install,
-            commands::mods::mod_search,
-            commands::mods::mod_get_versions,
-            commands::mods::mod_get_download_url,
-            commands::mods::mod_list,
-            commands::mods::mod_toggle,
-            commands::mods::mod_install,
-            commands::mods::mod_remove,
-            commands::profile::profile_list,
-            commands::profile::profile_create,
-            commands::profile::profile_update,
-            commands::profile::profile_delete,
-            commands::settings::settings_get,
-            commands::settings::settings_set,
-            commands::settings::settings_get_user,
-            commands::settings::settings_set_user,
-            commands::settings::settings_supported_locales,
-            commands::settings::java_detect,
-            commands::version::version_list,
-            commands::version::version_install,
-            commands::instance::instance_list,
-            commands::instance::instance_refresh,
-            commands::instance::instance_rename,
-            commands::instance::instance_duplicate,
-            commands::instance::instance_remove,
-            commands::instance::instance_check_completion,
-            commands::instance::instance_repair,
-            commands::instance::instance_paths,
-        ])
+        .invoke_handler(crate::handlers::invoke_handlers())
         .build(tauri::generate_context!())
         .expect("Error while building RMCCC");
 

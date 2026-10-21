@@ -35,10 +35,11 @@ tauri = { workspace = true }
 tauri-plugin-process = { workspace = true }
 tauri-plugin-window-state = { workspace = true }
 tauri-plugin-opener = { workspace = true }
+tauri-plugin-dialog = { workspace = true }
 tauri-plugin-updater = { workspace = true }
 
-[target.'cfg(unix)'.dependencies]
-libc = "0.2"
+# 平台系统调用（killpg / setpriority）已收归 `rmccc-platform`，
+# 应用层不再直接依赖 libc（指南 §5.7）。
 
 [dev-dependencies]
 # P2-23：E2E 测试（thirtyfour WebDriver client）。
