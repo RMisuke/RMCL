@@ -234,6 +234,7 @@ async fn run_command(ctx: &CliContext, out: &Output, command: Commands) -> CliRe
         Commands::Resource { action } => commands::resource::handle(ctx, out, action).await,
         Commands::Modloader { action } => commands::modloader::handle(ctx, out, action).await,
         Commands::Mod { action } => commands::mods::handle(ctx, out, action).await,
+        Commands::Plugin { action } => commands::plugin::handle(ctx, out, action).await,
         Commands::Launch { action } => commands::launch::handle(ctx, out, action).await,
         Commands::System { action } => commands::system::handle(ctx, out, action).await,
         Commands::Help { .. } | Commands::Completions { .. } => {

@@ -233,6 +233,72 @@ pub const COMMANDS: &[CommandSpec] = &[
         ],
     },
     CommandSpec {
+        name: "plugin",
+        about: "Declarative plugins: install / permissions / config (no third-party code)",
+        subcommands: &[
+            sub!(
+                "list",
+                "List installed plugins (--all includes removed tombstones)",
+                "plugin list [--all]"
+            ),
+            sub!(
+                "inspect",
+                "Show manifest, permissions, dependencies and config",
+                "plugin inspect --id <plugin-id>"
+            ),
+            sub!(
+                "install",
+                "Install a .rmcpkg package (disabled unless --enable)",
+                "plugin install --path <file.rmcpkg> [--enable]"
+            ),
+            sub!(
+                "enable",
+                "Enable after permission review",
+                "plugin enable --id <plugin-id>"
+            ),
+            sub!(
+                "disable",
+                "Disable an enabled plugin",
+                "plugin disable --id <plugin-id>"
+            ),
+            sub!(
+                "remove",
+                "Uninstall (keeps config unless --delete-data)",
+                "plugin remove --id <plugin-id> [--delete-data]"
+            ),
+            sub!(
+                "rollback",
+                "Roll back to the previous version",
+                "plugin rollback --id <plugin-id>"
+            ),
+            sub!(
+                "grant",
+                "Grant a declared capability",
+                "plugin grant --id <plugin-id> --capability <name>"
+            ),
+            sub!(
+                "revoke",
+                "Revoke a granted capability",
+                "plugin revoke --id <plugin-id> --capability <name>"
+            ),
+            sub!(
+                "config",
+                "Get / set / reset plugin config",
+                "plugin config get|set|reset|path --id <plugin-id>"
+            ),
+            sub!(
+                "capabilities",
+                "Show the capability catalog",
+                "plugin capabilities"
+            ),
+            sub!(
+                "pack",
+                "Pack a directory into a .rmcpkg (dev helper)",
+                "plugin pack --dir <dir> --out <file.rmcpkg>"
+            ),
+        ],
+    },
+    CommandSpec {
         name: "launch",
         about: "Launch games, observe processes, dry-run commands",
         subcommands: &[

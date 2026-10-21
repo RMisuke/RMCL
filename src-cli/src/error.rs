@@ -64,7 +64,26 @@ impl From<rmccc_error::RmcccError> for CliError {
             E::ProfileNotFound(_) => ErrorCode::ProfileNotFound,
             E::MissingDependency(_) => ErrorCode::MissingDependency,
             E::ModVersionConflict { .. } => ErrorCode::ModVersionConflict,
+            E::Validation(_) => ErrorCode::ValidationError,
+            E::UnsupportedPlatform(_) => ErrorCode::UnsupportedPlatform,
             E::Io(_) | E::Json(_) => ErrorCode::IoError,
+            E::Plugin { code, .. } => match code {
+                rmccc_error::PluginErrorCode::ManifestInvalid => ErrorCode::PluginManifestInvalid,
+                rmccc_error::PluginErrorCode::PackageInvalid => ErrorCode::PluginPackageInvalid,
+                rmccc_error::PluginErrorCode::PermissionDenied => ErrorCode::PluginPermissionDenied,
+                rmccc_error::PluginErrorCode::PermissionPending => {
+                    ErrorCode::PluginPermissionPending
+                }
+                rmccc_error::PluginErrorCode::IdConflict => ErrorCode::PluginIdConflict,
+                rmccc_error::PluginErrorCode::DependencyMissing => {
+                    ErrorCode::PluginDependencyMissing
+                }
+                rmccc_error::PluginErrorCode::DependencyCycle => ErrorCode::PluginDependencyCycle,
+                rmccc_error::PluginErrorCode::StateConflict => ErrorCode::PluginStateConflict,
+                rmccc_error::PluginErrorCode::ConfigInvalid => ErrorCode::PluginConfigInvalid,
+                rmccc_error::PluginErrorCode::NotFound => ErrorCode::PluginNotFound,
+                rmccc_error::PluginErrorCode::Integrity => ErrorCode::PluginIntegrity,
+            },
             E::Other(msg) => cli_classify(msg),
         };
         Self {
@@ -141,6 +160,7 @@ impl std::error::Error for CliError {}
 /// - 8   I/O / system errors
 /// - 9   already running
 /// - 10  business conflict (missing dependency / version conflict)
+/// - 11  unsupported on the current platform (deferred backend)
 /// - 130 interrupted by SIGINT
 pub fn exit_code_for(code: &ErrorCode) -> i32 {
     match code {
@@ -154,11 +174,23 @@ pub fn exit_code_for(code: &ErrorCode) -> i32 {
         | ErrorCode::TokenExpired => 5,
         ErrorCode::JavaNotFound | ErrorCode::JavaVersionMismatch => 7,
         ErrorCode::GameCrashed => 1,
-        ErrorCode::ProfileNotFound | ErrorCode::NotFound => 4,
-        ErrorCode::MissingDependency | ErrorCode::ModVersionConflict => 10,
+        ErrorCode::ProfileNotFound | ErrorCode::NotFound | ErrorCode::PluginNotFound => 4,
+        ErrorCode::MissingDependency
+        | ErrorCode::ModVersionConflict
+        | ErrorCode::PluginDependencyMissing
+        | ErrorCode::PluginDependencyCycle => 10,
+        ErrorCode::PluginManifestInvalid
+        | ErrorCode::PluginPackageInvalid
+        | ErrorCode::PluginPermissionDenied
+        | ErrorCode::PluginPermissionPending
+        | ErrorCode::PluginIdConflict
+        | ErrorCode::PluginStateConflict
+        | ErrorCode::PluginConfigInvalid
+        | ErrorCode::PluginIntegrity => 3,
         ErrorCode::IoError => 8,
         ErrorCode::AlreadyRunning => 9,
         ErrorCode::ValidationError => 3,
+        ErrorCode::UnsupportedPlatform => 11,
         ErrorCode::InternalError | ErrorCode::Unknown => 1,
     }
 }

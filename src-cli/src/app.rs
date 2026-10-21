@@ -73,6 +73,11 @@ pub enum Commands {
         #[command(subcommand)]
         action: ModAction,
     },
+    /// Declarative plugin management (Phase 2, no third-party code).
+    Plugin {
+        #[command(subcommand)]
+        action: PluginAction,
+    },
     /// Launch games, observe running processes, dry-run commands.
     Launch {
         #[command(subcommand)]
@@ -411,6 +416,106 @@ pub enum ModAction {
     DownloadUrl {
         #[arg(long)]
         version_id: String,
+    },
+}
+
+// ── Plugin ──
+
+#[derive(Debug, Subcommand)]
+pub enum PluginAction {
+    /// List installed plugins (add --all to include removed tombstones).
+    List {
+        #[arg(long)]
+        all: bool,
+    },
+    /// Show one plugin: manifest, permissions, dependencies, config.
+    Inspect {
+        #[arg(long)]
+        id: String,
+    },
+    /// Install a `.rmcpkg` package (stays disabled unless --enable).
+    Install {
+        #[arg(long)]
+        path: String,
+        /// Enable immediately when no permission review is pending.
+        #[arg(long)]
+        enable: bool,
+    },
+    /// Enable an installed plugin after permission review.
+    Enable {
+        #[arg(long)]
+        id: String,
+    },
+    /// Disable an enabled plugin.
+    Disable {
+        #[arg(long)]
+        id: String,
+    },
+    /// Uninstall a plugin (keeps user config unless --delete-data).
+    Remove {
+        #[arg(long)]
+        id: String,
+        #[arg(long)]
+        delete_data: bool,
+    },
+    /// Roll back to the previously installed version.
+    Rollback {
+        #[arg(long)]
+        id: String,
+    },
+    /// Grant a declared capability to a plugin.
+    Grant {
+        #[arg(long)]
+        id: String,
+        #[arg(long)]
+        capability: String,
+    },
+    /// Revoke a granted capability (effective immediately).
+    Revoke {
+        #[arg(long)]
+        id: String,
+        #[arg(long)]
+        capability: String,
+    },
+    /// Plugin user configuration (`plugin-data/<id>/config.json`).
+    Config {
+        #[command(subcommand)]
+        action: PluginConfigAction,
+    },
+    /// Show the capability catalog with risk levels.
+    Capabilities,
+    /// Pack a directory into a `.rmcpkg` (development helper).
+    Pack {
+        #[arg(long)]
+        dir: String,
+        #[arg(long)]
+        out: String,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+pub enum PluginConfigAction {
+    /// Read the effective config (validated against config.schema.json).
+    Get {
+        #[arg(long)]
+        id: String,
+    },
+    /// Write config values from a JSON object string.
+    Set {
+        #[arg(long)]
+        id: String,
+        #[arg(long)]
+        values: String,
+    },
+    /// Reset config to schema defaults.
+    Reset {
+        #[arg(long)]
+        id: String,
+    },
+    /// Show the resolved config file path.
+    Path {
+        #[arg(long)]
+        id: String,
     },
 }
 

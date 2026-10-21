@@ -12,6 +12,7 @@ pub mod config;
 pub mod launch;
 pub mod modloader;
 pub mod mods;
+pub mod plugin;
 pub mod profile;
 pub mod resource;
 pub mod system;

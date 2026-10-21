@@ -23,6 +23,7 @@ rmccc-modloader = { workspace = true }
 rmccc-mods = { workspace = true }
 rmccc-profile = { workspace = true }
 rmccc-error = { workspace = true }
+rmccc-plugin = { workspace = true }
 
 clap = { workspace = true }
 rustyline = { workspace = true }
@@ -39,8 +40,8 @@ anyhow = { workspace = true }
 sha1 = { workspace = true }
 dashmap = { workspace = true }
 
-[target.'cfg(unix)'.dependencies]
-libc = "0.2"
+# 平台系统调用（killpg / setpriority）已收归 `rmccc-platform`，
+# 应用层不再直接依赖 libc（指南 §5.7）。
 
 [dev-dependencies]
 # Local wiremock-style HTTP stub for mod/version flows without external network.
