@@ -10,6 +10,7 @@ members = [
     "crates/rmccc-mods",
     "crates/rmccc-profile",
     "crates/rmccc-config",
+    "crates/rmccc-platform",
     "src-tauri",
     "src-cli",
 ]
@@ -58,6 +59,7 @@ dashmap = "6"
 
 # System
 fs2 = "0.4"
+libc = "0.2"
 
 # Logging
 tracing = "0.1"
@@ -87,6 +89,7 @@ rmccc-modloader = { path = "crates/rmccc-modloader" }
 rmccc-mods = { path = "crates/rmccc-mods" }
 rmccc-profile = { path = "crates/rmccc-profile" }
 rmccc-config = { path = "crates/rmccc-config" }
+rmccc-platform = { path = "crates/rmccc-platform" }
 
 [profile.release]
 opt-level = "s"

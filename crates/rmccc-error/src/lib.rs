@@ -92,6 +92,19 @@ pub enum RmcccError {
     #[error("JSON parse error: {0}")]
     Json(#[from] serde_json::Error),
 
+    // ── Validation / platform ──
+    /// 输入校验失败（非法 URL、空名称、越界数值等）。
+    #[error("Validation failed: {0}")]
+    Validation(String),
+
+    /// 当前平台未实现该能力（平台适配层 Windows/Linux 后端为 deferred）。
+    ///
+    /// 平台适配层 trait 必须返回本错误而不是 panic 或静默失败
+    /// （指南 §5.7.1 第 4 条）。
+    #[error("Unsupported on this platform: {0}")]
+    UnsupportedPlatform(String),
+
+
     // ── Generic ──
     #[error("{0}")]
     Other(String),
@@ -138,6 +151,8 @@ pub enum ErrorCode {
     ValidationError,
     /// Resource not found (version/mod not installed).
     NotFound,
+    /// 当前平台未实现该能力（deferred 后端）。
+    UnsupportedPlatform,
     Unknown,
 }
 
@@ -172,6 +187,8 @@ impl From<RmcccError> for IpcError {
             RmcccError::ProfileNotFound(_) => ErrorCode::ProfileNotFound,
             RmcccError::MissingDependency(_) => ErrorCode::MissingDependency,
             RmcccError::ModVersionConflict { .. } => ErrorCode::ModVersionConflict,
+            RmcccError::Validation(_) => ErrorCode::ValidationError,
+            RmcccError::UnsupportedPlatform(_) => ErrorCode::UnsupportedPlatform,
             RmcccError::Io(_) | RmcccError::Json(_) => ErrorCode::IoError,
             _ => ErrorCode::Unknown,
         };
