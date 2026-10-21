@@ -1,6 +1,6 @@
 # Phase 5 — 逻辑插件运行时
 
-> **对应指南**：§6.2 阶段 C/D、§6.3，§17 Phase 5。**状态**：5.1–5.3 完成（2026-10-21），5.4–5.5 进行中。
+> **对应指南**：§6.2 阶段 C/D、§6.3，§17 Phase 5。**状态**：5.1–5.5 完成（2026-10-21），5.6 打包分发留待 Phase 7。
 > **前置**：Phase 1 平台适配层 + Phase 2 权限模型。**ADR-007**（WASM vs 独立进程）须 PoC 后 accepted。
 
 ## 1. 目标
@@ -64,8 +64,8 @@
 | 5.1 PoC | ✅ | [`poc/logic-runtime/README.md`](../../poc/logic-runtime/README.md)：strip 后 baseline 0.29 MiB / wasmi +1.96 / wasmtime +5.89 MiB；wasmi 调用 0.047 µs、RSS 2.9 MiB；独立进程 spawn 0.3–0.9 ms、往返 8.5 µs |
 | 5.2 ADR-007 | ✅ | [ADR-007](../adr/ADR-007-logic-runtime.md) accepted：嵌入式 wasmtime 违反 ADR-011（13.7 MiB），嵌入式 wasmi 只剩 0.2 MiB 且无崩溃隔离 → **独立 helper 进程 + wasmi core module** |
 | 5.3 运行时限流 | ✅ | `crates/rmccc-logic` + `src-logic-host`：导入白名单、`StoreLimits` 内存、fuel、超时 kill、重启、载荷边界检查；8 项协议测试 + 9 项真实 spawn 集成测试 |
-| 5.4 版本兼容/回滚 | 待做 | 逻辑 API 版本协商已在握手实现（未知 `v` 拒绝），插件包层面的 `entry.logic` 校验与回滚待做 |
-| 5.5 第一个低风险扩展 | 待做 | 计划：`logic.invoke` 能力（medium，需显式授予）+ 只读 `compat.check` / `mods.source.search` |
+| 5.4 版本兼容/回滚 | ✅ | `entry.logic` 校验（`logic/*.wasm`、存在性、2 MiB 上限）与安装器双向印证；逻辑 API 版本在握手协商，未知 `v` 拒绝；插件升级/回滚沿用 Phase 2 的注册表事务 |
+| 5.5 第一个低风险扩展 | ✅ | 能力 `logic.invoke`（medium）→ 待审查；命令 `plugin_logic_invoke`/`plugin_logic_cancel`（注册表 75→77），v1 只放行 `compat.check` / `mods.source.search`；每条调用重新 `ensure_enabled`+`authorize`；撤销测试 + 安装/授权/执行/取消 E2E |
 
 ### 验收对照
 
@@ -74,3 +74,6 @@
 - [x] Host Import allowlist + 撤销测试通过（`imports_outside_the_allowlist_are_rejected_before_running`）。
 - [x] macOS ARM64 有实际构建验证；Windows x64/Intel = deferred。
 - [x] 运行时增量体积已记录对照 ADR-011（主可执行文件不变）。
+- [x] 第一个只读扩展开放且受权限门控（`plugin_logic_invoke`：enabled → `logic.invoke` → 调用白名单 → 入口/路径校验）。
+- [x] 撤销生效：`revoking_logic_invoke_blocks_the_next_call`。
+- [ ] helper 的分发/签名在 Phase 7（当前 `RMCCC_LOGIC_HOST` 或同目录解析）。

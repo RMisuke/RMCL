@@ -2062,4 +2062,9 @@ stdin/stdout，一行一个 JSON：
 - Windows/Linux：`wasmi` 是纯 Rust，但进程/管道/kill 语义需原生 runner 验证 → **deferred**。
 - helper 的分发（打进 `.app` / 独立安装）与签名在 Phase 7；当前通过 `RMCCC_LOGIC_HOST`
   环境变量或与启动器同目录解析。
-- 逻辑插件与权限系统的接线（`plugin_logic_invoke` + 能力 `logic.invoke`）在 5.4/5.5。
+- 逻辑插件与权限系统已接线：`entry.logic`（`logic/*.wasm`、≤2 MiB、与 `logic/` 目录双向印证）
+  → 能力 `logic.invoke`（medium，需显式授予）→ 命令 `plugin_logic_invoke` / `plugin_logic_cancel`。
+  v1 只放行**只读**调用白名单：`compat.check`、`mods.source.search`；每条调用依次检查
+  启用状态 → 能力 → 调用白名单 → 入口/路径，撤销在下一次调用即生效。
+- helper 尚未打进 `.app`：通过 `RMCCC_LOGIC_HOST` 或与启动器同目录解析；
+  打包/签名/公证与三平台 runner 一起留到 Phase 7。

@@ -41,10 +41,12 @@ RMCL/
 │   ├── adr/                       # 架构决策记录（ADR-002/003/004/005/006/011 accepted）
 │   └── roadmap/                   # 细化执行计划（Phase 0–7 + 平台适配）
 ├── schemas/                # 公共协议 schema（manifest / dashboard-layout / plugin-ui-bridge）
-├── crates/                # Rust workspace crates（含 rmccc-platform / rmccc-plugin / rmccc-dashboard）
+├── crates/                # Rust workspace crates（含 rmccc-platform / rmccc-plugin / rmccc-dashboard / rmccc-logic）
 ├── examples/plugins/      # 插件样例（theme-midnight / server-dashboard：隔离 UI 卡片）
 ├── plugin-sdk/            # 第三方插件 SDK（plugin-api / plugin-ui / 模板 / 校验打包工具）
 ├── src-tauri/             # Tauri 应用层（IPC 命令）
+├── src-logic-host/        # 逻辑插件 helper 进程（唯一链接 wasmi 的二进制，ADR-007）
+├── poc/                   # 一次性 PoC（非 workspace 成员，如 ADR-007 的运行时测量）
 ├── src/                   # SolidJS 前端
 └── assets/                # 静态资源
 ```
