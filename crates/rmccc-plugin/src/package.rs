@@ -304,10 +304,17 @@ fn validate_package_file(path: &str) -> Result<()> {
     let segments: Vec<&str> = path.split('/').collect();
     let top = segments[0];
 
-    if top == "ui" || top == "logic" {
+    // `ui/`：Phase 4 起允许（隔离容器，ADR-006）。类型白名单与路径规则集中在
+    // `ui::validate_asset_path`，避免这里和方案处理器各写一套。
+    if top == "ui" {
+        crate::ui::validate_asset_path(path)?;
+        return Ok(());
+    }
+
+    if top == "logic" {
         return Err(plugin_error(
             PluginErrorCode::PackageInvalid,
-            format!("Phase 2 不接受 {top}/ 目录（第三方代码在 Phase 4/5 才开放）：{path}"),
+            format!("Phase 5 之前不接受 logic/ 目录（逻辑运行时未开放）：{path}"),
         ));
     }
 
@@ -639,12 +646,24 @@ mod tests {
     }
 
     #[test]
-    fn rejects_ui_logic_and_scripts() {
+    fn allows_ui_assets_but_rejects_logic_and_scripts() {
+        // `ui/` 内的 html/js 在 Phase 4 合法（ADR-006）；`logic/` 与包内脚本仍然拒绝。
+        let manifest_json = serde_json::to_string(&manifest()).unwrap();
+        let bytes = zip_with(&[
+            ("manifest.json", manifest_json.as_bytes(), 0o644),
+            ("themes/midnight.json", b"{}", 0o644),
+            ("ui/index.html", b"<!DOCTYPE html>", 0o644),
+            ("ui/app.js", b"export {}", 0o644),
+            ("ui/style.css", b"body{}", 0o644),
+        ]);
+        inspect_package_bytes(&bytes, &ctx()).expect("ui assets should be accepted");
+
         for bad in [
-            "ui/index.html",
             "logic/plugin.wasm",
             "assets/app.js",
             "assets/run.sh",
+            "ui/run.sh",
+            "ui/app.wasm",
         ] {
             let manifest = serde_json::to_string(&manifest()).unwrap();
             let bytes = zip_with(&[

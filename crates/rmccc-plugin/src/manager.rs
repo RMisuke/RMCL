@@ -166,6 +166,9 @@ pub struct DashboardCardView {
     pub key: String,
     pub plugin_id: String,
     pub card: DashboardCard,
+    /// 隔离 UI 入口（`rmcccplugin://<id>/ui/...`）；`None` = 纯声明式卡片，由宿主绘制。
+    #[serde(default)]
+    pub ui_url: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
@@ -175,6 +178,9 @@ pub struct SettingsPageView {
     pub key: String,
     pub plugin_id: String,
     pub page: SettingsPage,
+    /// 隔离 UI 入口（与卡片同一个 `entry.ui`，页面以 `?page=` 区分）；`None` = 声明式页面。
+    #[serde(default)]
+    pub ui_url: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
@@ -762,6 +768,22 @@ impl PluginManager {
         self.summary(id).ok_or_else(|| not_found(id))
     }
 
+    /// 仅检查"已安装且启用"，不涉及具体能力（隔离 UI 的无能力方法用，ADR-006）。
+    pub fn ensure_enabled(&self, plugin_id: &str) -> Result<()> {
+        ensure_valid_id(plugin_id)?;
+        let record = self
+            .registry
+            .get(plugin_id)
+            .ok_or_else(|| not_found(plugin_id))?;
+        if !record.state.is_enabled() {
+            return Err(plugin_error(
+                PluginErrorCode::StateConflict,
+                format!("插件 {plugin_id} 未启用"),
+            ));
+        }
+        Ok(())
+    }
+
     /// Host Broker 入口：每次调用都重新检查（Phase 2 无执行通道，先提供权威 API）。
     pub fn authorize(
         &self,
@@ -860,14 +882,29 @@ impl PluginManager {
             // 权限撤销立即生效：未授予对应能力时贡献项不再登记。
             let granted =
                 |capability: &str| self.permissions.file().is_granted(&record.id, capability);
+            // 隔离 UI（ADR-006）：只有声明了 entry.ui 的插件才有 iframe 地址；
+            // URL 生成失败（ID/入口非法）时退化为声明式卡片而不是让贡献项消失。
+            let entry = plugin.manifest.entry.ui.as_deref();
+            let ui_url = |card: Option<&str>| -> Option<String> {
+                let entry = entry?;
+                match crate::ui::ui_url(&record.id, entry, card) {
+                    Ok(url) => Some(url),
+                    Err(e) => {
+                        tracing::warn!(plugin_id = %record.id, error = %e, "Invalid plugin UI entry; falling back to declarative card");
+                        None
+                    }
+                }
+            };
             if granted("dashboard.cards") {
                 for card in &c.dashboard_cards {
                     let key = format!("{}/{}", record.id, card.id);
                     if keys.insert(key.clone()) {
+                        let url = ui_url(Some(&card.id));
                         out.dashboard_cards.push(DashboardCardView {
                             key,
                             plugin_id: record.id.clone(),
                             card: card.clone(),
+                            ui_url: url,
                         });
                     }
                 }
@@ -876,10 +913,12 @@ impl PluginManager {
                 for page in &c.settings_pages {
                     let key = format!("{}/{}", record.id, page.id);
                     if keys.insert(key.clone()) {
+                        let url = ui_url(None);
                         out.settings_pages.push(SettingsPageView {
                             key,
                             plugin_id: record.id.clone(),
                             page: page.clone(),
+                            ui_url: url,
                         });
                     }
                 }

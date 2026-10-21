@@ -170,6 +170,8 @@ impl PermissionStore {
     /// 升级：保留已有授权、移除新版本不再声明的授权。
     ///
     /// **不自动新增任何授权**（包括低风险）——升级请求新权限必须由用户审查。
+    /// 新声明的低风险能力因此会出现在 [`Self::pending`] 里（见那里的说明），
+    /// 否则它会既不在 granted 也不在 pending，永远无法启用。
     pub fn reconcile_upgrade(&mut self, manifest: &PluginManifest) -> Result<()> {
         let declared = manifest.capability_names()?;
         let declared: BTreeSet<&str> = declared.iter().map(|s| s.as_str()).collect();
@@ -179,12 +181,16 @@ impl PermissionStore {
         Ok(())
     }
 
-    /// 尚未授予的敏感能力（升级/首次安装后的"待审查"列表）。
+    /// 尚未授予的能力（升级/首次安装后的"待审查"列表）。
+    ///
+    /// 首次安装时低风险能力由 [`Self::auto_grant_low`] 直接授予，所以这里只会剩下
+    /// 敏感能力；升级时**任何**新声明的能力都不会自动授予，必须列出让用户审查，
+    /// 否则升级新增的低风险能力会变成"声明了但永远不可用"的死状态。
     pub fn pending(&self, manifest: &PluginManifest) -> Result<Vec<Capability>> {
         let mut pending = Vec::new();
         for permission in &manifest.permissions {
             let cap = Capability::parse(&permission.capability)?;
-            if cap.is_sensitive() && !self.file.is_granted(&manifest.id, &cap.name) {
+            if !self.file.is_granted(&manifest.id, &cap.name) {
                 pending.push(cap);
             }
         }

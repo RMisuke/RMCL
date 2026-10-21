@@ -291,13 +291,17 @@ pub fn validate_manifest(manifest: &PluginManifest, ctx: &ManifestContext) -> Re
         }
     }
 
-    // entry：Phase 2 不执行第三方代码。
+    // entry.ui：Phase 4 起允许（隔离容器，ADR-006）；entry.logic 仍然拒绝（Phase 5）。
     if let Some(ui) = &manifest.entry.ui {
-        validate_relative_path(ui)?;
-        return Err(plugin_error(
-            PluginErrorCode::ManifestInvalid,
-            "Phase 2 不支持 entry.ui（隔离 UI 容器在 Phase 4 提供）".to_string(),
-        ));
+        crate::ui::validate_ui_entry(ui)?;
+        // 没有 UI 贡献项的入口是死文件：拒绝，避免包内藏无人加载的页面。
+        let c = &manifest.contributes;
+        if c.dashboard_cards.is_empty() && c.settings_pages.is_empty() {
+            return Err(plugin_error(
+                PluginErrorCode::ManifestInvalid,
+                "entry.ui 需要至少一个 dashboardCards 或 settingsPages 贡献项".to_string(),
+            ));
+        }
     }
     if let Some(logic) = &manifest.entry.logic {
         validate_relative_path(logic)?;
@@ -600,18 +604,59 @@ mod tests {
     }
 
     #[test]
-    fn rejects_ui_and_logic_entries() {
-        for entry in [
-            r#""entry": { "ui": "ui/index.html" }"#,
-            r#""entry": { "logic": "logic/plugin.wasm" }"#,
-        ] {
+    fn accepts_a_ui_entry_that_backs_a_card() {
+        let json = MINIMAL.replace(
+            "\"compatibility\": { \"pluginApi\": \"1.x\", \"core\": \">=0.1.0 <0.2.0\" }",
+            "\"compatibility\": { \"pluginApi\": \"1.x\", \"core\": \">=0.1.0 <0.2.0\" }, \
+             \"entry\": { \"ui\": \"ui/index.html\" }, \
+             \"contributes\": { \"dashboardCards\": [ { \"id\": \"card\", \"title\": \"Card\", \
+             \"defaultSize\": { \"w\": 4, \"h\": 3 } } ] }",
+        );
+        let m = PluginManifest::parse(&json).unwrap();
+        validate_manifest(&m, &ctx()).expect("ui entry with a card should validate");
+    }
+
+    #[test]
+    fn rejects_a_ui_entry_without_ui_contributions() {
+        let json = MINIMAL.replace(
+            "\"compatibility\": { \"pluginApi\": \"1.x\", \"core\": \">=0.1.0 <0.2.0\" }",
+            "\"compatibility\": { \"pluginApi\": \"1.x\", \"core\": \">=0.1.0 <0.2.0\" }, \
+             \"entry\": { \"ui\": \"ui/index.html\" }",
+        );
+        let m = PluginManifest::parse(&json).unwrap();
+        let err = validate_manifest(&m, &ctx()).unwrap_err().to_string();
+        assert!(err.contains("dashboardCards"), "{err}");
+    }
+
+    #[test]
+    fn rejects_a_ui_entry_outside_ui_or_not_html() {
+        for entry in ["index.html", "ui/app.js", "ui/../index.html"] {
             let json = MINIMAL.replace(
                 "\"compatibility\": { \"pluginApi\": \"1.x\", \"core\": \">=0.1.0 <0.2.0\" }",
-                &format!("\"compatibility\": {{ \"pluginApi\": \"1.x\", \"core\": \">=0.1.0 <0.2.0\" }}, {entry}"),
+                &format!(
+                    "\"compatibility\": {{ \"pluginApi\": \"1.x\", \"core\": \">=0.1.0 <0.2.0\" }}, \
+                     \"entry\": {{ \"ui\": \"{entry}\" }}, \
+                     \"contributes\": {{ \"dashboardCards\": [ {{ \"id\": \"card\", \"title\": \"Card\", \
+                     \"defaultSize\": {{ \"w\": 4, \"h\": 3 }} }} ] }}"
+                ),
             );
             let m = PluginManifest::parse(&json).unwrap();
-            let err = validate_manifest(&m, &ctx()).unwrap_err().to_string();
-            assert!(err.contains("Phase"), "{err}");
+            assert!(
+                validate_manifest(&m, &ctx()).is_err(),
+                "expected reject: {entry}"
+            );
         }
+    }
+
+    #[test]
+    fn rejects_logic_entries_until_phase_5() {
+        let json = MINIMAL.replace(
+            "\"compatibility\": { \"pluginApi\": \"1.x\", \"core\": \">=0.1.0 <0.2.0\" }",
+            "\"compatibility\": { \"pluginApi\": \"1.x\", \"core\": \">=0.1.0 <0.2.0\" }, \
+             \"entry\": { \"logic\": \"logic/plugin.wasm\" }",
+        );
+        let m = PluginManifest::parse(&json).unwrap();
+        let err = validate_manifest(&m, &ctx()).unwrap_err().to_string();
+        assert!(err.contains("Phase 5"), "{err}");
     }
 }

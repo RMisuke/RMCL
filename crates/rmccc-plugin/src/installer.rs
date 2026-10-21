@@ -99,6 +99,9 @@ fn finish_staging(
     let schema_path = content_dir.join("config.schema.json");
     let config_schema = load_schema(&schema_path)?;
 
+    // 隔离 UI（ADR-006）：入口声明与 `ui/` 内容必须互相印证。
+    verify_ui_content(&content_dir, &manifest)?;
+
     Ok(StagedPackage {
         root,
         content_dir,
@@ -134,4 +137,55 @@ pub fn remove_dir_if_exists(path: &Path) -> Result<()> {
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
         Err(e) => Err(e.into()),
     }
+}
+
+/// `entry.ui` 与包内 `ui/` 目录必须互相声明。
+///
+/// 三件事一起保证：卡片 iframe 的 URL 一定有内容、包里不会藏无人加载的页面、
+/// 入口路径确实落在 `ui/` 内（`validate_manifest` 已做前缀校验，这里做存在性校验）。
+fn verify_ui_content(content_dir: &Path, manifest: &crate::manifest::PluginManifest) -> Result<()> {
+    let ui_dir = content_dir.join(crate::ui::UI_ROOT_DIR);
+    let has_ui_assets = dir_contains_file(&ui_dir)?;
+
+    match (&manifest.entry.ui, has_ui_assets) {
+        (None, false) => Ok(()),
+        (Some(entry), true) => {
+            let entry_path = content_dir.join(entry);
+            if !entry_path.is_file() {
+                return Err(plugin_error(
+                    PluginErrorCode::PackageInvalid,
+                    format!("entry.ui 指向的文件不存在：{entry}"),
+                ));
+            }
+            Ok(())
+        }
+        (Some(entry), false) => Err(plugin_error(
+            PluginErrorCode::PackageInvalid,
+            format!("Manifest 声明了 entry.ui（{entry}），但包内没有 ui/ 目录"),
+        )),
+        (None, true) => Err(plugin_error(
+            PluginErrorCode::PackageInvalid,
+            "包内包含 ui/ 资源但 Manifest 未声明 entry.ui".to_string(),
+        )),
+    }
+}
+
+/// 目录内是否存在至少一个普通文件（不递归计数，只做存在性判断）。
+fn dir_contains_file(dir: &Path) -> Result<bool> {
+    let entries = match std::fs::read_dir(dir) {
+        Ok(entries) => entries,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+        Err(e) => return Err(e.into()),
+    };
+    for entry in entries {
+        let entry = entry?;
+        let file_type = entry.file_type()?;
+        if file_type.is_file() {
+            return Ok(true);
+        }
+        if file_type.is_dir() && dir_contains_file(&entry.path())? {
+            return Ok(true);
+        }
+    }
+    Ok(false)
 }

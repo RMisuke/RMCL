@@ -570,3 +570,130 @@ fn failed_permission_commit_rolls_registry_back_and_removes_files() {
     assert!(!text.contains("dev.rmccc.rollback-perm"), "{text}");
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+// ────────────────────────── 隔离 UI（Phase 4，ADR-006）──────────────────────────
+
+fn ui_manifest(id: &str) -> serde_json::Value {
+    let mut m = manifest(id, "1.0.0");
+    m["entry"] = json!({ "ui": "ui/index.html" });
+    m["permissions"] = json!([{ "capability": "dashboard.cards" }]);
+    m["contributes"] = json!({
+        "dashboardCards": [
+            { "id": "status", "title": "Server status", "defaultSize": { "w": 4, "h": 3 } }
+        ]
+    });
+    m
+}
+
+#[test]
+fn ui_plugin_contributes_an_isolated_frame_url() {
+    let dir = temp_dir("ui-url");
+    let mut mgr = manager(&dir);
+    let bytes = pack(
+        &ui_manifest("dev.rmccc.card"),
+        &[
+            (
+                "ui/index.html",
+                "<!DOCTYPE html><script src=\"./app.js\"></script>",
+            ),
+            ("ui/app.js", "export const x = 1;"),
+        ],
+    );
+    mgr.install_from_bytes(&bytes, "card.rmcpkg", true)
+        .expect("ui plugin installs");
+
+    let contributions = mgr.contributions();
+    assert_eq!(contributions.dashboard_cards.len(), 1);
+    let card = &contributions.dashboard_cards[0];
+    assert_eq!(card.key, "dev.rmccc.card/status");
+    assert_eq!(
+        card.ui_url.as_deref(),
+        Some("rmcccplugin://dev.rmccc.card/ui/index.html?card=status")
+    );
+}
+
+#[test]
+fn declarative_plugin_has_no_frame_url() {
+    let dir = temp_dir("ui-none");
+    let mut mgr = manager(&dir);
+    let mut m = manifest("dev.rmccc.plain", "1.0.0");
+    m["permissions"] = json!([{ "capability": "dashboard.cards" }]);
+    m["contributes"] = json!({
+        "dashboardCards": [
+            { "id": "plain", "title": "Plain", "defaultSize": { "w": 4, "h": 3 } }
+        ]
+    });
+    mgr.install_from_bytes(&pack(&m, &[]), "plain.rmcpkg", true)
+        .unwrap();
+    let contributions = mgr.contributions();
+    assert_eq!(contributions.dashboard_cards.len(), 1);
+    assert!(contributions.dashboard_cards[0].ui_url.is_none());
+}
+
+#[test]
+fn ui_assets_without_an_entry_are_rejected_at_install() {
+    let dir = temp_dir("ui-orphan");
+    let mut mgr = manager(&dir);
+    let mut m = manifest("dev.rmccc.orphan", "1.0.0");
+    m["permissions"] = json!([{ "capability": "dashboard.cards" }]);
+    let bytes = pack(&m, &[("ui/index.html", "<!DOCTYPE html>")]);
+    let err = mgr
+        .install_from_bytes(&bytes, "orphan.rmcpkg", false)
+        .unwrap_err()
+        .to_string();
+    assert!(err.contains("entry.ui"), "{err}");
+}
+
+#[test]
+fn ui_entry_pointing_at_a_missing_file_is_rejected() {
+    let dir = temp_dir("ui-missing");
+    let mut mgr = manager(&dir);
+    let bytes = pack(
+        &ui_manifest("dev.rmccc.missing"),
+        &[("ui/other.html", "<!DOCTYPE html>")],
+    );
+    let err = mgr
+        .install_from_bytes(&bytes, "missing.rmcpkg", false)
+        .unwrap_err()
+        .to_string();
+    assert!(err.contains("entry.ui"), "{err}");
+}
+
+#[test]
+fn upgrade_requiring_a_new_low_risk_capability_is_reviewed_not_silently_granted() {
+    // Phase 4 才发现的状态：升级新增低风险能力时，它既不在 granted 也不在 pending，
+    // 导致插件能启用但永远拿不到该能力（隔离 UI 的 instances.list 就这样被锁死）。
+    let dir = temp_dir("upgrade-low");
+    let mut mgr = manager(&dir);
+
+    let mut v1 = manifest("dev.rmccc.low", "1.0.0");
+    v1["permissions"] = json!([{ "capability": "dashboard.cards" }]);
+    mgr.install_from_bytes(&pack(&v1, &[]), "v1.rmcpkg", true)
+        .unwrap();
+
+    let mut v2 = manifest("dev.rmccc.low", "1.1.0");
+    v2["permissions"] = json!([
+        { "capability": "dashboard.cards" },
+        { "capability": "instance.read" }
+    ]);
+    let report = mgr
+        .install_from_bytes(&pack(&v2, &[]), "v2.rmcpkg", false)
+        .unwrap();
+
+    assert_eq!(report.version, "1.1.0");
+    assert_eq!(report.state, PluginState::InstalledDisabled);
+    assert!(report.requires_review, "新增能力必须要求审查");
+    assert_eq!(report.pending_permissions, vec!["instance.read"]);
+    assert!(
+        !mgr.permissions()
+            .file()
+            .is_granted("dev.rmccc.low", "instance.read"),
+        "升级不得自动授予新能力"
+    );
+
+    // 授权后可启用，且能力真的生效。
+    mgr.grant("dev.rmccc.low", "instance.read").unwrap();
+    mgr.enable("dev.rmccc.low").unwrap();
+    mgr.authorize("dev.rmccc.low", "instance.read", None, None)
+        .expect("granted capability must authorize");
+}

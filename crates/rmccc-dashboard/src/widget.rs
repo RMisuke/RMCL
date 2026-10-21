@@ -21,6 +21,9 @@ pub struct WidgetDescriptor {
     pub min_size: GridSize,
     pub max_size: GridSize,
     pub is_builtin: bool,
+    /// 隔离 UI 入口（`rmcccplugin://...`，Phase 4/ADR-006）；`None` = 宿主绘制的声明式卡片。
+    #[serde(default)]
+    pub ui_url: Option<String>,
 }
 
 impl WidgetDescriptor {
@@ -61,6 +64,7 @@ impl WidgetRegistry {
                     .unwrap_or(GridSize { w: 1, h: 1 }),
                 max_size: GridSize { w: 24, h: 24 },
                 is_builtin: false,
+                ui_url: card.ui_url.clone(),
             });
         }
         reg
@@ -78,6 +82,7 @@ impl WidgetRegistry {
                     min_size: GridSize { w: 4, h: 2 },
                     max_size: GridSize { w: 12, h: 8 },
                     is_builtin: true,
+                    ui_url: None,
                 },
                 WidgetDescriptor {
                     plugin_id: "org.rmccc.core-ui".into(),
@@ -87,6 +92,7 @@ impl WidgetRegistry {
                     min_size: GridSize { w: 2, h: 2 },
                     max_size: GridSize { w: 6, h: 8 },
                     is_builtin: true,
+                    ui_url: None,
                 },
                 WidgetDescriptor {
                     plugin_id: "org.rmccc.core-ui".into(),
@@ -96,6 +102,7 @@ impl WidgetRegistry {
                     min_size: GridSize { w: 4, h: 2 },
                     max_size: GridSize { w: 12, h: 12 },
                     is_builtin: true,
+                    ui_url: None,
                 },
             ],
         }

@@ -1,0 +1,174 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://rmcl.snowebsite.top/schemas/plugin-ui-bridge.schema.json",
+  "title": "RMCCC plugin UI bridge (UI API v1)",
+  "description": "Messages exchanged over postMessage between the host shell and an isolated plugin UI frame (ADR-006). Frames are served from rmcccplugin://<pluginId>/ and the host re-authorizes every request.",
+  "oneOf": [
+    { "$ref": "#/$defs/pluginRequest" },
+    { "$ref": "#/$defs/hostResponseOk" },
+    { "$ref": "#/$defs/hostResponseError" },
+    { "$ref": "#/$defs/hostInit" },
+    { "$ref": "#/$defs/hostTheme" },
+    { "$ref": "#/$defs/hostRevoke" }
+  ],
+  "$defs": {
+    "apiVersion": {
+      "const": 1,
+      "description": "UI API major version. Bumped only on breaking changes."
+    },
+    "requestId": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 64,
+      "pattern": "^[A-Za-z0-9_-]+$"
+    },
+    "color": {
+      "type": "string",
+      "pattern": "^#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$"
+    },
+    "themeTokens": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "background",
+        "surface",
+        "surfaceElevated",
+        "text",
+        "textMuted",
+        "accent",
+        "accentContrast",
+        "border"
+      ],
+      "properties": {
+        "background": { "$ref": "#/$defs/color" },
+        "surface": { "$ref": "#/$defs/color" },
+        "surfaceElevated": { "$ref": "#/$defs/color" },
+        "text": { "$ref": "#/$defs/color" },
+        "textMuted": { "$ref": "#/$defs/color" },
+        "accent": { "$ref": "#/$defs/color" },
+        "accentContrast": { "$ref": "#/$defs/color" },
+        "border": { "$ref": "#/$defs/color" }
+      }
+    },
+    "wireErrorCode": {
+      "type": "string",
+      "enum": [
+        "validation",
+        "unsupported_method",
+        "protocol_version",
+        "too_large",
+        "timeout",
+        "cancelled",
+        "not_installed",
+        "not_enabled",
+        "permission_denied",
+        "permission_pending",
+        "host_not_allowed",
+        "internal"
+      ]
+    },
+    "wireError": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["code", "message"],
+      "properties": {
+        "code": { "$ref": "#/$defs/wireErrorCode" },
+        "message": { "type": "string", "maxLength": 2048 },
+        "retryable": { "type": "boolean" }
+      }
+    },
+    "pluginRequest": {
+      "description": "Plugin frame -> host. Exactly one request per message.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["v", "id", "method"],
+      "properties": {
+        "v": { "$ref": "#/$defs/apiVersion" },
+        "id": { "$ref": "#/$defs/requestId" },
+        "method": {
+          "type": "string",
+          "enum": [
+            "host.info",
+            "theme.get",
+            "settings.get",
+            "instances.list",
+            "network.request"
+          ]
+        },
+        "params": {
+          "type": "object",
+          "description": "Method specific; bounded by the 64 KiB request limit."
+        }
+      }
+    },
+    "hostResponseOk": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["v", "id", "ok", "result"],
+      "properties": {
+        "v": { "$ref": "#/$defs/apiVersion" },
+        "id": { "$ref": "#/$defs/requestId" },
+        "ok": { "const": true },
+        "result": {}
+      }
+    },
+    "hostResponseError": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["v", "id", "ok", "error"],
+      "properties": {
+        "v": { "$ref": "#/$defs/apiVersion" },
+        "id": { "$ref": "#/$defs/requestId" },
+        "ok": { "const": false },
+        "error": { "$ref": "#/$defs/wireError" }
+      }
+    },
+    "hostInit": {
+      "description": "Host -> plugin frame, sent once when the frame reports ready.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["v", "type", "pluginId", "theme", "limits"],
+      "properties": {
+        "v": { "$ref": "#/$defs/apiVersion" },
+        "type": { "const": "init" },
+        "pluginId": {
+          "type": "string",
+          "pattern": "^[a-z0-9]([a-z0-9.-]*[a-z0-9])?$"
+        },
+        "cardId": { "type": "string", "maxLength": 128 },
+        "theme": { "$ref": "#/$defs/themeTokens" },
+        "limits": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["maxRequestBytes", "maxResponseBytes", "timeoutMs"],
+          "properties": {
+            "maxRequestBytes": { "type": "integer", "minimum": 1024 },
+            "maxResponseBytes": { "type": "integer", "minimum": 1024 },
+            "timeoutMs": { "type": "integer", "minimum": 100 }
+          }
+        }
+      }
+    },
+    "hostTheme": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["v", "type", "theme"],
+      "properties": {
+        "v": { "$ref": "#/$defs/apiVersion" },
+        "type": { "const": "theme" },
+        "theme": { "$ref": "#/$defs/themeTokens" }
+      }
+    },
+    "hostRevoke": {
+      "description": "Host -> plugin frame: a capability the frame relied on was revoked.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["v", "type", "capability"],
+      "properties": {
+        "v": { "$ref": "#/$defs/apiVersion" },
+        "type": { "const": "revoke" },
+        "capability": { "type": "string", "maxLength": 64 }
+      }
+    }
+  }
+}
