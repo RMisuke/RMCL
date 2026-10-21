@@ -1940,6 +1940,7 @@ Phase 4 的边界是三层叠加，任何一层失效都还有下一层：
 ```text
 frame → host   { v:1, type:"ready" }
 host  → frame  { v:1, type:"init", pluginId, cardId?, theme, limits }
+frame → host   { v:1, type:"cancel", id }          # 放弃 in-flight 请求，迟到结果丢弃
 frame → host   { v:1, id, method, params? }
 host  → frame  { v:1, id, ok:true, result } | { v:1, id, ok:false, error:{ code, message, retryable } }
 host  → frame  { v:1, type:"theme", theme } / { v:1, type:"revoke", capability }
@@ -1953,7 +1954,8 @@ host  → frame  { v:1, type:"theme", theme } / { v:1, type:"revoke", capability
 | `instances.list` | `instance.read` | 实例概要（id/name/version/loader/memory/lastPlayed） |
 | `network.request` | `network.request` + 声明 host | 宿主 HTTP client：GET/POST、无重定向、2 MiB、30 s |
 
-超时 5–30 s（按方法），请求 ≤64 KiB，响应 ≤512 KiB，同插件并发 ≤8。
+超时 5–30 s（按方法），请求 ≤64 KiB，响应 ≤512 KiB，同插件并发 ≤8；取消有两条路径：
+插件主动 `cancel`（SDK 以 `AbortSignal` 暴露）与卡片卸载/客户端 dispose（回 `cancelled`）。
 错误码是桥自己的封闭枚举（12 项），不复用应用内 `ErrorCode`——线上契约要稳定。
 
 ### 23.2 前端容器
