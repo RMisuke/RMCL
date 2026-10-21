@@ -74,6 +74,13 @@ export interface ReadyMessage {
   type: "ready";
 }
 
+/** Plugin → host: abandon an in-flight request (late results are discarded). */
+export interface CancelMessage {
+  v: typeof UI_API_VERSION;
+  type: "cancel";
+  id: string;
+}
+
 /** Host → plugin responses and pushes. */
 export type HostMessage =
   | {

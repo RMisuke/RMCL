@@ -69,6 +69,23 @@ test("schema, Rust and SDK agree on the wire error codes", () => {
   }
 });
 
+test("the schema exposes the plugin -> host message set", () => {
+  const refs = schema.oneOf.map((entry) => entry.$ref);
+  for (const required of [
+    "#/$defs/pluginRequest",
+    "#/$defs/pluginCancel",
+    "#/$defs/hostResponseOk",
+    "#/$defs/hostResponseError",
+    "#/$defs/hostInit",
+    "#/$defs/hostTheme",
+    "#/$defs/hostRevoke",
+  ]) {
+    assert.ok(refs.includes(required), `schema is missing ${required}`);
+  }
+  assert.equal(schema.$defs.pluginCancel.properties.type.const, "cancel");
+  assert.ok(sdkApi.includes('type: "cancel"'), "SDK is missing the cancel message type");
+});
+
 test("the API version is 1 everywhere", () => {
   assert.equal(schema.$defs.apiVersion.const, 1);
   assert.match(rustUi, /pub const UI_API_VERSION: u32 = 1;/);

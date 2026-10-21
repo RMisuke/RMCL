@@ -83,8 +83,9 @@ Windows WebView2 实测（本机 macOS-only，见指南 §1.4）、插件页面�
      `{ v, type: "theme", tokens }`（主题切换时）、`{ v, type: "revoke", capability }`（权限被撤销）。
    - 上限：单条请求 ≤ 64 KiB、响应 ≤ 512 KiB（超限直接拒绝，不截断）；
      默认超时 10 s、上限 30 s；同一插件最多 8 个 in-flight。
-   - 取消：卡片卸载 / 客户端 dispose 时宿主丢弃 pending 并回 `cancelled`；
-     插件**主动**取消单条请求（`{type:"cancel", id}` + `AbortSignal`）留作 4.6 后续切片。
+   - 取消：插件可发 `{ v, type: "cancel", id }` 主动放弃一条 in-flight 请求——宿主丢弃
+     pending、不再回包，迟到结果直接丢弃；SDK 侧用 `AbortSignal` 暴露（`request(..., { signal })`）。
+     卡片卸载 / 客户端 dispose 同样按 `cancelled` 清理。
    - 线上错误码是桥自己的封闭枚举 `BridgeErrorCode`
      （`validation` / `unsupported_method` / `protocol_version` / `too_large` / `timeout` /
      `cancelled` / `not_enabled` / `permission_denied` / `permission_pending` /

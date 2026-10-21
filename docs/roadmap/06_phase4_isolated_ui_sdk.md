@@ -77,9 +77,10 @@
 
 - [x] 外部样例可独立构建/打包/安装；无法越权调 Tauri IPC 或文件 API
       （独立源 + 无 `__TAURI_INTERNALS__` + `connect-src 'none'` + 只服务 `ui/`）。
-- [x] Host Bridge 消息 schema/超时/取消/错误映射有测试（`ui.rs` 16 项 + `ipc_tests` 4 项 + SDK 契约测试 4 项）。
-      *取消*当前指「卡片卸载 / 客户端 dispose → 宿主丢弃 pending 并回 `cancelled`」；
-      插件**主动**取消某条 in-flight 请求（`{type:"cancel", id}` + `AbortSignal`）列为 4.6 后续小切片。
+- [x] Host Bridge 消息 schema/超时/取消/错误映射有测试（`ui.rs` 16 项 + `ipc_tests` 4 项 +
+      SDK 契约测试 5 项 + SDK 传输测试 9 项）。取消包含两条路径：插件主动
+      `{type:"cancel", id}`（SDK 以 `AbortSignal` 暴露，迟到结果丢弃）与卡片卸载/客户端
+      dispose（回 `cancelled`）。
 - [x] 卡片 error boundary + 权限拒绝态 + unsupported 态齐备（`PluginFrame` 三态 + `BridgeErrorCode`）。
 - [x] CSP 收紧；远程脚本被拒（`script-src 'self'` / `connect-src 'none'`）。
 - [x] ADR-006 accepted；`pnpm typecheck` / `pnpm build` 通过；Windows UI 一致性 = deferred。

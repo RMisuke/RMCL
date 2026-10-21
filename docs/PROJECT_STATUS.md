@@ -301,9 +301,12 @@
     同时在真实 `.app` 中验证了"未授权 → 拒绝错误态 → 授权 → 正常数据"的完整链路。
   - **顺手修掉 Phase 2 的一个权限漏洞**：升级新增低风险能力时既不在 granted 也不在 pending
     （插件能启用但永远拿不到），`pending` 已改为"所有已声明未授予"，升级仍不自动授权。
+  - **4.6 收尾（同日）**：桥新增插件**主动取消**（`{type:"cancel", id}`，宿主丢弃 pending、
+    迟到结果丢弃；SDK 用 `AbortSignal` 暴露），补 9 项 SDK 传输测试（ready/请求配对/错误映射/
+    版本忽略/超时/取消/cancel(id)/init/revoke），契约测试增为 5 项。
   - 门禁：`cargo test --workspace` **525 passed / 0 failed**、`fmt`/`clippy --all-targets -D warnings`/
     严格 clippy ✅、`pnpm typecheck` ✅、`pnpm build` ✅（JS 170.21 kB / gzip 49.59 kB；
-    CSS 42.15 kB / gzip 8.71 kB）、`pnpm sdk:test` 4 项 ✅。
+    CSS 42.15 kB / gzip 8.71 kB）、`pnpm sdk:test` **14 项** ✅。
   - 体积：GUI 未剥离 11.53 MiB / 手动 strip **7.85 MiB**（ADR-011 仍通过）。
   - 遗留（deferred）：Windows/Linux 隔离 UI 行为（release-blocked）、插件页面（settingsPages）的
     iframe 路由、`plugin:dev` 热更新（与"不信任任意路径"冲突）、前端组件测试仍为 0。

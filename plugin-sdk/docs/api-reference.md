@@ -12,6 +12,7 @@
 |------|------|------|
 | 插件 → 宿主 | `{ v: 1, id, method, params? }` | 单条请求；`id` 为 `[A-Za-z0-9_-]{1,64}` |
 | 插件 → 宿主 | `{ v: 1, type: "ready" }` | 文档已就绪，请求 `init` |
+| 插件 → 宿主 | `{ v: 1, type: "cancel", id }` | 放弃一条 in-flight 请求（宿主丢弃 pending，迟到结果不再回包） |
 | 宿主 → 插件 | `{ v: 1, id, ok: true, result }` | 成功 |
 | 宿主 → 插件 | `{ v: 1, id, ok: false, error: { code, message, retryable } }` | 失败 |
 | 宿主 → 插件 | `{ v: 1, type: "init", pluginId, cardId?, theme, limits }` | 容器初始化（一次） |
@@ -59,6 +60,14 @@ await host.request("network.request", {
 
 限制：请求体 ≤64 KiB、响应 ≤2 MiB、30 s 超时、不跟随重定向、不带 cookie。
 插件**不能**自己 `fetch`（CSP `connect-src 'none'`）。
+
+取消：
+
+```js
+const controller = new AbortController();
+const pending = host.request("network.request", { url }, { signal: controller.signal });
+controller.abort();   // → 发 { type: "cancel", id }，promise reject 为 cancelled
+```
 
 ## 错误码
 

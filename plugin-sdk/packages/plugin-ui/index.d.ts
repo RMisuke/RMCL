@@ -26,7 +26,13 @@ export interface PluginHost {
   onInit(handler: (context: HostContext) => void): () => void;
   onTheme(handler: (theme: ThemeTokens) => void): () => void;
   onRevoke(handler: (capability: string) => void): () => void;
-  request<T = unknown>(method: BridgeMethod, params?: unknown): Promise<T>;
+  request<T = unknown>(
+    method: BridgeMethod,
+    params?: unknown,
+    options?: { signal?: AbortSignal },
+  ): Promise<T>;
+  /** Cancel an in-flight request by id; resolves `false` when it was not pending. */
+  cancel(id: string): boolean;
   info(): Promise<unknown>;
   theme(): Promise<ThemeTokens>;
   settings(): Promise<unknown>;

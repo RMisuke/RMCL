@@ -129,6 +129,20 @@ export class PluginBridge {
       this.onReady?.();
       return;
     }
+    // Plugin-initiated cancellation: drop the pending entry so a late reply is
+    // discarded (no response is sent for the cancelled id).
+    if (msg.type === "cancel") {
+      if (typeof msg.id !== "string") {
+        this.diagnostic("dropped cancel message without id");
+        return;
+      }
+      if (this.pending.delete(msg.id)) {
+        this.clearTimer(msg.id);
+        this.diagnostic(`request ${msg.id} cancelled by the plugin`);
+      }
+      return;
+    }
+
     if (typeof msg.id !== "string" || typeof msg.method !== "string") {
       this.diagnostic("dropped message without id/method");
       return;

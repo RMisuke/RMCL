@@ -66,19 +66,40 @@ export function connect(options = {}) {
   /**
    * @param {string} method
    * @param {unknown} [params]
+   * @param {{ signal?: AbortSignal }} [options]
    * @returns {Promise<any>}
    */
-  function request(method, params) {
+  function request(method, params, options) {
     if (disposed) {
       return Promise.reject(new HostError("cancelled", "client disposed", false));
     }
+    const signal = options?.signal;
+    if (signal?.aborted) {
+      return Promise.reject(new HostError("cancelled", "request aborted before it started", false));
+    }
+
     const id = "r" + ++nextId;
     return new Promise((resolve, reject) => {
+      /** Cancel locally and tell the host to drop the pending entry. */
+      const cancel = (reason) => {
+        const entry = pending.get(id);
+        if (!entry) return;
+        pending.delete(id);
+        window.clearTimeout(entry.timer);
+        signal?.removeEventListener("abort", onAbort);
+        // Fire-and-forget: the host discards any late result for this id.
+        post({ v: UI_API_VERSION, type: "cancel", id });
+        reject(new HostError("cancelled", reason, false));
+      };
+      const onAbort = () => cancel("request cancelled by the plugin");
+
       const timer = window.setTimeout(() => {
         pending.delete(id);
+        signal?.removeEventListener("abort", onAbort);
         reject(new HostError("timeout", method + " timed out", true));
       }, requestTimeoutMs);
       pending.set(id, { resolve, reject, timer });
+      signal?.addEventListener("abort", onAbort, { once: true });
       post({ v: UI_API_VERSION, id, method, params: params ?? {} });
     });
   }
@@ -163,6 +184,19 @@ export function connect(options = {}) {
       };
     },
     request,
+    /**
+     * Cancel one in-flight request by id. Prefer `request(method, params,
+     * { signal })`: the wrapper cancels for you on `AbortSignal.abort`.
+     */
+    cancel(id) {
+      const entry = pending.get(id);
+      if (!entry) return false;
+      pending.delete(id);
+      window.clearTimeout(entry.timer);
+      post({ v: UI_API_VERSION, type: "cancel", id });
+      entry.reject(new HostError("cancelled", "request cancelled", false));
+      return true;
+    },
     /** Convenience wrappers for the v1 method table. */
     info: () => request("host.info"),
     theme: () => request("theme.get"),
