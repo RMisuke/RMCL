@@ -4,7 +4,7 @@
 //!
 //! `tauri::test` 的 mock 运行时会把整条命令链泛型化到 `MockRuntime`，而
 //! `AppState` 持有 `tauri::AppHandle`（默认 Wry 运行时）——要用它的前提是把
-//! **75 个命令**全部改成 `fn<R: Runtime>(state: State<'_, AppState<R>>, app: AppHandle<R>, ..)`。
+//! **77 个命令**全部改成 `fn<R: Runtime>(state: State<'_, AppState<R>>, app: AppHandle<R>, ..)`。
 //! 那是比本切片大得多的改动，收益却不比下面这层高多少。
 //!
 //! 因此这里测的是**契约本身**，也就是命令体真正依赖的三件事：
@@ -133,7 +133,7 @@ fn ipc_registry_is_covered_by_the_frontend_api() {
 #[test]
 fn ipc_command_count_is_stable() {
     // 新增命令时这条会失败——提醒同时更新 bindings.rs / api.ts / 本文件。
-    assert_eq!(crate::handlers::IPC_COMMANDS.len(), 75);
+    assert_eq!(crate::handlers::IPC_COMMANDS.len(), 77);
 }
 
 // ────────────────────────── 2. 错误码契约 ──────────────────────────
@@ -855,6 +855,67 @@ fn plugin_ui_bridge_enforces_the_request_size_cap() {
     assert_eq!(err.code, BridgeErrorCode::TooLarge);
 }
 
+// ────────────────────────── 11. 逻辑插件（Phase 5，ADR-007）──────────────────────────
+
+#[test]
+fn logic_calls_are_limited_to_the_read_only_allowlist() {
+    assert!(crate::commands::plugin_logic::is_allowed_call(
+        "compat.check"
+    ));
+    assert!(crate::commands::plugin_logic::is_allowed_call(
+        "mods.source.search"
+    ));
+    for bad in ["mods.install", "game.launch", "fs.read", ""] {
+        assert!(
+            !crate::commands::plugin_logic::is_allowed_call(bad),
+            "expected reject: {bad}"
+        );
+    }
+}
+
+#[test]
+fn logic_errors_map_onto_ipc_codes() {
+    use rmccc_logic::protocol::{LogicError, LogicErrorCode};
+    let cases = [
+        (
+            LogicErrorCode::ImportNotAllowed,
+            ErrorCode::PluginPackageInvalid,
+        ),
+        (
+            LogicErrorCode::ModuleTooLarge,
+            ErrorCode::PluginPackageInvalid,
+        ),
+        (LogicErrorCode::FuelExhausted, ErrorCode::InternalError),
+        (LogicErrorCode::Trap, ErrorCode::InternalError),
+        (LogicErrorCode::Timeout, ErrorCode::InternalError),
+        (LogicErrorCode::NotLoaded, ErrorCode::PluginStateConflict),
+        (LogicErrorCode::UnknownMethod, ErrorCode::ValidationError),
+    ];
+    for (code, expected) in cases {
+        let error = crate::commands::plugin_logic::map_logic_error(LogicError::new(code, "boom"));
+        assert_eq!(error.code, expected, "code {code:?}");
+        assert!(error.message.starts_with("logic."), "{}", error.message);
+    }
+    let timeout = crate::commands::plugin_logic::map_logic_error(LogicError::new(
+        LogicErrorCode::Timeout,
+        "slow",
+    ));
+    assert!(timeout.retryable, "timeouts are worth retrying");
+}
+
+#[test]
+fn logic_plugins_must_declare_the_logic_capability() {
+    let catalog = rmccc_core::rmccc_plugin::capability_catalog();
+    let entry = catalog
+        .iter()
+        .find(|c| c.name == "logic.invoke")
+        .expect("logic.invoke must be in the catalog");
+    assert_eq!(
+        entry.risk,
+        rmccc_core::rmccc_plugin::capability::CapabilityRisk::Medium
+    );
+}
+
 // ────────────────────────── 测试辅助 ──────────────────────────
 
 /// 复刻 `instance_*` 的 id 解析（命令层是私有 fn，这里保持同样的语义做契约断言）。
@@ -881,4 +942,117 @@ fn resolve_version_id_for_test(
         message: format!("No profile or installed version with id '{id}'"),
         retryable: false,
     })
+}
+
+// ────────────────────────── 12. 逻辑插件端到端（Phase 5，ADR-007）──────────────────────────
+
+/// Minimal logic module: logs the payload and answers `{"ok":true}`.
+const LOGIC_ECHO_WAT: &str = r#"(module
+  (import "rmccc" "log" (func $log (param i32 i32 i32)))
+  (memory (export "memory") 1)
+  (global $bump (mut i32) (i32.const 1024))
+  (data (i32.const 0) "{\"ok\":true}")
+  (func (export "rmccc_alloc") (param $len i32) (result i32)
+    (local $ptr i32)
+    (local.set $ptr (global.get $bump))
+    (global.set $bump (i32.add (local.get $ptr) (local.get $len)))
+    (local.get $ptr))
+  (func (export "rmccc_invoke") (param $ptr i32) (param $len i32) (result i64)
+    (call $log (i32.const 3) (local.get $ptr) (local.get $len))
+    (i64.or (i64.shl (i64.const 0) (i64.const 32)) (i64.const 11))))"#;
+
+/// Locate the helper binary built by `cargo test --workspace`.
+fn logic_helper_binary() -> Option<std::path::PathBuf> {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).parent()?;
+    for profile in ["debug", "release"] {
+        let candidate = root.join("target").join(profile).join("rmccc-logic-host");
+        if candidate.is_file() {
+            return Some(candidate);
+        }
+    }
+    None
+}
+
+/// Install → grant → enable → run through the real helper → cancel → run again.
+#[test]
+fn logic_plugin_runs_end_to_end_through_the_helper() {
+    let Some(helper) = logic_helper_binary() else {
+        eprintln!("skipping: build rmccc-logic-host first");
+        return;
+    };
+
+    let (dir, mut core) = temp_core("logic-e2e");
+    let wasm = wat::parse_str(LOGIC_ECHO_WAT).expect("wat");
+    let manifest = serde_json::json!({
+        "manifestVersion": 1,
+        "id": "dev.rmccc.logic-e2e",
+        "name": "Logic E2E",
+        "version": "1.0.0",
+        "publisher": { "id": "dev.rmccc", "name": "Tests" },
+        "compatibility": { "pluginApi": "1.x", "core": ">=0.1.0 <0.2.0" },
+        "entry": { "logic": "logic/plugin.wasm" },
+        "permissions": [{ "capability": "logic.invoke" }]
+    });
+
+    let src = dir.join("plugin-src");
+    std::fs::create_dir_all(src.join("logic")).unwrap();
+    std::fs::write(
+        src.join("manifest.json"),
+        serde_json::to_vec_pretty(&manifest).unwrap(),
+    )
+    .unwrap();
+    std::fs::write(src.join("logic/plugin.wasm"), &wasm).unwrap();
+
+    let ctx = rmccc_core::rmccc_plugin::ManifestContext::new("0.1.0", "darwin-aarch64").unwrap();
+    let package = dir.join("e2e.rmcpkg");
+    rmccc_core::rmccc_plugin::package::pack_directory(&src, &package, &ctx).expect("pack");
+
+    let report = core
+        .plugin_manager
+        .install_from_path(&package)
+        .expect("install");
+    assert_eq!(report.pending_permissions, vec!["logic.invoke"]);
+    core.plugin_manager
+        .grant("dev.rmccc.logic-e2e", "logic.invoke")
+        .unwrap();
+    core.plugin_manager.enable("dev.rmccc.logic-e2e").unwrap();
+
+    let entry = core
+        .plugin_manager
+        .manifest("dev.rmccc.logic-e2e")
+        .and_then(|m| m.entry.logic.clone())
+        .expect("entry.logic");
+    let wasm_path = core
+        .plugin_manager
+        .installed_dir("dev.rmccc.logic-e2e")
+        .expect("installed dir")
+        .join(entry);
+    assert!(wasm_path.is_file(), "{}", wasm_path.display());
+
+    let mut runner = rmccc_logic::LogicRunner::with_helper(helper);
+    let reply = runner
+        .invoke(
+            "dev.rmccc.logic-e2e",
+            &wasm_path,
+            "compat.check",
+            serde_json::json!({ "instance": "abc" }),
+            rmccc_logic::LogicLimits::default(),
+        )
+        .expect("logic call");
+    assert_eq!(reply, serde_json::json!({ "ok": true }));
+
+    // Cancel drops the helper; the next call respawns and reloads.
+    assert!(runner.cancel("dev.rmccc.logic-e2e"));
+    let again = runner
+        .invoke(
+            "dev.rmccc.logic-e2e",
+            &wasm_path,
+            "mods.source.search",
+            serde_json::json!({ "query": "sodium" }),
+            rmccc_logic::LogicLimits::default(),
+        )
+        .expect("second call after cancel");
+    assert_eq!(again, serde_json::json!({ "ok": true }));
+
+    let _ = std::fs::remove_dir_all(&dir);
 }

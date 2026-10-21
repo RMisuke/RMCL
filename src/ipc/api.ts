@@ -300,6 +300,16 @@ export const reportFrontendMessage = (
   level: "trace" | "debug" | "info" | "warn" | "error" = "error"
 ) => safeInvoke<null>("frontend_log", { level, message });
 
+// ── Logic plugins（Phase 5，ADR-007）──
+
+export const logic = {
+  /** Run a read-only logic call; the host re-checks `logic.invoke` every time. */
+  invoke: (pluginId: string, call: string, input?: unknown, timeoutMs?: number) =>
+    safeInvoke<unknown>("plugin_logic_invoke", { pluginId, call, input, timeoutMs }),
+  /** Kill the plugin's helper, aborting any in-flight call. */
+  cancel: (pluginId: string) => safeInvoke<boolean>("plugin_logic_cancel", { pluginId }),
+};
+
 // ── Isolated plugin UI（Phase 4，ADR-006）──
 
 export const pluginUi = {

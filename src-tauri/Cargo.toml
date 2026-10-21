@@ -18,6 +18,7 @@ rmccc-version = { workspace = true }
 rmccc-modloader = { workspace = true }
 rmccc-mods = { workspace = true }
 rmccc-profile = { workspace = true }
+rmccc-logic = { workspace = true }
 
 # External
 serde = { workspace = true }
@@ -42,6 +43,8 @@ tauri-plugin-updater = { workspace = true }
 # 应用层不再直接依赖 libc（指南 §5.7）。
 
 [dev-dependencies]
+# Phase 5：逻辑插件 E2E 测试用 WAT 编译一个最小模块（dev-only）。
+wat = "1"
 # P2-23：E2E 测试（thirtyfour WebDriver client）。
 # 仅 dev 依赖，不影响 release 二进制体积。
 # tauri-driver（WebDriver server）为独立二进制，由 CI 用 `cargo install tauri-driver` 安装。

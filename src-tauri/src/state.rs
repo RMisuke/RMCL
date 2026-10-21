@@ -26,6 +26,11 @@ pub struct AppState {
 
     /// Running game processes (profile_id → pid).
     pub running_games: Arc<dashmap::DashMap<String, u32>>,
+
+    /// Logic plugin helpers (ADR-007). Blocking handles live behind a std mutex
+    /// because they own child processes and pipes, and every call runs on a
+    /// blocking thread.
+    pub logic: Arc<std::sync::Mutex<rmccc_logic::LogicRunner>>,
 }
 
 impl AppState {
@@ -48,6 +53,7 @@ impl AppState {
             ui_http_client,
             app_handle,
             running_games: Arc::new(dashmap::DashMap::new()),
+            logic: Arc::new(std::sync::Mutex::new(rmccc_logic::LogicRunner::new())),
         })
     }
 }
