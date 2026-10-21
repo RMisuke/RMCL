@@ -1,0 +1,44 @@
+{
+  "manifestVersion": 1,
+  "id": "dev.rmccc.server-dashboard",
+  "name": "Server Dashboard",
+  "version": "1.0.0",
+  "description": "示例：声明 Dashboard 卡片与设置页，并请求一个受限的服务器状态查询域名。",
+  "publisher": {
+    "id": "dev.rmccc",
+    "name": "RMCCC Examples"
+  },
+  "compatibility": {
+    "pluginApi": "1.x",
+    "core": ">=0.1.0 <0.2.0",
+    "platforms": []
+  },
+  "permissions": [
+    { "capability": "dashboard.cards" },
+    { "capability": "ui.pages" },
+    { "capability": "settings.read" },
+    {
+      "capability": "network.request",
+      "hosts": ["status.example.net"],
+      "reason": "读取服务器在线状态"
+    }
+  ],
+  "contributes": {
+    "dashboardCards": [
+      {
+        "id": "server-status",
+        "title": "Server Status",
+        "description": "显示配置服务器的在线人数与 MOTD",
+        "defaultSize": { "w": 4, "h": 2 },
+        "minSize": { "w": 2, "h": 1 }
+      }
+    ],
+    "settingsPages": [
+      {
+        "id": "server-dashboard",
+        "title": "Server Dashboard",
+        "description": "配置服务器地址与展示选项"
+      }
+    ]
+  }
+}

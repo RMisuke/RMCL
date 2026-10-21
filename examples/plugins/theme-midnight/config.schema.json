@@ -1,0 +1,13 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "x-rmccc-schemaVersion": 1,
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "accent": {
+      "type": "string",
+      "enum": ["violet", "blue", "green"],
+      "default": "violet"
+    }
+  }
+}

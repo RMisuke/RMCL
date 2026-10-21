@@ -3,7 +3,7 @@
 //! This crate is a leaf dependency — all other crates can depend on it,
 //! but it depends on no other internal crate.
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use ts_rs::TS;
 
@@ -104,10 +104,47 @@ pub enum RmcccError {
     #[error("Unsupported on this platform: {0}")]
     UnsupportedPlatform(String),
 
+    // ── Plugin ──
+    /// 插件系统错误：Manifest/包/权限/状态机/配置。
+    #[error("Plugin error [{code:?}]: {message}")]
+    Plugin {
+        code: PluginErrorCode,
+        message: String,
+    },
 
     // ── Generic ──
     #[error("{0}")]
     Other(String),
+}
+
+/// 插件系统的细分错误码（IPC 会映射到 [`ErrorCode`] 的对应变体）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+#[derive(TS)]
+#[ts(export_to = "types.ts")]
+pub enum PluginErrorCode {
+    /// Manifest 字段/语义非法。
+    ManifestInvalid,
+    /// `.rmcpkg` 包结构/路径/大小非法。
+    PackageInvalid,
+    /// 能力未授权或作用域不符。
+    PermissionDenied,
+    /// 新权限尚未审查授予，插件不能启用。
+    PermissionPending,
+    /// 插件 ID 冲突或保留命名空间。
+    IdConflict,
+    /// 必需依赖缺失/版本不满足。
+    DependencyMissing,
+    /// 依赖图存在环。
+    DependencyCycle,
+    /// 生命周期状态机拒绝该转移。
+    StateConflict,
+    /// 插件配置/schema 非法。
+    ConfigInvalid,
+    /// 插件未安装。
+    NotFound,
+    /// 包内容与预期不一致（完整性）。
+    Integrity,
 }
 
 impl RmcccError {
@@ -153,6 +190,18 @@ pub enum ErrorCode {
     NotFound,
     /// 当前平台未实现该能力（deferred 后端）。
     UnsupportedPlatform,
+    // ── Plugin ──
+    PluginManifestInvalid,
+    PluginPackageInvalid,
+    PluginPermissionDenied,
+    PluginPermissionPending,
+    PluginIdConflict,
+    PluginDependencyMissing,
+    PluginDependencyCycle,
+    PluginStateConflict,
+    PluginConfigInvalid,
+    PluginNotFound,
+    PluginIntegrity,
     Unknown,
 }
 
@@ -189,6 +238,19 @@ impl From<RmcccError> for IpcError {
             RmcccError::ModVersionConflict { .. } => ErrorCode::ModVersionConflict,
             RmcccError::Validation(_) => ErrorCode::ValidationError,
             RmcccError::UnsupportedPlatform(_) => ErrorCode::UnsupportedPlatform,
+            RmcccError::Plugin { code, .. } => match code {
+                PluginErrorCode::ManifestInvalid => ErrorCode::PluginManifestInvalid,
+                PluginErrorCode::PackageInvalid => ErrorCode::PluginPackageInvalid,
+                PluginErrorCode::PermissionDenied => ErrorCode::PluginPermissionDenied,
+                PluginErrorCode::PermissionPending => ErrorCode::PluginPermissionPending,
+                PluginErrorCode::IdConflict => ErrorCode::PluginIdConflict,
+                PluginErrorCode::DependencyMissing => ErrorCode::PluginDependencyMissing,
+                PluginErrorCode::DependencyCycle => ErrorCode::PluginDependencyCycle,
+                PluginErrorCode::StateConflict => ErrorCode::PluginStateConflict,
+                PluginErrorCode::ConfigInvalid => ErrorCode::PluginConfigInvalid,
+                PluginErrorCode::NotFound => ErrorCode::PluginNotFound,
+                PluginErrorCode::Integrity => ErrorCode::PluginIntegrity,
+            },
             RmcccError::Io(_) | RmcccError::Json(_) => ErrorCode::IoError,
             _ => ErrorCode::Unknown,
         };

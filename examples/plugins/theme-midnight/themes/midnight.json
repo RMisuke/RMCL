@@ -1,0 +1,16 @@
+{
+  "schemaVersion": 1,
+  "name": "Midnight",
+  "colors": {
+    "background": "#0b1020",
+    "surface": "#141a2e",
+    "surfaceElevated": "#1c2440",
+    "text": "#e6e9f2",
+    "textMuted": "#8b93a8",
+    "accent": "#7c6cff",
+    "accentContrast": "#ffffff",
+    "border": "#2a3352",
+    "danger": "#ff6b6b",
+    "success": "#4ade80"
+  }
+}

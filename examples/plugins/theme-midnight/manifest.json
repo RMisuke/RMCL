@@ -1,0 +1,24 @@
+{
+  "manifestVersion": 1,
+  "id": "dev.rmccc.theme-midnight",
+  "name": "Midnight Theme",
+  "version": "1.0.0",
+  "description": "示例数据型插件：只包含主题色板与静态资源，不执行任何代码。",
+  "publisher": {
+    "id": "dev.rmccc",
+    "name": "RMCCC Examples"
+  },
+  "compatibility": {
+    "pluginApi": "1.x",
+    "core": ">=0.1.0 <0.2.0",
+    "platforms": []
+  },
+  "permissions": [
+    { "capability": "themes.apply", "reason": "提供一套深色主题" }
+  ],
+  "contributes": {
+    "themes": [
+      { "id": "midnight", "name": "Midnight", "path": "themes/midnight.json" }
+    ]
+  }
+}

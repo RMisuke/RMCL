@@ -52,6 +52,41 @@ pub fn user_settings_path(data_dir: &Path) -> PathBuf {
     data_dir.join("user-settings.json")
 }
 
+/// 插件安装目录（`{data_dir}/plugins/<plugin-id>/<version>/`，ADR-003）。
+pub fn plugins_dir(data_dir: &Path) -> PathBuf {
+    data_dir.join("plugins")
+}
+
+/// 插件用户数据目录（`{data_dir}/plugin-data/<plugin-id>/`）。
+pub fn plugin_data_dir(data_dir: &Path) -> PathBuf {
+    data_dir.join("plugin-data")
+}
+
+/// 插件状态目录（注册表/权限/审计/staging）。
+pub fn plugin_state_dir(data_dir: &Path) -> PathBuf {
+    data_dir.join("plugin-state")
+}
+
+/// `plugin-state/registry.json`。
+pub fn plugin_registry_path(data_dir: &Path) -> PathBuf {
+    plugin_state_dir(data_dir).join("registry.json")
+}
+
+/// `plugin-state/permissions.json`。
+pub fn plugin_permissions_path(data_dir: &Path) -> PathBuf {
+    plugin_state_dir(data_dir).join("permissions.json")
+}
+
+/// `plugin-state/audit.jsonl`。
+pub fn plugin_audit_path(data_dir: &Path) -> PathBuf {
+    plugin_state_dir(data_dir).join("audit.jsonl")
+}
+
+/// `plugin-state/staging/`。
+pub fn plugin_staging_dir(data_dir: &Path) -> PathBuf {
+    plugin_state_dir(data_dir).join("staging")
+}
+
 /// Ensure all required directories exist.
 pub fn ensure_dirs() -> std::io::Result<()> {
     let dirs = [
