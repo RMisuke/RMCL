@@ -9,7 +9,7 @@
 | `packages/plugin-ui/` | 运行时客户端 `connect()` / `applyTheme()` / `announce()`（`@rmccc/plugin-ui`），纯 ESM、无构建步骤 |
 | `templates/dashboard-card/` | 最小隔离 UI 卡片模板（自带 vendored 运行时） |
 | `scripts/cli.mjs` | `validate`（本地校验）/ `pack`（调用 `rmcli plugin pack`） |
-| `test/` | 跨工件契约测试：schema ↔ Rust ↔ SDK 三处方法表/错误码必须一致 |
+| `test/` | 跨工件契约测试（schema ↔ Rust ↔ SDK 方法表/错误码）+ `plugin-ui` 传输测试（ready/超时/取消/错误映射） |
 | `docs/` | 入门、API 参考、安全模型、发布流程 |
 
 ## 安全边界（先读这个）
@@ -41,6 +41,14 @@ node ../plugin-sdk/scripts/cli.mjs pack --dir . --out /tmp/my-card.rmcpkg \
 - 插件包版本（SemVer）与 UI API 版本互相独立，见
   [`docs/publishing.md`](docs/publishing.md)。
 - 宿主拒绝未知 `v`，并回 `protocol_version` 错误码。
+
+## 请求与取消
+
+```js
+const controller = new AbortController();
+await host.request("network.request", { url }, { signal: controller.signal });
+controller.abort(); // 宿主丢弃 pending，迟到结果不再回包
+```
 
 ## 本地开发
 
