@@ -1,0 +1,19 @@
+{
+  "name": "@rmccc/plugin-ui",
+  "version": "1.0.0",
+  "description": "Runtime host client for isolated RMCCC plugin UIs (postMessage bridge).",
+  "type": "module",
+  "main": "./index.js",
+  "types": "./index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./index.d.ts",
+      "default": "./index.js"
+    }
+  },
+  "files": ["index.js", "index.d.ts"],
+  "peerDependencies": {
+    "@rmccc/plugin-api": "1.x"
+  },
+  "license": "MIT"
+}

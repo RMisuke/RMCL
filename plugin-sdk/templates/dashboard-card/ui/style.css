@@ -1,0 +1,29 @@
+:root {
+  --bg: #0b1020;
+  --surface: #141a2e;
+  --text: #e6e9f2;
+  --muted: #8b93a8;
+  --accent: #7c6cff;
+  --border: #2a3352;
+}
+
+html, body {
+  margin: 0;
+  height: 100%;
+  background: var(--bg);
+  color: var(--text);
+  font: 12px/1.5 -apple-system, BlinkMacSystemFont, "SF Pro Text", sans-serif;
+}
+
+.card {
+  height: 100%;
+  padding: 14px 16px;
+  background: var(--surface);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+h1 { margin: 0; font-size: 13px; font-weight: 600; }
+#summary { margin: 0; }
+.error { margin: 0; color: #ff6b6b; font: 11px/1.5 ui-monospace, Menlo, monospace; }

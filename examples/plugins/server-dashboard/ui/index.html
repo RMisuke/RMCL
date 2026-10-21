@@ -1,0 +1,28 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Server Status</title>
+    <link rel="stylesheet" href="./style.css" />
+  </head>
+  <body>
+    <main class="card">
+      <header class="card-head">
+        <h1 id="title">Server Status</h1>
+        <span id="badge" class="badge">…</span>
+      </header>
+
+      <p id="summary" class="summary">Loading…</p>
+
+      <dl class="facts">
+        <div><dt>Instances</dt><dd id="instances">–</dd></div>
+        <div><dt>Locale</dt><dd id="locale">–</dd></div>
+      </dl>
+
+      <button id="refresh" class="button" type="button">Refresh</button>
+
+      <p id="error" class="error" hidden></p>
+    </main>
+    <script src="./app.js"></script>
+  </body>
+</html>

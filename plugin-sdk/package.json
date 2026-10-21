@@ -1,0 +1,13 @@
+{
+  "name": "rmccc-plugin-sdk",
+  "version": "1.0.0",
+  "private": true,
+  "description": "RMCCC plugin SDK: bridge types, runtime client, templates and pack/validate tools.",
+  "type": "module",
+  "scripts": {
+    "validate": "node scripts/cli.mjs validate",
+    "pack": "node scripts/cli.mjs pack",
+    "test": "node --test test/"
+  },
+  "license": "MIT"
+}

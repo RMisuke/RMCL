@@ -1,0 +1,34 @@
+{
+  "manifestVersion": 1,
+  "id": "dev.example.dashboard-card",
+  "name": "Example Dashboard Card",
+  "version": "1.0.0",
+  "description": "Template: an isolated UI card that reads instances through the Host Bridge.",
+  "publisher": {
+    "id": "dev.example",
+    "name": "Example Publisher"
+  },
+  "compatibility": {
+    "pluginApi": "1.x",
+    "core": ">=0.1.0 <0.2.0"
+  },
+  "entry": {
+    "ui": "ui/index.html"
+  },
+  "permissions": [
+    { "capability": "dashboard.cards" },
+    { "capability": "settings.read" },
+    { "capability": "instance.read" }
+  ],
+  "contributes": {
+    "dashboardCards": [
+      {
+        "id": "hello",
+        "title": "Hello Card",
+        "description": "Shows the instance count and the active palette.",
+        "defaultSize": { "w": 4, "h": 3 },
+        "minSize": { "w": 2, "h": 2 }
+      }
+    ]
+  }
+}

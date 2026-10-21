@@ -2,8 +2,8 @@
   "manifestVersion": 1,
   "id": "dev.rmccc.server-dashboard",
   "name": "Server Dashboard",
-  "version": "1.0.0",
-  "description": "示例：声明 Dashboard 卡片与设置页，并请求一个受限的服务器状态查询域名。",
+  "version": "1.1.0",
+  "description": "示例：隔离 UI 卡片（iframe + Host Bridge），并请求一个受限的服务器状态查询域名。",
   "publisher": {
     "id": "dev.rmccc",
     "name": "RMCCC Examples"
@@ -13,13 +13,27 @@
     "core": ">=0.1.0 <0.2.0",
     "platforms": []
   },
+  "entry": {
+    "ui": "ui/index.html"
+  },
   "permissions": [
-    { "capability": "dashboard.cards" },
-    { "capability": "ui.pages" },
-    { "capability": "settings.read" },
+    {
+      "capability": "dashboard.cards"
+    },
+    {
+      "capability": "ui.pages"
+    },
+    {
+      "capability": "settings.read"
+    },
+    {
+      "capability": "instance.read"
+    },
     {
       "capability": "network.request",
-      "hosts": ["status.example.net"],
+      "hosts": [
+        "status.example.net"
+      ],
       "reason": "读取服务器在线状态"
     }
   ],
@@ -29,8 +43,14 @@
         "id": "server-status",
         "title": "Server Status",
         "description": "显示配置服务器的在线人数与 MOTD",
-        "defaultSize": { "w": 4, "h": 2 },
-        "minSize": { "w": 2, "h": 1 }
+        "defaultSize": {
+          "w": 4,
+          "h": 2
+        },
+        "minSize": {
+          "w": 2,
+          "h": 1
+        }
       }
     ],
     "settingsPages": [

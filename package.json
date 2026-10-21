@@ -9,7 +9,10 @@
     "build": "vite build",
     "preview": "vite preview",
     "typecheck": "tsc --noEmit",
-    "tauri": "tauri"
+    "tauri": "tauri",
+    "plugin:validate": "node plugin-sdk/scripts/cli.mjs validate",
+    "plugin:pack": "node plugin-sdk/scripts/cli.mjs pack",
+    "sdk:test": "node --test plugin-sdk/test/"
   },
   "dependencies": {
     "@solidjs/router": "^0.15.0",
