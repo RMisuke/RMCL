@@ -2006,23 +2006,43 @@ select.settings-input option {
   overflow: auto;
 }
 
+/* Only rendered while the dashboard is in edit mode (Dashboard.tsx), so a
+   transparent overlay can never swallow clicks — `opacity: 0` does NOT disable
+   hit-testing, which is what made the whole page feel "unclickable". */
 .dashboard-widget-head {
   position: absolute;
-  top: 2px;
+  top: 4px;
   right: 6px;
   z-index: 5;
   display: flex;
   align-items: center;
   gap: 4px;
-  opacity: 0;
-  transition: opacity 0.15s ease;
-  background: color-mix(in srgb, var(--surface-card) 88%, transparent);
-  padding: 2px 4px;
+  background: color-mix(in srgb, var(--surface-card) 92%, transparent);
+  border: 1px solid var(--border-default);
+  padding: 2px 6px;
   border-radius: 6px;
+  box-shadow: var(--shadow-sm);
 }
 
-.dashboard-slot:hover .dashboard-widget-head {
-  opacity: 1;
+/* Edit mode: dashed frame on every slot, and frames must not eat drag/drop. */
+.dashboard-slot.is-editing {
+  outline: 1px dashed var(--border-default);
+  outline-offset: -1px;
+  border-radius: 12px;
+}
+
+.dashboard-slot.is-editing > *:not(.dashboard-widget-head) {
+  pointer-events: none;
+}
+
+.dashboard-slot.is-editing iframe {
+  pointer-events: none;
+}
+
+.dashboard-edit-toggle.is-active {
+  border-color: var(--color-blue);
+  color: var(--color-blue);
+  background: var(--color-blue-light);
 }
 
 .dashboard-drag {

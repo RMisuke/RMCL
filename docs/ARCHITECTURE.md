@@ -1887,7 +1887,13 @@ Logging is infrastructure, not polish. Adding it late means retrofitting spans i
 
 - 前端 CSS Grid（`repeat(columns, 1fr)`，120px 行高）；`grid-column/row` 由 `position/size` 计算。
 - 断点：≥1280 wide（声明列数）/ 768–1279 medium（≤8）/ <768 compact（≤4）。
-- 卡片头：拖动（HTML5 drag/drop）、宽度循环、隐藏；工具栏：添加插件卡片、恢复隐藏、恢复默认。
+- **显式编辑模式**（默认关闭）：工具栏最右的「编辑布局 / 完成」是唯一开关。
+  - 视图态：不渲染任何卡片头、不接受 drag/drop，卡片（含插件 iframe）完全可交互；
+  - 编辑态：每张卡片显示 `⠿` 拖动 / `↔` 循环宽度 / `×` 隐藏，槽位虚线框，
+    槽位内容与 iframe `pointer-events: none`（否则 iframe 会吞掉拖放事件）；
+    工具栏才出现「添加插件卡片 / 恢复隐藏 / 恢复默认」。
+  - 卡片头**只在编辑态渲染**：`opacity: 0` 不会关闭命中测试，早期版本因此留下
+    一层看不见的覆盖物，让整页都点不动。
 - 每卡片 `ErrorBoundary`；插件卸载/禁用后 descriptor 缺失 → 保位占位。
 
 ### 21.4 主题

@@ -364,7 +364,11 @@ export const en = {
   "settings.theme.saveFailed": "Could not save the theme",
   // ── Dashboard layout (Phase 3) ──
   "dashboard.account.title": "Account",
-  "dashboard.layout.hint": "Drag the ⠿ handle to move a card; ↔ resizes it; × hides it.",
+  "dashboard.layout.viewHint": "Layout locked — cards are fully interactive. Click “Edit layout” to move or resize them.",
+  "dashboard.layout.editHint": "Editing: drag ⠿ to move, ↔ to resize, × to hide. Cards are not interactive while editing.",
+  "dashboard.layout.edit": "Edit layout",
+  "dashboard.layout.done": "Done",
+  "dashboard.layout.editToggleTitle": "Toggle layout editing",
   "dashboard.layout.reset": "Reset layout",
   "dashboard.layout.drag": "Drag to move",
   "dashboard.layout.resize": "Resize",

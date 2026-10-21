@@ -276,6 +276,17 @@
     严格 clippy ✅、`pnpm typecheck` ✅、`pnpm build` ✅。
   - 体积：GUI 未剥离 11.39 MiB / 手动 strip **7.79 MiB**（ADR-011 仍通过）。
 
+- **修复：Dashboard 一直处于"编辑态"，卡片点不动（2026-10-21）**
+  - **现象**：鼠标移到卡片上就出现一条白色卡片头，整页无法点击/无法交互插件卡片。
+  - **根因**：卡片头 `position:absolute; z-index:5; opacity:0` 仍然参与命中测试——
+    透明不等于不可点；它又只在 `:hover` 时才可见，于是看起来"一放上去就变白"。
+  - **修法**：改成**显式编辑模式**。视图态根本不渲染卡片头、不接受 drag/drop；编辑态才渲染
+    `⠿`/`↔`/`×` 与「添加/恢复/重置」，并给槽位加虚线框与 `pointer-events:none`（否则
+    iframe 会吞掉拖放）。工具栏新增「编辑布局 / 完成」开关（`aria-pressed`），
+    两态各有提示文案。
+  - 门禁：`pnpm typecheck` ✅、`pnpm build` ✅（JS 171.71 kB / gzip 50.01 kB；
+    CSS 42.47 kB / gzip 8.76 kB）；真实 `.app` 中验证视图态可点击、编辑态可拖动/调整/隐藏。
+
 - **Phase 4 隔离 UI 扩展与 SDK（2026-10-21）—— 4.1–4.5 完成**
   - **ADR-006 accepted**：容器 = 主窗口内 `<iframe sandbox src="rmcccplugin://<id>/…">`（独立源，
     不是独立 WebView：卡片要进网格）；协议 = 版本化 postMessage（`UI_API_VERSION = 1`）；

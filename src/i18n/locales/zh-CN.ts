@@ -359,7 +359,11 @@ export const zhCN: Messages = {
 
   // ── Dashboard 布局（Phase 3）──
   "dashboard.account.title": "账户",
-  "dashboard.layout.hint": "拖动 ⠿ 手柄移动卡片；↔ 调整宽度；× 隐藏。",
+  "dashboard.layout.viewHint": "布局已锁定，卡片可正常操作。点“编辑布局”可移动或调整卡片。",
+  "dashboard.layout.editHint": "编辑中：拖动 ⠿ 移动，↔ 调整宽度，× 隐藏。编辑时卡片不可交互。",
+  "dashboard.layout.edit": "编辑布局",
+  "dashboard.layout.done": "完成",
+  "dashboard.layout.editToggleTitle": "切换布局编辑状态",
   "dashboard.layout.reset": "恢复默认布局",
   "dashboard.layout.drag": "拖动移动",
   "dashboard.layout.resize": "调整尺寸",

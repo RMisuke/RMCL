@@ -79,6 +79,10 @@ const Dashboard: Component = () => {
   const [layout, setLayout] = createSignal<DashboardLayout | null>(null);
   const [breakpoint, setBreakpoint] = createSignal<"wide" | "medium" | "compact">("wide");
   const [savingLayout, setSavingLayout] = createSignal(false);
+  /// Explicit edit mode (ADR-005 follow-up): the card chrome (drag handle /
+  /// resize / hide) is only rendered while editing, so in normal use nothing
+  /// invisible covers the cards and plugin iframes stay clickable.
+  const [editingLayout, setEditingLayout] = createSignal(false);
   const [draggingId, setDraggingId] = createSignal<string | null>(null);
   const [widgetDescriptors, setWidgetDescriptors] = createSignal<WidgetDescriptor[]>([]);
   let gridRef: HTMLDivElement | undefined;
@@ -474,11 +478,13 @@ const Dashboard: Component = () => {
   };
 
   const handleDragStart = (e: DragEvent, w: WidgetInstance) => {
+    if (!editingLayout()) return;
     setDraggingId(w.instanceId);
     e.dataTransfer?.setData("text/plain", w.instanceId);
   };
 
   const handleDrop = async (e: DragEvent) => {
+    if (!editingLayout()) return;
     e.preventDefault();
     const id = draggingId() ?? e.dataTransfer?.getData("text/plain");
     if (!id || !gridRef || !layout()) return;
@@ -1007,66 +1013,94 @@ const Dashboard: Component = () => {
       <Show when={session()} fallback={<LoadingScreen message={t("dashboard.account.redirecting")} />}>
         <div class="dashboard-page">
           <div class="dashboard-toolbar">
-            <span class="dashboard-hint">{t("dashboard.layout.hint")}</span>
+            <span class="dashboard-hint">
+              {editingLayout()
+                ? t("dashboard.layout.editHint")
+                : t("dashboard.layout.viewHint")}
+            </span>
             <div class="dashboard-toolbar-actions">
+              <Show when={editingLayout()}>
+                <button
+                  class="settings-refresh-btn"
+                  onClick={addMissingWidgets}
+                  disabled={savingLayout()}
+                >
+                  {t("dashboard.layout.addWidgets")}
+                </button>
+                <button
+                  class="settings-refresh-btn"
+                  onClick={restoreHiddenWidgets}
+                  disabled={savingLayout()}
+                >
+                  {t("dashboard.layout.restoreHidden")}
+                </button>
+                <button
+                  class="settings-refresh-btn"
+                  onClick={handleResetLayout}
+                  disabled={savingLayout()}
+                >
+                  {t("dashboard.layout.reset")}
+                </button>
+              </Show>
               <button
-                class="settings-refresh-btn"
-                onClick={addMissingWidgets}
-                disabled={savingLayout()}
+                class="settings-refresh-btn dashboard-edit-toggle"
+                classList={{ "is-active": editingLayout() }}
+                onClick={() => setEditingLayout((value) => !value)}
+                aria-pressed={editingLayout()}
+                title={t("dashboard.layout.editToggleTitle")}
               >
-                {t("dashboard.layout.addWidgets")}
-              </button>
-              <button
-                class="settings-refresh-btn"
-                onClick={restoreHiddenWidgets}
-                disabled={savingLayout()}
-              >
-                {t("dashboard.layout.restoreHidden")}
-              </button>
-              <button
-                class="settings-refresh-btn"
-                onClick={handleResetLayout}
-                disabled={savingLayout()}
-              >
-                {t("dashboard.layout.reset")}
+                {editingLayout()
+                  ? t("dashboard.layout.done")
+                  : t("dashboard.layout.edit")}
               </button>
             </div>
           </div>
           <div
             class="dashboard-grid"
+            classList={{ "is-editing": editingLayout() }}
             ref={(el) => (gridRef = el)}
             style={gridStyle()}
-            onDragOver={(e) => e.preventDefault()}
-            onDrop={handleDrop}
+            onDragOver={(e) => {
+              if (editingLayout()) e.preventDefault();
+            }}
+            onDrop={(e) => {
+              if (editingLayout()) void handleDrop(e);
+            }}
           >
             <For each={visibleWidgets()}>
               {(w) => (
-                <div class="dashboard-slot" style={slotStyle(w)}>
-                  <div class="dashboard-widget-head">
-                    <span
-                      class="dashboard-drag"
-                      draggable={true}
-                      onDragStart={(e) => handleDragStart(e, w)}
-                      title={t("dashboard.layout.drag")}
-                    >
-                      ⠿
-                    </span>
-                    <span class="dashboard-widget-label">{widgetLabel(w)}</span>
-                    <button
-                      class="dashboard-widget-btn"
-                      onClick={() => cycleWidgetWidth(w)}
-                      title={t("dashboard.layout.resize")}
-                    >
-                      ↔
-                    </button>
-                    <button
-                      class="dashboard-widget-btn"
-                      onClick={() => hideWidget(w)}
-                      title={t("dashboard.layout.hide")}
-                    >
-                      ×
-                    </button>
-                  </div>
+                <div
+                  class="dashboard-slot"
+                  classList={{ "is-editing": editingLayout() }}
+                  style={slotStyle(w)}
+                >
+                  <Show when={editingLayout()}>
+                    <div class="dashboard-widget-head">
+                      <span
+                        class="dashboard-drag"
+                        draggable={true}
+                        onDragStart={(e) => handleDragStart(e, w)}
+                        title={t("dashboard.layout.drag")}
+                      >
+                        ⠿
+                      </span>
+                      <span class="dashboard-widget-label">{widgetLabel(w)}</span>
+                      <button
+                        class="dashboard-widget-btn"
+                        onClick={() => cycleWidgetWidth(w)}
+                        title={t("dashboard.layout.resize")}
+                      >
+                        ↔
+                      </button>
+                      <button
+                        class="dashboard-widget-btn"
+                        onClick={() => hideWidget(w)}
+                        title={t("dashboard.layout.hide")}
+                      >
+                        ×
+                      </button>
+                    </div>
+                  </Show>
                   <ErrorBoundary
                     fallback={(err) => <WidgetError message={String(err)} />}
                   >
