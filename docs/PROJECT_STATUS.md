@@ -249,6 +249,33 @@
   - 遗留：插件卡片真实渲染在 Phase 4（当前占位）；高 DPI/Windows WebView2 差异 deferred；
     前端组件测试仍为 0。
 
+- **修复：启动后"透明窗口"（前端完全不渲染，2026-10-21）**
+  - **现象**：打开 `RMCCC.app` 后窗口是透明矩形——无标题栏、无内容，`logs/` 里也没有任何前端 IPC。
+  - **根因（实证）**：`.app` 内的可执行文件**没有嵌入任何前端资源**（`strings` 查不到
+    `/assets/index-*.js` 键），WebView 拿到空 asset map，`index.html` 与模块脚本全部 404。
+    成因是 `tauri-build` 只对 `tauri.conf.json` / capabilities / 资源发 `rerun-if-changed`，
+    **不监听 `frontendDist`**：早先一次 `dist/` 尚未生成时的 `cargo build` 把"空 asset map"
+    编译进了 `rmccc`，之后的 `tauri build` 因无 Rust 源码变更不再重编译，直接复用了那个二进制。
+  - **结构修复**：`src-tauri/build.rs` 增加 `cargo:rerun-if-changed=../dist`（+ `dist/index.html`），
+    dist 变化必然触发 `rmccc` 重编译。
+  - **失败可见化**（同类问题不再表现为"透明窗口"）：
+    - 新增 `src-tauri/src/bundle.rs`：启动时用 `asset_resolver()` 校验 `index.html` 及文档引用的
+      `src=`/`href=` 资源是否都在 asset map 中；缺失则写 `ERROR` 日志，并把窗口导航到内联
+      `data:text/html` 错误页（列出缺失清单 + `pnpm tauri build` 提示）。用导航而非 `eval`：
+      `index.html` 缺失时 WebView 没有可求值的脚本上下文。
+    - `index.html` 内联 boot guard（在 bundle 之前、不依赖模块加载）：捕获资源加载失败、
+      未捕获异常、未处理 Promise、4s 未挂载，绘制可读错误面板，并通过新增 IPC
+      `frontend_log`（注册表 73→74）写入 `logs/rmccc.<date>.log`。
+    - `src/main.tsx` 在 `render()` 后派发 `rmccc:shell-mounted`，guard 收到后撤下错误面板。
+  - **验证**：移走 `dist/` 后 release 重编译 → 窗口显示"内置前端资源不完整"错误页，
+    日志有 `Embedded frontend bundle is incomplete`；恢复 `dist/` 重编译 → UI 正常渲染、
+    `version_list` 等 IPC 正常。前端 guard 另在 Safari 用"故意改错 JS 文件名"的 dist 验证
+    （面板显示具体 404 URL）。
+  - 门禁：`cargo test --workspace` **497 passed / 0 failed**（新增 6 项 bundle 校验测试 +
+    3 项 `frontend_log` 契约测试）、`fmt` ✅、`clippy --all-targets -D warnings` ✅、
+    严格 clippy ✅、`pnpm typecheck` ✅、`pnpm build` ✅。
+  - 体积：GUI 未剥离 11.39 MiB / 手动 strip **7.79 MiB**（ADR-011 仍通过）。
+
 **2026-10-20（第 7 轮）**：产出**全量架构与审计文档** [`AUDIT_2026-10-20.md`](AUDIT_2026-10-20.md)，
 并修正本文档与 `ARCHITECTURE.md`、`DEVELOPMENT_PLAN.md` 中过期的数字。
 
@@ -427,10 +454,10 @@ Game repository refreshed game_dir=.../instances instances=1        ← 修复 1
 | 编译 | `cargo check --workspace --all-targets` **通过**；clippy 无 warning |
 | 前端类型 | `pnpm typecheck` **通过** |
 | CI lint 三门禁 | `cargo fmt --check` / `clippy --all-targets -D warnings` / `clippy --lib --bins -D clippy::panic -D clippy::unwrap_used` **全部本地通过** |
-| 测试 | **485 passed / 0 failed**（2026-10-21 全量复跑；插件 74 项 + Dashboard 17 项） |
+| 测试 | **497 passed / 0 failed**（2026-10-21 全量复跑；插件 74 项 + Dashboard 17 项 + bundle 校验 6 项） |
 | 版本控制 | HEAD = `80887ce`；Phase 1/2 变更**尚未提交**（80+ 路径，待用户决定提交粒度） |
-| 发布体积 | GUI 未剥离 11.32 MiB / 手动 strip **7.73 MiB**；CLI 手动 strip **4.48 MiB**（ADR-011：stripped < 10 MiB ✅；`strip = true` 仍失效） |
-| 代码规模 | Rust 173 文件 / **40,926 行**；前端 19 文件 / **5,823 行**（详见 [`AUDIT_2026-10-20.md`](AUDIT_2026-10-20.md)） |
+| 发布体积 | GUI 未剥离 11.39 MiB / 手动 strip **7.79 MiB**；CLI 手动 strip **4.48 MiB**（ADR-011：stripped < 10 MiB ✅；`strip = true` 仍失效） |
+| 代码规模 | Rust 181 文件 / **43,070 行**；前端 20 文件 / **6,589 行** + `app.css` 2,091 行（详见 [`AUDIT_2026-10-20.md`](AUDIT_2026-10-20.md)） |
 | 文档同步 | `ARCHITECTURE.md` / `AUDIT` / `roadmap` 已按 Phase 1/2 实现回填；ADR-002/003/004/011 accepted |
 | 阶段判断 | **Phase 0 / 0.5 / 1 / 2 完成；Phase 3.1–3.5 完成**；下一步 Phase 4（隔离 UI + SDK，先建 ADR-006） |
 

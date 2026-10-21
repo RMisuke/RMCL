@@ -8,7 +8,7 @@
 
 ## 1. 当前起点一句话
 
-引擎层（安装→索引→启动）已贯通并实机验证；**485 项测试**（含 74 项插件测试 + 17 项 Dashboard 布局测试）+
+引擎层（安装→索引→启动）已贯通并实机验证；**497 项测试**（含 74 项插件测试 + 17 项 Dashboard 布局测试 + 6 项嵌入资源校验测试）+
 CI 三门禁本地全绿。Phase 0/0.5/1 的结构债已清偿，Phase 2 的声明式插件系统
 （Manifest/权限/生命周期/`.rmcpkg` 安装事务/CLI/UI）已落地。
 **还没做的是 Dashboard 布局引擎、隔离 UI、逻辑运行时、Agent 与生产分发**——
@@ -61,7 +61,7 @@ Phase 7  插件目录 / 签名 / 生产分发（registry / 签名 / updater / �
 | 维度 | 当前事实 | 来源 |
 |------|---------|------|
 | Workspace | 14 成员（12 crates + `src-tauri` + `src-cli`），新增 `rmccc-plugin` | Cargo.toml |
-| 测试 | 485 passed（2026-10-21 全量复跑）；插件 74 项 + Dashboard 17 项 | `cargo test --workspace` |
+| 测试 | 497 passed（2026-10-21 全量复跑）；插件 74 项 + Dashboard 17 项 + bundle 校验 6 项 | `cargo test --workspace` |
 | IPC | 64 定义 = 64 注册；前端 `api.ts` 全覆盖（除显式白名单） | `handlers.rs` / `ipc_tests` |
 | 结构债 | ✅ pipeline 收口（P1-3）；✅ 平台适配层 + 领域零 `cfg`（1.1）；✅ loader 单体系（P1-4）；✅ context.rs 93 行（P2-1）；✅ 修 P2-12 | 审计 §5.3、§15.1/§15.2 |
 | 插件系统 | ✅ Phase 2：Manifest v1 / `.rmcpkg` 事务 / 状态机 / 权限 / 配置 / CLI / UI | ADR-003、ADR-004 |

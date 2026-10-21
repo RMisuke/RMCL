@@ -58,6 +58,17 @@
 - Tailwind CSS v4 utility-first，禁止内联 style 对象（除动态计算值外）。
 - 颜色使用 Tailwind 配置中的自定义色值（`--color-rmccc-red` 等），不直接写 hex。
 
+### 3.5 构建联动（必读）
+- 前端产物由 **`tauri::generate_context!` 在编译期嵌入二进制**，不是运行时读 `dist/`。
+  所以"只跑 `pnpm build`"对已构建的 `.app` **没有任何作用**；改完前端必须重新
+  `pnpm tauri build --bundles app`（`src-tauri/build.rs` 已对 `../dist` 发 `rerun-if-changed`，
+  dist 变化会强制重编译 `rmccc`）。
+- 只 `pnpm build` 不重编译的典型症状：窗口打开后是**透明矩形**（页面拿不到资源）。
+  `src-tauri/src/bundle.rs` 会在启动时校验 asset map 并把缺失清单画到窗口里；
+  `index.html` 的内联 boot guard 负责模块加载失败/未挂载的情况。看到这两处报错就是构建产物过期。
+- 运行期前端异常的日志通道只有 `api.ts` 的 `reportFrontendMessage()`（→ IPC `frontend_log`
+  → `logs/rmccc.<date>.log`）：release 构建没有 Web Inspector，`console.*` 在进程外不可见。
+
 ## 4. 提交规范
 
 ### Commit Message Format

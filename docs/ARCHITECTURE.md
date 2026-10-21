@@ -1897,3 +1897,27 @@ Logging is infrastructure, not polish. Adding it late means retrofitting spans i
 - 内置 light/dark + 已启用插件的 `contributes.themes`（JSON，无 JS）；偏好存入 `UserSettings.theme`。
 - `follow_system` 监听 `prefers-color-scheme`；未知/无效主题回退安全主题。
 - 安全语义色（danger/success/warning）由宿主控制，主题 JSON 中出现时忽略。
+
+## 22. 前端引导与"透明窗口"防护（启动链路）
+
+窗口是 `decorations: false` + `transparent: true` + `visible: false`，由 `main.rs` 在 `setup`
+末尾 `show()`。这个组合把"前端整包没跑起来"退化成**透明矩形**：没有标题栏、没有报错、没有日志。
+2026-10-21 的一次真实故障就属于这一类——`.app` 里的可执行文件**没有嵌入任何前端资源**，
+WebView 收到空 asset map，`index.html` 与模块脚本全 404。
+
+三道防线（按失效位置从早到晚）：
+
+| 层 | 位置 | 作用 |
+|----|------|------|
+| **构建** | `src-tauri/build.rs` | `cargo:rerun-if-changed=../dist`。`tauri-build` 自己不监听 `frontendDist`，缺这行时"先 `cargo build`（dist 不存在）→ 后 `tauri build`（不重编译）"会把空 asset map 固化进二进制 |
+| **原生自检** | `src-tauri/src/bundle.rs` | 启动时用 `asset_resolver()` 校验 `/index.html` 与文档里 `src=`/`href=` 引用的资源；缺失 → `ERROR` 日志 + 把窗口**导航**到内联 `data:text/html` 错误页（列出缺失清单和 `pnpm tauri build`）。用导航而非 `eval`，因为 `index.html` 缺失时没有可求值的脚本上下文 |
+| **前端守卫** | `index.html` 内联脚本 | 位于 bundle 之前、不依赖模块加载：捕获资源加载失败、未捕获异常、未处理 Promise、4s 未挂载，绘制深色错误面板，并通过 IPC `frontend_log` 写入 `logs/rmccc.<date>.log` |
+
+`src/main.tsx` 在 `render()` 后派发 `rmccc:shell-mounted`，守卫收到后撤下错误面板（只在
+**挂载前**才全屏绘制，挂载后仅写日志，避免遮住可用的 UI）。
+
+`frontend_log(level, message)` 是注册表里唯一的"前端 → 日志"通道（8 KiB 上限、level 白名单），
+因为 release 构建没有 Web Inspector，WKWebView 的 console 在进程外不可见。
+
+排障开关：`RMCCC_WEBVIEW_PROBE=1` 运行主可执行时，4s 后把 WebView 实际加载的 URL、
+`#root` 子节点数、脚本/样式数量写进日志并画在页面上（正常启动无副作用）。
