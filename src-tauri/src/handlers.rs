@@ -76,6 +76,15 @@ pub const IPC_COMMANDS: &[&str] = &[
     "plugin_config_reset",
     "plugin_capabilities",
     "plugin_contributions",
+    "dashboard_get_layout",
+    "dashboard_save_layout",
+    "dashboard_reset_layout",
+    "dashboard_list_widgets",
+    "dashboard_list_themes",
+    "dashboard_get_theme_tokens",
+    "dashboard_set_theme_preference",
+    "dashboard_get_theme_preference",
+    "dashboard_get_theme_json",
 ];
 
 /// 全部 IPC 命令（顺序无关，但请与 `commands/` 的模块顺序保持可读）。
@@ -163,5 +172,15 @@ pub fn invoke_handlers() -> impl Fn(tauri::ipc::Invoke<tauri::Wry>) -> bool + Se
         commands::plugin::plugin_config_reset,
         commands::plugin::plugin_capabilities,
         commands::plugin::plugin_contributions,
+        // ── dashboard (Phase 3) ──
+        commands::dashboard::dashboard_get_layout,
+        commands::dashboard::dashboard_save_layout,
+        commands::dashboard::dashboard_reset_layout,
+        commands::dashboard::dashboard_list_widgets,
+        commands::dashboard::dashboard_list_themes,
+        commands::dashboard::dashboard_get_theme_tokens,
+        commands::dashboard::dashboard_set_theme_preference,
+        commands::dashboard::dashboard_get_theme_preference,
+        commands::dashboard::dashboard_get_theme_json,
     ]
 }

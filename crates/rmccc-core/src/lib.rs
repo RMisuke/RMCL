@@ -9,6 +9,7 @@ pub use rmccc_error::{ErrorCode, IpcError, Result, RmcccError};
 // Re-export sub-crate APIs
 pub use rmccc_auth;
 pub use rmccc_config;
+pub use rmccc_dashboard;
 pub use rmccc_download;
 pub use rmccc_launch;
 pub use rmccc_modloader;
@@ -105,6 +106,9 @@ pub struct CoreContext {
     /// 插件管理器（Phase 2）。加载失败只产生诊断，不阻断启动
     /// （`PluginManager::load` 永不返回 Err）。
     pub plugin_manager: rmccc_plugin::PluginManager,
+
+    /// Dashboard 布局存储（Phase 3，ADR-005）。布局归一化/持久化/默认恢复。
+    pub dashboard: rmccc_dashboard::LayoutStore,
 }
 
 impl CoreContext {
@@ -243,6 +247,9 @@ impl CoreContext {
             }
         }
 
+        // Dashboard 布局存储（Phase 3）：路径 + 平台文件系统适配器。
+        let dashboard = rmccc_dashboard::LayoutStore::new(data_dir, platform.fs.clone());
+
         // Mod loader 安装不再预创建 provider：统一走
         // `modloader::install_loader` + `DependencyManager`（审计 P1-4）。
         // Mod sources — Modrinth API client (CurseForge to follow).
@@ -267,6 +274,7 @@ impl CoreContext {
             mod_sources,
             platform,
             plugin_manager,
+            dashboard,
         })
     }
 

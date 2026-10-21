@@ -37,6 +37,12 @@ export type {
   PluginConfig,
   CapabilityInfo,
   PluginContributions,
+  DashboardLayout,
+  NormalizationResult,
+  WidgetDescriptor,
+  ThemeInfo,
+  ThemeTokens,
+  WidgetInstance,
 } from "./types";
 
 import type {
@@ -68,6 +74,12 @@ import type {
   PluginConfig,
   CapabilityInfo,
   PluginContributions,
+  DashboardLayout,
+  NormalizationResult,
+  WidgetDescriptor,
+  ThemeInfo,
+  ThemeTokens,
+  WidgetInstance,
 } from "./types";
 
 // Input DTOs: partial updates. The fields come from the ts-rs generated types
@@ -248,4 +260,26 @@ export const plugins = {
     safeInvoke<CapabilityInfo[]>("plugin_capabilities"),
   contributions: () =>
     safeInvoke<PluginContributions>("plugin_contributions"),
+};
+
+// ── Dashboard layout & themes（Phase 3）──
+
+export const dashboard = {
+  getLayout: (layoutId?: string) =>
+    safeInvoke<DashboardLayout>("dashboard_get_layout", { layoutId }),
+  saveLayout: (layout: DashboardLayout) =>
+    safeInvoke<NormalizationResult>("dashboard_save_layout", { layout }),
+  resetLayout: (layoutId?: string) =>
+    safeInvoke<DashboardLayout>("dashboard_reset_layout", { layoutId }),
+  listWidgets: () =>
+    safeInvoke<WidgetDescriptor[]>("dashboard_list_widgets"),
+  listThemes: () => safeInvoke<ThemeInfo[]>("dashboard_list_themes"),
+  getThemeTokens: (key: string) =>
+    safeInvoke<ThemeTokens>("dashboard_get_theme_tokens", { key }),
+  setTheme: (theme: string) =>
+    safeInvoke<UserSettings>("dashboard_set_theme_preference", { theme }),
+  getThemePreference: () =>
+    safeInvoke<string | null>("dashboard_get_theme_preference"),
+  getThemeJson: (key: string) =>
+    safeInvoke<unknown>("dashboard_get_theme_json", { key }),
 };

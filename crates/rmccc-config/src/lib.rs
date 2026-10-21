@@ -494,6 +494,11 @@ pub struct UserSettings {
     /// `"zh-CN"`.
     #[serde(default)]
     pub locale: Option<String>,
+    /// UI theme preference: `None` follows the system, `Some("light")` /
+    /// `Some("dark")` pins the built-in theme. Plugin theme keys are stored
+    /// separately by the dashboard layer (only built-ins live here).
+    #[serde(default)]
+    pub theme: Option<String>,
     /// Whether to check for launcher updates on startup.
     #[serde(default = "default_check_updates")]
     pub check_updates: bool,
@@ -518,6 +523,7 @@ impl Default for UserSettings {
         Self {
             schema: user_settings_schema(),
             locale: None,
+            theme: None,
             check_updates: true,
             savable: true,
             backup_on_next_save: false,

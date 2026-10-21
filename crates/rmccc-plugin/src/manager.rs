@@ -287,6 +287,11 @@ impl PluginManager {
         &self.diagnostics
     }
 
+    /// 已安装插件的版本目录（读取主题/静态资源用）。
+    pub fn installed_dir(&self, id: &str) -> Option<PathBuf> {
+        self.plugins.get(id).map(|p| p.dir.clone())
+    }
+
     pub fn permissions(&self) -> &PermissionStore {
         &self.permissions
     }

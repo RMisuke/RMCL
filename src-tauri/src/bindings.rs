@@ -77,6 +77,21 @@ pub fn generate_types() -> Result<String, String> {
         ts::<rmccc_core::rmccc_plugin::ThemeView>()?,
         ts::<crate::commands::plugin::PluginList>()?,
         ts::<crate::commands::plugin::PluginConfigView>()?,
+        // ── Dashboard (Phase 3) ──
+        ts::<rmccc_core::rmccc_dashboard::DashboardLayout>()?,
+        ts::<rmccc_core::rmccc_dashboard::WidgetInstance>()?,
+        ts::<rmccc_core::rmccc_dashboard::GridLayout>()?,
+        ts::<rmccc_core::rmccc_dashboard::GridPosition>()?,
+        ts::<rmccc_core::rmccc_dashboard::GridSize>()?,
+        ts::<rmccc_core::rmccc_dashboard::BreakpointOverrides>()?,
+        ts::<rmccc_core::rmccc_dashboard::Breakpoint>()?,
+        ts::<rmccc_core::rmccc_dashboard::NormalizationResult>()?,
+        ts::<rmccc_core::rmccc_dashboard::NormalizationCorrection>()?,
+        ts::<rmccc_core::rmccc_dashboard::CorrectionKind>()?,
+        ts::<rmccc_core::rmccc_dashboard::WidgetDescriptor>()?,
+        ts::<rmccc_core::rmccc_dashboard::ThemeInfo>()?,
+        ts::<rmccc_core::rmccc_dashboard::ThemeTokens>()?,
+        ts::<rmccc_core::rmccc_dashboard::ThemePreference>()?,
     ];
 
     for t in &types {

@@ -135,7 +135,7 @@ export async function initI18n(): Promise<void> {
 export async function setLocale(next: LocalePreference): Promise<void> {
   setPreference_(next);
   apply(next ? normalizeLocale(next) : systemLocale());
-  const saved = await userSettings.set({ locale: next ?? "", check_updates: null });
+  const saved = await userSettings.set({ locale: next ?? "", check_updates: null, theme: null });
   if (!saved.ok) {
     console.warn("i18n: could not persist the locale preference", saved.error);
   }

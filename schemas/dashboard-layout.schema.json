@@ -1,0 +1,87 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://rmccc.dev/schemas/dashboard-layout.schema.json",
+  "title": "RMCCC Dashboard Layout v1",
+  "description": "User-customizable dashboard layout. Widgets are placed on a CSS Grid with logical column/row coordinates.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "layoutId", "grid", "widgets"],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "layoutId": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 64,
+      "pattern": "^[a-z0-9][a-z0-9-]*$"
+    },
+    "grid": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["columns", "gap"],
+      "properties": {
+        "columns": { "type": "integer", "minimum": 1, "maximum": 24 },
+        "gap": { "type": "integer", "minimum": 0, "maximum": 64 }
+      }
+    },
+    "widgets": {
+      "type": "array",
+      "maxItems": 64,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["instanceId", "pluginId", "widgetId", "enabled", "position", "size"],
+        "properties": {
+          "instanceId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 64,
+            "pattern": "^[a-z0-9][a-z0-9-]*$"
+          },
+          "pluginId": {
+            "type": "string",
+            "maxLength": 128,
+            "pattern": "^[a-z][a-z0-9-]*(\\.[a-z][a-z0-9-]*)+$"
+          },
+          "widgetId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 64,
+            "pattern": "^[a-z0-9][a-z0-9-]*$"
+          },
+          "enabled": { "type": "boolean" },
+          "position": { "$ref": "#/$defs/position" },
+          "size": { "$ref": "#/$defs/size" },
+          "breakpointOverrides": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "medium": { "$ref": "#/$defs/size" },
+              "compact": { "$ref": "#/$defs/size" }
+            }
+          },
+          "configuration": { "type": "object" }
+        }
+      }
+    }
+  },
+  "$defs": {
+    "position": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["x", "y"],
+      "properties": {
+        "x": { "type": "integer", "minimum": 0, "maximum": 23 },
+        "y": { "type": "integer", "minimum": 0, "maximum": 999 }
+      }
+    },
+    "size": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["w", "h"],
+      "properties": {
+        "w": { "type": "integer", "minimum": 1, "maximum": 24 },
+        "h": { "type": "integer", "minimum": 1, "maximum": 24 }
+      }
+    }
+  }
+}

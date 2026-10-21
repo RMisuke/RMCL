@@ -183,6 +183,9 @@ pub struct UserSettingsUpdate {
     pub locale: Option<String>,
     /// Whether to check for launcher updates on startup.
     pub check_updates: Option<bool>,
+    /// Theme preference: `"light"` / `"dark"` / `""` (follow system).
+    /// Omitted = leave unchanged.
+    pub theme: Option<String>,
 }
 
 #[tauri::command]
@@ -215,6 +218,20 @@ pub async fn settings_set_user(
     }
     if let Some(check) = opts.check_updates {
         core.user_settings.check_updates = check;
+    }
+    if let Some(theme) = opts.theme {
+        core.user_settings.theme = match theme.trim() {
+            "" | "system" | "follow_system" => None,
+            "light" => Some("light".into()),
+            "dark" => Some("dark".into()),
+            other => {
+                return Err(IpcError {
+                    code: rmccc_error::ErrorCode::ValidationError,
+                    message: format!("unknown theme preference: {other}"),
+                    retryable: false,
+                })
+            }
+        };
     }
 
     // P4：与 settings_set 一致，经 FileSaver 防抖写盘并在退出时统一 flush。

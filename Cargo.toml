@@ -12,6 +12,7 @@ members = [
     "crates/rmccc-config",
     "crates/rmccc-platform",
     "crates/rmccc-plugin",
+    "crates/rmccc-dashboard",
     "src-tauri",
     "src-cli",
 ]
@@ -93,6 +94,7 @@ rmccc-profile = { path = "crates/rmccc-profile" }
 rmccc-config = { path = "crates/rmccc-config" }
 rmccc-platform = { path = "crates/rmccc-platform" }
 rmccc-plugin = { path = "crates/rmccc-plugin" }
+rmccc-dashboard = { path = "crates/rmccc-dashboard" }
 
 [profile.release]
 opt-level = "s"

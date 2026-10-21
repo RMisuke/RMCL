@@ -15,6 +15,7 @@ rmccc-profile = { workspace = true }
 rmccc-config = { workspace = true }
 rmccc-platform = { workspace = true }
 rmccc-plugin = { workspace = true }
+rmccc-dashboard = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 reqwest = { workspace = true }

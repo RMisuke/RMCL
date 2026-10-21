@@ -4,7 +4,7 @@
 //!
 //! `tauri::test` 的 mock 运行时会把整条命令链泛型化到 `MockRuntime`，而
 //! `AppState` 持有 `tauri::AppHandle`（默认 Wry 运行时）——要用它的前提是把
-//! **64 个命令**全部改成 `fn<R: Runtime>(state: State<'_, AppState<R>>, app: AppHandle<R>, ..)`。
+//! **73 个命令**全部改成 `fn<R: Runtime>(state: State<'_, AppState<R>>, app: AppHandle<R>, ..)`。
 //! 那是比本切片大得多的改动，收益却不比下面这层高多少。
 //!
 //! 因此这里测的是**契约本身**，也就是命令体真正依赖的三件事：
@@ -133,7 +133,7 @@ fn ipc_registry_is_covered_by_the_frontend_api() {
 #[test]
 fn ipc_command_count_is_stable() {
     // 新增命令时这条会失败——提醒同时更新 bindings.rs / api.ts / 本文件。
-    assert_eq!(crate::handlers::IPC_COMMANDS.len(), 64);
+    assert_eq!(crate::handlers::IPC_COMMANDS.len(), 73);
 }
 
 // ────────────────────────── 2. 错误码契约 ──────────────────────────

@@ -3659,6 +3659,7 @@ dependencies = [
  "reqwest 0.12.28",
  "rmccc-auth",
  "rmccc-config",
+ "rmccc-dashboard",
  "rmccc-download",
  "rmccc-error",
  "rmccc-launch",
@@ -3672,6 +3673,22 @@ dependencies = [
  "serde_json",
  "tokio",
  "tracing",
+]
+
+[[package]]
+name = "rmccc-dashboard"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "rmccc-config",
+ "rmccc-error",
+ "rmccc-platform",
+ "rmccc-plugin",
+ "serde",
+ "serde_json",
+ "tracing",
+ "ts-rs",
+ "uuid",
 ]
 
 [[package]]

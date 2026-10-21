@@ -15,10 +15,11 @@
 | [ADR-002](ADR-002-profile-instance-semantics.md) | Profile / Instance 语义分界 + Core Service 门面 | **accepted**（2026-10-21） | Phase 1 | 审计 P2-10、§7.4 |
 | [ADR-003](ADR-003-plugin-package-and-install-transaction.md) | 插件包归档、目录布局与安装事务 | **accepted**（2026-10-21） | Phase 2 | 指南 §7/§11/§12/§14.4；ADR-004 |
 | [ADR-004](ADR-004-plugin-manifest-and-versioning.md) | 插件 Manifest Schema、ID 与版本兼容 | **accepted**（2026-10-21） | Phase 2 | 指南 §6.4/§7/§8.1；ADR-003 |
+| [ADR-005](ADR-005-dashboard-layout-and-theme.md) | Dashboard 布局 Schema/归一化/断点/主题令牌 | **accepted**（2026-10-21） | Phase 3 | 指南 §9；ADR-003/004 |
 | [ADR-011](ADR-011-binary-size-metric.md) | &lt;10 MB 的具体度量对象与门禁 | **accepted** | Phase 0 | AGENTS.md 体积红线；审计 §15.5 |
 | [ADR-012](ADR-012-macos-intel-build.md) | macOS Intel 的 runner、打包和最低系统版本 | proposed | Phase 0 | 指南 §5.1、§16.3 |
 
-> 其余 ADR（005–010）在对应阶段前建立，见指南 §20。
+> 其余 ADR（006–010）在对应阶段前建立，见指南 §20。
 
 ## 模板
 
