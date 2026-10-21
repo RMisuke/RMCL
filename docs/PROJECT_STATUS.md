@@ -276,6 +276,27 @@
     严格 clippy ✅、`pnpm typecheck` ✅、`pnpm build` ✅。
   - 体积：GUI 未剥离 11.39 MiB / 手动 strip **7.79 MiB**（ADR-011 仍通过）。
 
+- **Phase 5 逻辑运行时（2026-10-21）—— 5.1–5.3 完成**
+  - **ADR-007 accepted（基于实测）**：PoC（`poc/logic-runtime/`，独立 crate，不进 workspace）
+    在 macOS ARM64 release/strip 后测得：baseline 0.29 MiB、wasmi **+1.96 MiB**、
+    wasmtime/Cranelift **+5.89 MiB**；wasmi 调用 0.047 µs / RSS 2.9 MiB、
+    wasmtime 调用 0.055 µs / RSS 6.4 MiB；独立进程 spawn 0.3–0.9 ms、stdin 往返 8.5 µs。
+    主程序只剩 2.15 MiB 余量（ADR-011）→ 嵌入式 wasmtime 直接出局，嵌入式 wasmi 只剩 0.2 MiB
+    且没有崩溃隔离 → **决策：独立 helper 进程 + wasmi 解释 core WASM 模块**。
+  - **新增 `crates/rmccc-logic`**（第 14 个 crate）：ABI 常量（只允许导入 `rmccc.log`，
+    导出 `rmccc_alloc`/`rmccc_invoke`）、行分隔 JSON-RPC、`LogicLimits`、
+    `LogicHost` 监管者（spawn/握手/每调用墙钟超时→kill/restart/崩溃分类）。
+  - **新增 `src-logic-host`**（第 15 个 workspace 成员，唯一链接 wasmi 的二进制）：
+    实例化前拒绝非白名单导入、`StoreLimits` 限制线性内存、`consume_fuel(true)` 计量 fuel、
+    每次载荷拷贝做边界检查、插件日志转发到 stderr。
+  - **测试**：8 项协议单测 + 9 项**真实 spawn** 集成测试（握手、echo 往返、未知插件、
+    禁用导入、fuel 耗尽后 helper 存活、64 MiB 内存被拒、超时 kill + 重启恢复、协议版本）。
+  - 主可执行文件体积不变（wasmi 只被 helper 链接）；helper 分发/签名留待 Phase 7，
+    当前通过 `RMCCC_LOGIC_HOST` 或同目录解析。
+  - 门禁：`cargo test --workspace` **542 passed / 0 failed**、`fmt`/`clippy --all-targets -D warnings`/
+    严格 clippy ✅。
+  - 待做：`entry.logic` 包校验 + `logic.invoke` 能力接线 + 第一个只读扩展（5.4/5.5）。
+
 - **修复：Dashboard 一直处于"编辑态"，卡片点不动（2026-10-21）**
   - **现象**：鼠标移到卡片上就出现一条白色卡片头，整页无法点击/无法交互插件卡片。
   - **根因**：卡片头 `position:absolute; z-index:5; opacity:0` 仍然参与命中测试——
@@ -500,12 +521,12 @@ Game repository refreshed game_dir=.../instances instances=1        ← 修复 1
 | 编译 | `cargo check --workspace --all-targets` **通过**；clippy 无 warning |
 | 前端类型 | `pnpm typecheck` **通过** |
 | CI lint 三门禁 | `cargo fmt --check` / `clippy --all-targets -D warnings` / `clippy --lib --bins -D clippy::panic -D clippy::unwrap_used` **全部本地通过** |
-| 测试 | **525 passed / 0 failed**（2026-10-21 全量复跑；插件 98 项 + Dashboard 17 项 + SDK 契约 4 项） |
+| 测试 | **542 passed / 0 failed**（2026-10-21 全量复跑；插件 98 项 + Dashboard 17 项 + SDK 契约 4 项 + 逻辑运行时 17 项） |
 | 版本控制 | HEAD = `80887ce`；Phase 1/2 变更**尚未提交**（80+ 路径，待用户决定提交粒度） |
 | 发布体积 | GUI 未剥离 11.53 MiB / 手动 strip **7.85 MiB**；CLI 手动 strip **4.48 MiB**（ADR-011：stripped < 10 MiB ✅；`strip = true` 仍失效） |
-| 代码规模 | Rust 183 文件 / **44,584 行**；前端 22 文件 / **7,105 行**；SDK 19 文件 / **1,306 行**（详见 [`AUDIT_2026-10-20.md`](AUDIT_2026-10-20.md)） |
+| 代码规模 | Rust **187 文件 / 45,600+ 行**（含 `rmccc-logic` 与 `src-logic-host`）；前端 22 文件 / 7,105 行；SDK 19 文件 / 1,306 行（详见 [`AUDIT_2026-10-20.md`](AUDIT_2026-10-20.md)） |
 | 文档同步 | `ARCHITECTURE.md` / `AUDIT` / `roadmap` 已按 Phase 1/2 实现回填；ADR-002/003/004/011 accepted |
-| 阶段判断 | **Phase 0 / 0.5 / 1 / 2 / 3 完成；Phase 4.1–4.5 完成**；下一步 Phase 5（逻辑运行时，先建 ADR-007） |
+| 阶段判断 | **Phase 0–4 完成；Phase 5.1–5.3 完成**（ADR-007 accepted，helper 进程 + wasmi + 限流）；下一步 5.4/5.5（`entry.logic` + `logic.invoke`） |
 
 **最重要的三个判断**：
 

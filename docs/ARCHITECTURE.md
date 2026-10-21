@@ -1997,3 +1997,69 @@ plugin-sdk/
 - **页面容器**：`settingsPages` 已经带 `uiUrl`，但 Settings 里的 iframe 路由留到后续切片；
   当前只在 Dashboard 卡片渲染隔离 UI。
 - **不是进程隔离**：iframe 与宿主同 WebView 进程；逻辑插件的进程/WASM 运行时是 Phase 5。
+
+## 24. 逻辑插件运行时（Phase 5）
+
+决策与实测数据见 [ADR-007](adr/ADR-007-logic-runtime.md)。三条硬边界：
+
+1. **主程序不链接 WASM 引擎**。引擎只存在于 helper 进程 `rmccc-logic-host` 里，
+   因此 ADR-011 的主可执行文件体积不受影响（实测：嵌入式 wasmtime +5.89 MiB 会直接顶破红线）。
+2. **进程隔离**：helper 崩溃/死循环不会带走启动器；超时由宿主 `kill` 子进程强制实现，
+   不依赖模块配合。
+3. **模块沙箱**：只允许导入 `rmccc.log`，线性内存由 `StoreLimits` 封顶，指令数由 fuel 计量。
+
+### 24.1 组件
+
+| 组件 | 位置 | 职责 |
+|------|------|------|
+| `rmccc-logic` | `crates/rmccc-logic` | ABI 常量、JSON-RPC 协议、`LogicLimits`、`LogicHost` 监管者（spawn/超时/重启） |
+| `rmccc-logic-host` | `src-logic-host` | 唯一链接 wasmi 的二进制：校验导入 → 实例化 → 执行 `rmccc_invoke` |
+| PoC | `poc/logic-runtime`（非 workspace 成员） | ADR-007 的体积/延迟/内存实测与复现脚本 |
+
+### 24.2 协议
+
+stdin/stdout，一行一个 JSON：
+
+```text
+{"v":1,"id":1,"method":"ping"}
+{"v":1,"id":2,"method":"load","pluginId":"…","path":"…/logic/plugin.wasm","limits":{…}}
+{"v":1,"id":3,"method":"invoke","pluginId":"…","call":"compat.check","input":{…},"limits":{…}}
+{"v":1,"id":4,"method":"unload","pluginId":"…"}
+→ {"v":1,"id":3,"ok":true,"result":{…}} | {"v":1,"id":3,"ok":false,"error":{"code":"…","message":"…"}}
+```
+
+错误码是封闭枚举（`import_not_allowed` / `module_too_large` / `module_invalid` /
+`fuel_exhausted` / `trap` / `timeout` / `payload_too_large` / `not_loaded` / …），
+与 UI 桥（§23）同一条原则：**线上格式独立于应用内 `ErrorCode`**。
+
+### 24.3 WASM ABI（v1）
+
+```wat
+(import "rmccc" "log" (func (param i32 i32 i32)))            ;; 唯一允许的导入
+(func (export "rmccc_alloc")  (param i32) (result i32))      ;; len -> ptr
+(func (export "rmccc_invoke") (param i32 i32) (result i64))  ;; in_ptr, in_len -> (out_ptr << 32 | out_len)
+```
+
+宿主把 `{"method": <call>, "input": <input>}` 写进线性内存，读取返回值并解析成 JSON。
+选择 core module 而非 Component Model：后者需要 wasmtime 的组件工具链，与本阶段的体积预算冲突。
+
+### 24.4 限制与生命周期
+
+| 限制 | 默认 | 上限 |
+|------|------|------|
+| 单次调用墙钟 | 5 s | 30 s（超时即 kill helper） |
+| 线性内存 | 16 MiB | 256 MiB |
+| fuel | 5 000 万 | 20 亿 |
+| 并发 | 1 | 1（v1 串行，避免共享内存竞争） |
+| 模块体积 | — | 2 MiB |
+| 载荷 | — | 256 KiB |
+
+一个 helper 同一时刻只加载一个模块（v1）；`load` 会替换上一个。超时/崩溃后
+`LogicHost::restart()` 拉起新进程，下一次调用即可继续。
+
+### 24.5 平台与遗留
+
+- Windows/Linux：`wasmi` 是纯 Rust，但进程/管道/kill 语义需原生 runner 验证 → **deferred**。
+- helper 的分发（打进 `.app` / 独立安装）与签名在 Phase 7；当前通过 `RMCCC_LOGIC_HOST`
+  环境变量或与启动器同目录解析。
+- 逻辑插件与权限系统的接线（`plugin_logic_invoke` + 能力 `logic.invoke`）在 5.4/5.5。

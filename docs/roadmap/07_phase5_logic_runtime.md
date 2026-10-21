@@ -1,6 +1,6 @@
 # Phase 5 — 逻辑插件运行时
 
-> **对应指南**：§6.2 阶段 C/D、§6.3，§17 Phase 5。**状态**：pending。
+> **对应指南**：§6.2 阶段 C/D、§6.3，§17 Phase 5。**状态**：5.1–5.3 完成（2026-10-21），5.4–5.5 进行中。
 > **前置**：Phase 1 平台适配层 + Phase 2 权限模型。**ADR-007**（WASM vs 独立进程）须 PoC 后 accepted。
 
 ## 1. 目标
@@ -56,3 +56,21 @@
 
 - `ARCHITECTURE.md` 增"逻辑运行时"章节；ADR-007 入库。
 - `AUDIT` §1.3/§6.7 更新；`PROJECT_STATUS` 回填。
+
+## 8. 进度（2026-10-21）
+
+| 切片 | 状态 | 证据 |
+|------|------|------|
+| 5.1 PoC | ✅ | [`poc/logic-runtime/README.md`](../../poc/logic-runtime/README.md)：strip 后 baseline 0.29 MiB / wasmi +1.96 / wasmtime +5.89 MiB；wasmi 调用 0.047 µs、RSS 2.9 MiB；独立进程 spawn 0.3–0.9 ms、往返 8.5 µs |
+| 5.2 ADR-007 | ✅ | [ADR-007](../adr/ADR-007-logic-runtime.md) accepted：嵌入式 wasmtime 违反 ADR-011（13.7 MiB），嵌入式 wasmi 只剩 0.2 MiB 且无崩溃隔离 → **独立 helper 进程 + wasmi core module** |
+| 5.3 运行时限流 | ✅ | `crates/rmccc-logic` + `src-logic-host`：导入白名单、`StoreLimits` 内存、fuel、超时 kill、重启、载荷边界检查；8 项协议测试 + 9 项真实 spawn 集成测试 |
+| 5.4 版本兼容/回滚 | 待做 | 逻辑 API 版本协商已在握手实现（未知 `v` 拒绝），插件包层面的 `entry.logic` 校验与回滚待做 |
+| 5.5 第一个低风险扩展 | 待做 | 计划：`logic.invoke` 能力（medium，需显式授予）+ 只读 `compat.check` / `mods.source.search` |
+
+### 验收对照
+
+- [x] ADR-007 accepted（基于 PoC 实测，非"能编译"）。
+- [x] 插件崩溃/超时不崩主程序；资源限制可强制（fuel / memory / wall clock）。
+- [x] Host Import allowlist + 撤销测试通过（`imports_outside_the_allowlist_are_rejected_before_running`）。
+- [x] macOS ARM64 有实际构建验证；Windows x64/Intel = deferred。
+- [x] 运行时增量体积已记录对照 ADR-011（主可执行文件不变）。
