@@ -10,29 +10,9 @@ use crate::java::JavaInstallation;
 use std::collections::HashMap;
 use std::path::PathBuf;
 
-/// OS process priority — maps to `nice -n` on Unix (HMCL `ProcessPriority`).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum ProcessPriority {
-    Low,
-    BelowNormal,
-    #[default]
-    Normal,
-    AboveNormal,
-    High,
-}
-
-impl ProcessPriority {
-    /// The `nice` value for this priority on Unix (None for NORMAL).
-    pub fn nice_value(&self) -> Option<&'static str> {
-        match self {
-            ProcessPriority::Low => Some("5"),
-            ProcessPriority::BelowNormal => Some("1"),
-            ProcessPriority::Normal => None,
-            ProcessPriority::AboveNormal => Some("-1"),
-            ProcessPriority::High => Some("-5"),
-        }
-    }
-}
+/// OS process priority — 定义在平台适配层（`nice`/`SetPriorityClass` 的实现侧），
+/// 这里 re-export 以保持 `rmccc_launch::ProcessPriority` 的历史路径可用。
+pub use rmccc_platform::ProcessPriority;
 
 /// Launch options for a single game launch (HMCL `LaunchOptions`).
 #[derive(Debug, Clone)]
@@ -93,6 +73,10 @@ pub struct LaunchOptions {
     pub post_exit_command: Option<String>,
     /// Enable debug log output (affects log4j config selection).
     pub enable_debug_log_output: bool,
+    /// 平台适配层：描述符（classpath 分隔符 / natives 命名 / library 规则）+
+    /// 执行后端（权限位、符号链接、进程组、终止进程树）。由组装层注入一次，
+    /// 领域代码不裸写 `cfg!`（指南 §5.7.1）。
+    pub platform: std::sync::Arc<rmccc_platform::Platform>,
 }
 
 impl LaunchOptions {
@@ -112,6 +96,7 @@ impl LaunchOptions {
         profile: &rmccc_profile::Profile,
         config: &rmccc_config::AppConfig,
         java: JavaInstallation,
+        platform: std::sync::Arc<rmccc_platform::Platform>,
     ) -> Self {
         let resolved = profile.resolve(config);
         let game_dir = config.resolved_game_root();
@@ -121,6 +106,7 @@ impl LaunchOptions {
             java,
             game_dir,
             run_dir,
+            platform,
             version_name: Some(profile.name.clone()),
             profile_name: Some(profile.name.clone()),
             version_type: None,
@@ -189,6 +175,7 @@ pub fn instance_mods_dir(
 impl Default for LaunchOptions {
     fn default() -> Self {
         Self {
+            platform: std::sync::Arc::new(rmccc_platform::Platform::current()),
             java: JavaInstallation {
                 path: PathBuf::from("java"),
                 major_version: 17,
@@ -352,6 +339,7 @@ mod tests {
                 vendor: String::new(),
                 is_64bit: true,
             },
+            std::sync::Arc::new(rmccc_platform::Platform::current()),
         );
         assert_eq!(options.max_memory, 3072, "inherits the global default");
         assert_eq!(options.jvm_args, vec!["-Dglobal=1"]);

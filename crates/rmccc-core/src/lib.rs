@@ -13,14 +13,18 @@ pub use rmccc_download;
 pub use rmccc_launch;
 pub use rmccc_modloader;
 pub use rmccc_mods;
+pub use rmccc_platform;
+pub use rmccc_plugin;
 pub use rmccc_profile;
 pub use rmccc_version;
 
 // 游戏安装/修复/启动编排（P1-01 抽取自 CLI，进度经回调传递）。
 pub mod pipeline;
 
+// Mod loader 安装编排（P1-4 收敛：Tauri/CLI 共用这一份）。
+pub mod modloader;
+
 use rmccc_version::GameRepository as _;
-use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -89,16 +93,18 @@ pub struct CoreContext {
     /// and coalesces repeated saves to the same path. Flushed on process exit.
     pub file_saver: rmccc_config::FileSaver,
 
-    /// Mod loader providers keyed by loader type.
-    /// Pre-created for all currently supported loaders (Fabric, Forge, NeoForge).
-    /// Legacy loaders (Quilt, LiteLoader, etc.) are not yet available and will
-    /// return an error when requested via [`Self::modloader_provider`].
-    pub modloader_providers:
-        HashMap<rmccc_modloader::ModLoaderType, Box<dyn rmccc_modloader::ModLoaderProvider>>,
-
     /// Mod sources (Modrinth, CurseForge, etc.) for searching and downloading mods.
     /// Empty until Phase 4 mod API implementation is complete.
     pub mod_sources: Vec<Box<dyn rmccc_mods::ModSource>>,
+
+    /// 平台适配层（指南 §5.7）。**在组装层注入一次**，下游全链路依赖 trait：
+    /// 进程终止、文件权限、符号链接、打开 URL、平台描述符都从这里取，
+    /// 领域 crate 不得再内联 `#[cfg(target_os)]` 执行分支。
+    pub platform: Arc<rmccc_platform::Platform>,
+
+    /// 插件管理器（Phase 2）。加载失败只产生诊断，不阻断启动
+    /// （`PluginManager::load` 永不返回 Err）。
+    pub plugin_manager: rmccc_plugin::PluginManager,
 }
 
 impl CoreContext {
@@ -122,11 +128,14 @@ impl CoreContext {
         // CLI `-d` overrides (Bug #4).
         config.data_dir = Some(data_dir.to_path_buf());
 
-        // P2-20：显式设置 connect/timeout，弱网下避免长时间挂起（架构文档 10s connect）。
+        // P2-20：显式设置 connect/timeout，弱网下避免长时间挂起。
+        // 不再设置"总超时"（`.timeout`）：慢速 CDN 上的大 jar 会在 body 读到一半时被
+        // `TimedOut` 误杀（sodium 安装即此症状）。改用 `read_timeout`（单次读间隔），
+        // 只要仍在收数据就继续，真正卡死才失败。
         let http_client = reqwest::Client::builder()
             .pool_max_idle_per_host(32)
-            .connect_timeout(std::time::Duration::from_secs(10))
-            .timeout(std::time::Duration::from_secs(120))
+            .connect_timeout(std::time::Duration::from_secs(15))
+            .read_timeout(std::time::Duration::from_secs(120))
             .build()
             .map_err(|e| RmcccError::Other(e.to_string()))?;
 
@@ -190,7 +199,12 @@ impl CoreContext {
             Arc::new(rmccc_auth::MicrosoftAuthProvider::new(http_client.clone()));
 
         // Account repository — plaintext metadata + encrypted private data.
-        let auth_vault = Arc::new(rmccc_auth::TokenVault::init(&data_dir.join(".key"))?);
+        // 平台适配层在组装层构造一次，下游（vault / launcher / repository）都复用它。
+        let platform = Arc::new(rmccc_platform::Platform::current());
+        let auth_vault = Arc::new(rmccc_auth::TokenVault::init(
+            &data_dir.join(".key"),
+            platform.fs.as_ref(),
+        )?);
         let mut account_repo = rmccc_auth::AccountRepository::new(data_dir, auth_vault.clone())?;
         // 注册登录方式工厂（对齐 HMCL Accounts）：离线 + Microsoft。
         account_repo.register_factory(Box::new(rmccc_auth::OfflineAccountFactory));
@@ -203,22 +217,34 @@ impl CoreContext {
             tracing::warn!(error = %e, "Legacy account migration failed");
         }
 
-        // Pre-create modloader providers for currently supported loaders.
-        let mut modloader_providers: HashMap<
-            rmccc_modloader::ModLoaderType,
-            Box<dyn rmccc_modloader::ModLoaderProvider>,
-        > = HashMap::new();
-        for lt in [
-            rmccc_modloader::ModLoaderType::Fabric,
-            rmccc_modloader::ModLoaderType::Forge,
-            rmccc_modloader::ModLoaderType::NeoForge,
-        ] {
-            modloader_providers.insert(
-                lt.clone(),
-                rmccc_modloader::create_provider(&lt, http_client.clone())?,
-            );
+        // 插件系统：损坏的注册表/插件只记诊断，不影响主链路（ADR-003）。
+        let plugin_manager = rmccc_plugin::PluginManager::load(
+            data_dir,
+            env!("CARGO_PKG_VERSION"),
+            platform.descriptor.plugin_platform_id(),
+            platform.fs.clone(),
+        );
+        for diagnostic in plugin_manager.diagnostics() {
+            match diagnostic.severity {
+                rmccc_plugin::manager::DiagnosticSeverity::Error => {
+                    tracing::warn!(
+                        plugin = diagnostic.plugin_id.as_deref().unwrap_or("-"),
+                        "插件诊断：{}",
+                        diagnostic.message
+                    );
+                }
+                rmccc_plugin::manager::DiagnosticSeverity::Warning => {
+                    tracing::info!(
+                        plugin = diagnostic.plugin_id.as_deref().unwrap_or("-"),
+                        "插件诊断：{}",
+                        diagnostic.message
+                    );
+                }
+            }
         }
 
+        // Mod loader 安装不再预创建 provider：统一走
+        // `modloader::install_loader` + `DependencyManager`（审计 P1-4）。
         // Mod sources — Modrinth API client (CurseForge to follow).
         let mod_sources: Vec<Box<dyn rmccc_mods::ModSource>> = vec![Box::new(
             rmccc_mods::modrinth::ModrinthSource::new(http_client.clone()),
@@ -238,27 +264,10 @@ impl CoreContext {
             auth_provider,
             account_repo,
             file_saver,
-            modloader_providers,
             mod_sources,
+            platform,
+            plugin_manager,
         })
-    }
-
-    /// Get a mod loader provider for the given type from the DI container.
-    ///
-    /// Returns an error for legacy loaders (Quilt, LiteLoader, etc.) that
-    /// have not yet been migrated to the [`ModLoaderProvider`] trait.
-    pub fn modloader_provider(
-        &self,
-        loader_type: &rmccc_modloader::ModLoaderType,
-    ) -> Result<&dyn rmccc_modloader::ModLoaderProvider> {
-        self.modloader_providers
-            .get(loader_type)
-            .map(|b| b.as_ref())
-            .ok_or_else(|| {
-                RmcccError::Other(format!(
-                    "ModLoaderProvider not available for {loader_type:?}"
-                ))
-            })
     }
 
     /// Get the Microsoft auth provider from the DI container.
@@ -468,7 +477,7 @@ mod tests {
 
         // 关键 Provider 均注入
         assert!(core.profile_store.list().unwrap().is_empty());
-        assert_eq!(core.modloader_providers.len(), 3); // fabric / forge / neoforge
+        // Mod loader 安装入口已收敛为 `modloader::install_loader`（无 provider 表）
         assert_eq!(core.mod_sources.len(), 1); // Modrinth
         assert_eq!(core.auth_provider.provider_id(), "microsoft");
 

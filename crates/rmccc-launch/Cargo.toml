@@ -6,6 +6,7 @@ edition = "2021"
 [dependencies]
 rmccc-error = { workspace = true }
 rmccc-version = { workspace = true }
+rmccc-platform = { workspace = true }
 rmccc-profile = { workspace = true }
 rmccc-config = { workspace = true }
 serde = { workspace = true }

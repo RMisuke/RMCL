@@ -485,6 +485,7 @@ fn atomic_write_str(path: &Path, content: &str) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rmccc_platform::Platform;
     use std::time::Duration;
 
     fn temp_dir(tag: &str) -> PathBuf {
@@ -517,7 +518,8 @@ mod tests {
     #[test]
     fn test_save_load_active_and_list() {
         let dir = temp_dir("basic");
-        let vault = Arc::new(TokenVault::init(&dir.join(".key")).unwrap());
+        let vault =
+            Arc::new(TokenVault::init(&dir.join(".key"), Platform::current().fs.as_ref()).unwrap());
         let repo = AccountRepository::new(&dir, vault).unwrap();
 
         assert!(repo.load_active().unwrap().is_none());
@@ -546,7 +548,8 @@ mod tests {
     #[test]
     fn test_multi_account_and_switch() {
         let dir = temp_dir("multi");
-        let vault = Arc::new(TokenVault::init(&dir.join(".key")).unwrap());
+        let vault =
+            Arc::new(TokenVault::init(&dir.join(".key"), Platform::current().fs.as_ref()).unwrap());
         let repo = AccountRepository::new(&dir, vault).unwrap();
 
         let a = session("offline", "Alice");
@@ -574,7 +577,8 @@ mod tests {
     #[test]
     fn test_remove_selected_falls_back() {
         let dir = temp_dir("remove");
-        let vault = Arc::new(TokenVault::init(&dir.join(".key")).unwrap());
+        let vault =
+            Arc::new(TokenVault::init(&dir.join(".key"), Platform::current().fs.as_ref()).unwrap());
         let repo = AccountRepository::new(&dir, vault).unwrap();
 
         let a = session("offline", "Alice");
@@ -595,7 +599,8 @@ mod tests {
     #[test]
     fn test_metadata_is_plaintext_no_tokens() {
         let dir = temp_dir("plain");
-        let vault = Arc::new(TokenVault::init(&dir.join(".key")).unwrap());
+        let vault =
+            Arc::new(TokenVault::init(&dir.join(".key"), Platform::current().fs.as_ref()).unwrap());
         let repo = AccountRepository::new(&dir, vault).unwrap();
 
         let a = session("microsoft", "Alice");
@@ -624,7 +629,8 @@ mod tests {
     #[test]
     fn test_save_account_load_account_offline() {
         let dir = temp_dir("account-roundtrip");
-        let vault = Arc::new(TokenVault::init(&dir.join(".key")).unwrap());
+        let vault =
+            Arc::new(TokenVault::init(&dir.join(".key"), Platform::current().fs.as_ref()).unwrap());
         let mut repo = AccountRepository::new(&dir, vault).unwrap();
         repo.register_factory(Box::new(crate::offline::OfflineAccountFactory));
 
@@ -650,7 +656,8 @@ mod tests {
     #[test]
     fn test_load_active_account_returns_selected() {
         let dir = temp_dir("active-account");
-        let vault = Arc::new(TokenVault::init(&dir.join(".key")).unwrap());
+        let vault =
+            Arc::new(TokenVault::init(&dir.join(".key"), Platform::current().fs.as_ref()).unwrap());
         let mut repo = AccountRepository::new(&dir, vault).unwrap();
         repo.register_factory(Box::new(crate::offline::OfflineAccountFactory));
 

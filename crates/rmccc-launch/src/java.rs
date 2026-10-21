@@ -1,265 +1,76 @@
-//! Cross-platform Java detection.
+//! Java 运行时探测 — 已迁入平台适配层（指南 §5.7.2）。
+//!
+//! 各 OS 的安装位置差异（macOS `/usr/libexec/java_home`、Windows 注册表 +
+//! `Program Files`、Linux `/usr/lib/jvm` + `update-alternatives`）现在全部由
+//! [`rmccc_platform::JavaDetector`] 的后端承担，本模块只保留类型与便捷函数的
+//! **re-export**，保证 `rmccc_launch::JavaInstallation` 等历史路径继续可用。
 
-use rmccc_error::{Result, RmcccError};
-use std::path::PathBuf;
-use std::process::Command;
+pub use rmccc_platform::{JavaDetector, JavaInstallation};
 
-/// Detected Java installation.
-#[derive(Debug, Clone)]
-pub struct JavaInstallation {
-    pub path: PathBuf,
-    pub major_version: u32,
-    pub vendor: String,
-    pub is_64bit: bool,
-}
-
-/// Detect available Java installations on the system.
-/// Returns installations sorted by version (highest first).
+/// 探测本机所有 Java 安装（按主版本降序）。
+///
+/// 便捷封装：内部用 [`rmccc_platform::Platform::current`] 选择后端。**新代码
+/// 应经 `core.platform.java` 注入调用**，以便测试替换与跨平台注入。
 pub fn detect_java_installations() -> Vec<JavaInstallation> {
-    let mut found: Vec<JavaInstallation> = Vec::new();
-
-    // Platform-specific detection
-    detect_platform_specific(&mut found);
-
-    // Scan common paths as fallback
-    detect_common_paths(&mut found);
-
-    // Sort by version descending
-    found.sort_by_key(|a| std::cmp::Reverse(a.major_version));
-    found.dedup_by(|a, b| a.path == b.path);
-
-    found
+    rmccc_platform::Platform::current()
+        .java
+        .detect_all()
+        .unwrap_or_else(|e| {
+            tracing::warn!(error = %e, "Java detection unavailable on this platform");
+            Vec::new()
+        })
 }
 
-/// Find the best Java installation for the given required version.
-pub fn find_java(required_version: u32) -> Result<JavaInstallation> {
-    let installations = detect_java_installations();
-    if installations.is_empty() {
-        return Err(RmcccError::JavaNotFound);
-    }
-
-    // First: prefer exact match
-    if let Some(java) = installations
-        .iter()
-        .find(|j| j.major_version == required_version)
-    {
-        return Ok(java.clone());
-    }
-
-    // Second: prefer closest compatible version (not highest)
-    // This avoids incompatibilities like Java 25's strict module-path limits
-    // when the game version only needs Java 17.
-    if let Some(java) = installations
-        .iter()
-        .filter(|j| j.major_version >= required_version)
-        .min_by_key(|j| j.major_version)
-    {
-        tracing::warn!(
-            required = required_version,
-            found = java.major_version,
-            "Using compatible Java version (not exact match, closest selected)"
-        );
-        return Ok(java.clone());
-    }
-
-    Err(RmcccError::JavaVersionMismatch {
-        found: installations[0].major_version,
-        required: required_version,
-    })
-}
-
-#[cfg(target_os = "macos")]
-fn detect_platform_specific(found: &mut Vec<JavaInstallation>) {
-    // /usr/libexec/java_home -V
-    if let Ok(output) = Command::new("/usr/libexec/java_home").arg("-V").output() {
-        // java_home writes to stderr
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        for line in stderr.lines() {
-            let trimmed = line.trim();
-            // Match lines like: 21.0.3 (arm64) "Amazon.com Inc." ...
-            if let Some(java) = parse_java_home_line(trimmed) {
-                found.push(java);
-            }
-        }
-    }
-
-    // Also check JAVA_HOME
-    if let Ok(home) = std::env::var("JAVA_HOME") {
-        let path = PathBuf::from(&home).join("bin").join("java");
-        if let Some(java) = scan_java_binary(&path) {
-            found.push(java);
-        }
-    }
-}
-
-#[cfg(target_os = "macos")]
-fn parse_java_home_line(line: &str) -> Option<JavaInstallation> {
-    // Format: "VERSION (ARCH) \"VENDOR\" - \"VM_NAME\" HOME_PATH"
-    // HOME_PATH always starts with "/" and is the last whitespace-delimited token.
-    let trimmed = line.trim();
-    let version_part = trimmed.split_whitespace().next()?;
-    let major: u32 = version_part.split('.').next()?.parse().ok()?;
-
-    // The home path is always the last token and starts with "/"
-    let home = trimmed.split_whitespace().next_back()?;
-    if !home.starts_with('/') {
-        return None;
-    }
-
-    let java_bin = PathBuf::from(home).join("bin").join("java");
-    scan_java_binary(&java_bin).map(|mut j| {
-        j.major_version = major;
-        j
-    })
-}
-
-#[cfg(target_os = "windows")]
-fn detect_platform_specific(found: &mut Vec<JavaInstallation>) {
-    // Check JAVA_HOME
-    if let Ok(home) = std::env::var("JAVA_HOME") {
-        let path = PathBuf::from(&home).join("bin").join("java.exe");
-        if let Some(java) = scan_java_binary(&path) {
-            found.push(java);
-        }
-    }
-
-    // Check PATH for java.exe
-    if let Ok(paths) = std::env::var("PATH") {
-        for dir in paths.split(';') {
-            let path = PathBuf::from(dir).join("java.exe");
-            if let Some(java) = scan_java_binary(&path) {
-                found.push(java);
-            }
-        }
-    }
-
-    // Scan common Windows Java install paths
-    let common_dirs = [
-        "C:\\Program Files\\Java",
-        "C:\\Program Files (x86)\\Java",
-        "C:\\Program Files\\Eclipse Adoptium",
-        "C:\\Program Files\\Amazon Corretto",
-    ];
-    for dir in &common_dirs {
-        let base = std::path::Path::new(dir);
-        if let Ok(entries) = std::fs::read_dir(base) {
-            for entry in entries.flatten() {
-                let java_bin = entry.path().join("bin").join("java.exe");
-                if let Some(java) = scan_java_binary(&java_bin) {
-                    found.push(java);
-                }
-            }
-        }
-    }
-}
-
-#[cfg(target_os = "linux")]
-fn detect_platform_specific(found: &mut Vec<JavaInstallation>) {
-    // Check JAVA_HOME
-    if let Ok(home) = std::env::var("JAVA_HOME") {
-        let path = PathBuf::from(&home).join("bin").join("java");
-        if let Some(java) = scan_java_binary(&path) {
-            found.push(java);
-        }
-    }
-
-    // Scan /usr/lib/jvm (common Linux Java install location)
-    let jvm_dir = std::path::Path::new("/usr/lib/jvm");
-    if let Ok(entries) = std::fs::read_dir(jvm_dir) {
-        for entry in entries.flatten() {
-            let java_bin = entry.path().join("bin").join("java");
-            if let Some(java) = scan_java_binary(&java_bin) {
-                found.push(java);
-            }
-        }
-    }
-
-    // Check alternatives symlink
-    let alternatives_path = std::path::Path::new("/etc/alternatives/java");
-    if let Some(java) = scan_java_binary(alternatives_path) {
-        found.push(java);
-    }
-}
-
-/// Scan common paths for java binary.
-fn detect_common_paths(found: &mut Vec<JavaInstallation>) {
-    let paths = vec![
-        "/usr/bin/java",
-        "/usr/local/bin/java",
-        "/opt/homebrew/opt/openjdk/bin/java",
-    ];
-
-    for path_str in paths {
-        let path = PathBuf::from(path_str);
-        if let Some(java) = scan_java_binary(&path) {
-            found.push(java);
-        }
-    }
-}
-
-/// Try to get version info from a java binary.
-fn scan_java_binary(path: &std::path::Path) -> Option<JavaInstallation> {
-    if !path.exists() {
-        return None;
-    }
-
-    let output = Command::new(path)
-        .arg("-XshowSettings:properties")
-        .arg("-version")
-        .output()
-        .ok()?;
-
-    let stdout = String::from_utf8_lossy(&output.stderr);
-    // Also check stdout (version info can appear in either)
-    let combined = format!("{}\n{}", stdout, String::from_utf8_lossy(&output.stdout));
-
-    // Parse java.version = X.Y.Z
-    let major = combined
-        .lines()
-        .find(|l| l.contains("java.version"))
-        .and_then(|l| l.split('=').nth(1))
-        .and_then(|v| v.trim().split('.').next())
-        .and_then(|v| v.parse::<u32>().ok());
-
-    let Some(major) = major else {
-        tracing::warn!("Failed to parse Java version from: {}", path.display());
-        return None;
-    };
-
-    // Parse java.vendor
-    let vendor = combined
-        .lines()
-        .find(|l| l.contains("java.vendor"))
-        .and_then(|l| l.split('=').nth(1))
-        .map(|v| v.trim().to_string())
-        .unwrap_or_default();
-
-    // Check 64-bit
-    let is_64bit = combined
-        .lines()
-        .find(|l| l.contains("sun.arch.data.model"))
-        .and_then(|l| l.split('=').nth(1))
-        .map(|v| v.trim() == "64")
-        .unwrap_or(true);
-
-    Some(JavaInstallation {
-        path: path.to_path_buf(),
-        major_version: major,
-        vendor,
-        is_64bit,
-    })
+/// 为需要的版本挑选 Java（精确匹配 > 最近的更高版本）。
+///
+/// 同上：新代码应经 `core.platform.java.find(required)`。
+pub fn find_java(required_version: u32) -> rmccc_error::Result<JavaInstallation> {
+    rmccc_platform::Platform::current()
+        .java
+        .find(required_version)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rmccc_platform::{Platform, PlatformArch, PlatformOs};
 
     #[test]
-    fn test_find_java_not_found() {
-        // On CI machines without Java, this will return JavaNotFound
-        // On dev machines with Java, this will return Ok
-        let result = find_java(8);
-        // Just verify it doesn't crash
-        let _ = result;
+    fn selection_is_injectable_and_deterministic() {
+        let (platform, _backend) = Platform::mock();
+        let platform = platform.with_mock_java(
+            rmccc_platform::mock::MockJavaDetector::with_installations(vec![
+                JavaInstallation::new("/jvm/17/bin/java".into(), 17, "Test".into(), true),
+                JavaInstallation::new("/jvm/21/bin/java".into(), 21, "Test".into(), true),
+            ]),
+        );
+
+        // 精确匹配
+        assert_eq!(platform.java.find(17).expect("17").major_version, 17);
+        // 需要 18 → 最近的更高版本 21
+        assert_eq!(platform.java.find(18).expect("21").major_version, 21);
+        // 需要 25 → 全部太旧
+        assert!(platform.java.find(25).is_err());
+    }
+
+    #[test]
+    fn unsupported_platform_reports_error_not_empty_list() {
+        let (platform, _backend) = Platform::mock();
+        let platform = platform.with_mock_java(rmccc_platform::mock::MockJavaDetector::failing());
+        assert!(platform.java.detect_all().is_err());
+    }
+
+    #[test]
+    fn descriptor_still_drives_exe_suffix() {
+        // Java 可执行文件名随平台变化（`java` / `java.exe`），由描述符给出。
+        assert_eq!(
+            rmccc_platform::PlatformDescriptor::macos_arm64().exe_suffix(),
+            ""
+        );
+        assert_eq!(
+            rmccc_platform::PlatformDescriptor::new(PlatformOs::Windows, PlatformArch::X86_64)
+                .exe_suffix(),
+            ".exe"
+        );
     }
 }

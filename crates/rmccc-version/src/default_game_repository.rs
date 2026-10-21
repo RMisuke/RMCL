@@ -13,6 +13,7 @@
 //!   folders atomically.
 
 use rmccc_error::{Result, RmcccError};
+use rmccc_platform::PlatformDescriptor;
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
@@ -38,14 +39,28 @@ fn launcher_profiles_content() -> String {
 pub struct DefaultGameRepository {
     base_directory: PathBuf,
     manifests: HashMap<String, GameVersion>,
+    /// 平台描述符：compatibility rules 与 natives 目录命名经它判断，
+    /// 由组装层（`CoreContext`）注入一次（指南 §5.7.1 第 3/5 条）。
+    platform: PlatformDescriptor,
 }
 
 impl DefaultGameRepository {
     pub fn new(base_directory: PathBuf) -> Self {
+        Self::with_platform(base_directory, PlatformDescriptor::current())
+    }
+
+    /// 用显式平台描述符构造（组装层注入 / 测试模拟其他平台）。
+    pub fn with_platform(base_directory: PathBuf, platform: PlatformDescriptor) -> Self {
         Self {
             base_directory,
             manifests: HashMap::new(),
+            platform,
         }
+    }
+
+    /// 当前注入的平台描述符。
+    pub fn platform(&self) -> &PlatformDescriptor {
+        &self.platform
     }
 
     /// Change the base directory and refresh the index.
@@ -372,7 +387,8 @@ impl GameRepository for DefaultGameRepository {
             };
 
             // Compatibility filter (HMCL `CompatibilityRule.appliesToCurrentEnvironment`).
-            if !compatibility::applies_to_environment(&manifest.compatibility_rules) {
+            if !compatibility::applies_to_environment(&manifest.compatibility_rules, &self.platform)
+            {
                 tracing::debug!(
                     folder = %folder_id,
                     "Instance filtered by compatibility rules (not applicable on this OS)"
@@ -430,7 +446,7 @@ impl GameRepository for DefaultGameRepository {
     }
 
     fn get_native_directory(&self, id: &str) -> PathBuf {
-        file_layout::resolve_native_dir(&self.base_directory, id)
+        file_layout::resolve_native_dir(&self.base_directory, id, &self.platform)
     }
 
     fn get_instance_jar(&self, id: &str) -> PathBuf {

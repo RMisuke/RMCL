@@ -17,7 +17,7 @@ use crate::log4j;
 use crate::managed::ManagedProcess;
 use crate::natives;
 use crate::options::LaunchOptions;
-use crate::process::{build_response_file, default_encoding, spawn_game, CommandBuilder};
+use crate::process::{build_response_file, spawn_game, CommandBuilder};
 use crate::process_listener::{AuthInfo, ExitType, ProcessListener};
 use rmccc_version::arguments::vars;
 use rmccc_version::{
@@ -148,7 +148,11 @@ impl DefaultLauncher {
 
     /// The natives directory (HMCL `natives-{platform}`, legacy fallback).
     pub fn natives_dir(&self) -> PathBuf {
-        file_layout::resolve_native_dir(&self.game_dir, &self.instance_id)
+        file_layout::resolve_native_dir(
+            &self.game_dir,
+            &self.instance_id,
+            &self.options.platform.descriptor,
+        )
     }
 
     /// The client JAR path (resolved via `jar` override, HMCL `getInstanceJar`).
@@ -185,6 +189,7 @@ impl DefaultLauncher {
             natives_dir,
             self.options.use_native_glfw,
             self.options.use_native_openal,
+            &self.options.platform.descriptor,
         )?;
         Ok(count)
     }
@@ -223,6 +228,7 @@ impl DefaultLauncher {
             .to_string();
 
         let mut vars_map = build_template_vars(
+            &self.options.platform.descriptor,
             &self.auth.username,
             &self.auth.uuid,
             &self.auth.access_token,
@@ -268,7 +274,11 @@ impl DefaultLauncher {
                 .display()
                 .to_string(),
         );
-        let sep = if cfg!(windows) { "\\" } else { "/" };
+        let sep = if self.options.platform.descriptor.is_windows() {
+            "\\"
+        } else {
+            "/"
+        };
         vars_map.insert("file_separator".to_string(), sep.to_string());
         vars_map
     }
@@ -311,7 +321,11 @@ impl DefaultLauncher {
     /// Build the classpath (libraries + client JAR) (HMCL `repository.getClasspath`).
     pub fn get_classpath(&self) -> LaunchResult<Vec<PathBuf>> {
         let libs_dir = file_layout::libraries_dir(&self.game_dir);
-        let mut classpath = libraries::collect_classpath(&self.game_version.libraries, &libs_dir);
+        let mut classpath = libraries::collect_classpath(
+            &self.game_version.libraries,
+            &libs_dir,
+            &self.options.platform.descriptor,
+        );
 
         let client_jar = self.client_jar_path();
         if !client_jar.is_file() {
@@ -330,10 +344,14 @@ impl DefaultLauncher {
         let jv = java.major_version;
         let is_64bit = java.is_64bit;
 
-        // 1. Process priority (Unix `nice`).
-        #[cfg(unix)]
-        if let Some(nice) = self.options.process_priority.nice_value() {
-            cmd.add_all(&["nice".to_string(), "-n".to_string(), nice.to_string()]);
+        // 1. Process priority — 前缀由平台后端给出（Unix `nice -n N`，其余为空）。
+        let priority_prefix = self
+            .options
+            .platform
+            .process
+            .priority_command_prefix(self.options.process_priority);
+        if !priority_prefix.is_empty() {
+            cmd.add_all(&priority_prefix);
         }
 
         // 2. Wrapper command.
@@ -379,7 +397,7 @@ impl DefaultLauncher {
         cmd.add_all_default(&self.options.jvm_args);
 
         // 7. Encoding.
-        let encoding = default_encoding();
+        let encoding = self.options.platform.descriptor.default_encoding();
         cmd.add_default("-Dfile.encoding=", encoding);
         if jv < 19 {
             cmd.add_default("-Dsun.stdout.encoding=", encoding);
@@ -415,14 +433,18 @@ impl DefaultLauncher {
             let client_jar = self.client_jar_path();
             cmd.add_default("-Dminecraft.client.jar=", &client_jar.display().to_string());
 
-            #[cfg(target_os = "macos")]
-            {
-                cmd.add_default("-Xdock:name=", &format!("Minecraft {}", self.instance_id));
+            // 平台专属 JVM 参数（macOS `-Xdock:name`）：数据由适配层给，
+            // 领域代码不写 `cfg(target_os)`；实例名在此替换。
+            for (key, value) in self.options.platform.descriptor.extra_jvm_args() {
+                let value = value.replace("{instance}", &self.instance_id);
+                cmd.add_default(key, &value);
             }
 
-            #[cfg(not(target_os = "windows"))]
-            if let Some(parent) = self.game_dir.parent() {
-                cmd.add_default("-Duser.home=", &parent.display().to_string());
+            // 非 Windows 上把 `user.home` 指到 game_dir 的父目录（HMCL 对齐）。
+            if !self.options.platform.descriptor.is_windows() {
+                if let Some(parent) = self.game_dir.parent() {
+                    cmd.add_default("-Duser.home=", &parent.display().to_string());
+                }
             }
 
             // Proxy: use system proxies unless the user supplied proxy args.
@@ -456,7 +478,7 @@ impl DefaultLauncher {
 
         // 12. Classpath.
         let classpath = self.get_classpath()?;
-        let separator = if cfg!(windows) { ";" } else { ":" };
+        let separator = self.options.platform.descriptor.classpath_separator();
         let classpath_str = classpath
             .iter()
             .map(|p| p.display().to_string())
@@ -491,23 +513,21 @@ impl DefaultLauncher {
         // Non-ASCII natives path workaround (HMCL #1141): on Linux/macOS and
         // MC < 1.19, point `${natives_directory}` at a temp symlink as well.
         let mut temp_native_folder: Option<PathBuf> = None;
-        let natives_var;
-        #[cfg(any(target_os = "linux", target_os = "macos"))]
+        let native_str = java_native_folder.display().to_string();
+        let natives_var = if self
+            .options
+            .platform
+            .descriptor
+            .needs_non_ascii_natives_workaround()
+            && !native_str.is_ascii()
+            && log4j::mc_version_before(&self.mc_version(), 19)
         {
-            let native_str = java_native_folder.display().to_string();
-            if !native_str.is_ascii() && log4j::mc_version_before(&self.mc_version(), 19) {
-                let temp =
-                    PathBuf::from("/tmp").join(format!("hmcl-natives-{}", uuid::Uuid::new_v4()));
-                natives_var = format!("{}:{}", temp.display(), native_str);
-                temp_native_folder = Some(temp);
-            } else {
-                natives_var = native_str;
-            }
-        }
-        #[cfg(not(any(target_os = "linux", target_os = "macos")))]
-        {
-            natives_var = java_native_folder.display().to_string();
-        }
+            let temp = std::env::temp_dir().join(format!("rmccc-natives-{}", uuid::Uuid::new_v4()));
+            temp_native_folder = Some(temp.clone());
+            format!("{}:{}", temp.display(), native_str)
+        } else {
+            native_str
+        };
 
         let configurations = self.get_configurations(&classpath_str, &natives_var);
 
@@ -519,7 +539,12 @@ impl DefaultLauncher {
             .as_ref()
             .and_then(|a| a.jvm.as_deref())
         {
-            let resolved = resolve_arguments(jvm_args, &configurations, &features);
+            let resolved = resolve_arguments(
+                &self.options.platform.descriptor,
+                jvm_args,
+                &configurations,
+                &features,
+            );
             cmd.add_all_default(&resolved);
         }
 
@@ -549,7 +574,12 @@ impl DefaultLauncher {
             .as_ref()
             .and_then(|a| a.game.as_deref())
         {
-            let resolved = resolve_arguments(game, &configurations, &features);
+            let resolved = resolve_arguments(
+                &self.options.platform.descriptor,
+                game,
+                &configurations,
+                &features,
+            );
             game_args.extend(resolved);
         } else if self.game_version.minecraft_arguments.is_some() {
             game_args.extend(default_game_arguments(
@@ -588,10 +618,15 @@ impl DefaultLauncher {
         self.mark_launched_abnormally();
 
         // Pre-launch: create the temp natives symlink (HMCL).
-        #[cfg(unix)]
         if let Some(temp) = &command.temp_native_folder {
-            let _ = std::fs::remove_file(temp);
-            if let Err(e) = std::os::unix::fs::symlink(&command.java_native_folder, temp) {
+            // 幂等重建：旧链接可能来自上次崩溃的运行。
+            let _ = self.options.platform.fs.remove_symlink(temp);
+            if let Err(e) = self
+                .options
+                .platform
+                .fs
+                .symlink(&command.java_native_folder, temp)
+            {
                 tracing::warn!(
                     temp = %temp.display(),
                     error = ?e,
@@ -633,6 +668,7 @@ impl DefaultLauncher {
             &command.game_args,
             &command.main_class,
             &self.run_dir,
+            &self.options.platform,
         )
         .map_err(LaunchError::from)?;
 
@@ -643,6 +679,7 @@ impl DefaultLauncher {
             &response_file,
             &self.run_dir,
             Some(env),
+            &self.options.platform,
         )
         .await
         .map_err(LaunchError::from)?;
@@ -658,9 +695,8 @@ impl DefaultLauncher {
         schedule_response_file_cleanup(response_file.clone());
 
         // Clean up the temp natives symlink.
-        #[cfg(unix)]
         if let Some(temp) = &command.temp_native_folder {
-            let _ = std::fs::remove_file(temp);
+            let _ = self.options.platform.fs.remove_symlink(temp);
         }
 
         let managed = Arc::new(ManagedProcess::new(self.instance_id.clone(), child, 2000));
@@ -779,7 +815,7 @@ fn sweep_stale_response_files(game_dir: &Path) {
 fn make_launch_script_impl(launcher: &DefaultLauncher, path: &Path) -> LaunchResult<()> {
     let command = launcher.generate_command_line()?;
     let env_vars = launcher.get_env_vars();
-    let is_windows = cfg!(windows);
+    let is_windows = launcher.options.platform.descriptor.is_windows();
     let ext = path
         .extension()
         .and_then(|e| e.to_str())
@@ -849,11 +885,8 @@ fn make_launch_script_impl(launcher: &DefaultLauncher, path: &Path) -> LaunchRes
 
     std::fs::write(path, content)?;
 
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755))?;
-    }
+    // 可执行位经平台后端设置（Unix 0755；Windows 无此概念，后端返回 no-op/不适用）。
+    launcher.options.platform.fs.make_executable(path)?;
     Ok(())
 }
 

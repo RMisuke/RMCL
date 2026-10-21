@@ -16,31 +16,19 @@
 //! └── launcher_profiles.json
 //! ```
 
+use rmccc_platform::PlatformDescriptor;
 use std::path::{Path, PathBuf};
 
 /// Platform classifier used by Minecraft native libraries (e.g. `natives-osx`).
-pub fn platform_classifier() -> &'static str {
-    #[cfg(target_os = "macos")]
-    {
-        "osx"
-    }
-    #[cfg(target_os = "windows")]
-    {
-        "windows"
-    }
-    #[cfg(target_os = "linux")]
-    {
-        "linux"
-    }
-    #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
-    {
-        "unknown"
-    }
+///
+/// 经注入的描述符取值（`osx` / `windows` / `linux`），无裸 `cfg!`。
+pub fn platform_classifier(platform: &PlatformDescriptor) -> &'static str {
+    platform.os.rule_name()
 }
 
 /// Native directory suffix — HMCL uses `natives-{platform}`.
-pub fn native_dir_name() -> String {
-    format!("natives-{}", platform_classifier())
+pub fn native_dir_name(platform: &PlatformDescriptor) -> String {
+    format!("natives-{}", platform_classifier(platform))
 }
 
 /// `{game_dir}/versions/{id}` — the instance root (HMCL `getInstanceRoot`).
@@ -90,8 +78,8 @@ pub fn library_file(game_dir: &Path, name: &str) -> PathBuf {
 }
 
 /// `{game_dir}/versions/{id}/natives-{platform}` — HMCL native dir.
-pub fn native_dir(game_dir: &Path, id: &str) -> PathBuf {
-    instance_root(game_dir, id).join(native_dir_name())
+pub fn native_dir(game_dir: &Path, id: &str, platform: &PlatformDescriptor) -> PathBuf {
+    instance_root(game_dir, id).join(native_dir_name(platform))
 }
 
 /// Legacy `{game_dir}/versions/{id}/natives` (pre-HMCL naming).
@@ -101,8 +89,8 @@ pub fn native_dir_legacy(game_dir: &Path, id: &str) -> PathBuf {
 
 /// Resolve the natives directory, preferring the HMCL `natives-{platform}`
 /// layout and falling back to the legacy `natives` folder for migration.
-pub fn resolve_native_dir(game_dir: &Path, id: &str) -> PathBuf {
-    let preferred = native_dir(game_dir, id);
+pub fn resolve_native_dir(game_dir: &Path, id: &str, platform: &PlatformDescriptor) -> PathBuf {
+    let preferred = native_dir(game_dir, id, platform);
     if preferred.exists() {
         preferred
     } else {
@@ -205,8 +193,15 @@ mod tests {
 
     #[test]
     fn test_native_dir_naming() {
-        let dir = native_dir(gd(), "1.20.4");
-        assert!(dir.ends_with(format!("natives-{}", platform_classifier())));
+        let mac = PlatformDescriptor::macos_arm64();
+        let dir = native_dir(gd(), "1.20.4", &mac);
+        assert!(dir.ends_with("natives-osx"));
+        // 换平台描述符 → 目录名随之变化（不再依赖宿主平台）。
+        let win = PlatformDescriptor::new(
+            rmccc_platform::PlatformOs::Windows,
+            rmccc_platform::PlatformArch::X86_64,
+        );
+        assert!(native_dir(gd(), "1.20.4", &win).ends_with("natives-windows"));
         assert_eq!(
             native_dir_legacy(gd(), "1.20.4"),
             Path::new("/tmp/rmccc-layout/game/versions/1.20.4/natives")

@@ -1,5 +1,7 @@
 //! Mod management: Modrinth, CurseForge, local file management.
 
+#![allow(clippy::double_must_use)] // 工具链 1.99.1 新 lint：async_trait 宏生成的 #[must_use] 与 Future/Result 重叠，非业务逻辑
+
 use ts_rs::TS;
 
 pub mod modrinth;
@@ -19,15 +21,18 @@ pub struct ModSearchQuery {
 }
 
 /// Mod search result page.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export_to = "types.ts")]
 pub struct ModSearchResult {
     pub hits: Vec<ModInfo>,
+    #[ts(type = "number")]
     pub total: u64,
     pub page: u32,
 }
 
 /// Mod metadata.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export_to = "types.ts")]
 pub struct ModInfo {
     pub id: String,
     pub source: String,
@@ -35,6 +40,7 @@ pub struct ModInfo {
     pub slug: String,
     pub authors: Vec<String>,
     pub description: String,
+    #[ts(type = "number")]
     pub download_count: u64,
     pub icon_url: Option<String>,
     pub categories: Vec<String>,

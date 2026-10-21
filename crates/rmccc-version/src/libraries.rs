@@ -3,48 +3,53 @@
 //! Filters library rules per-platform and resolves artifact URLs.
 
 use rmccc_download::DownloadItem;
+use rmccc_platform::PlatformDescriptor;
 use std::path::{Path, PathBuf};
 
 use super::types::Library;
 
-/// Determine if a library should be included on the current platform.
+/// Determine if a library should be included on the given platform.
 ///
-/// Mojang rules use a last-match-wins strategy: iterate all rules,
-/// track the last applicable action. Default is "allow" if no rules match.
-pub fn library_applies(lib: &Library) -> bool {
-    let rules = match &lib.rules {
-        Some(r) => r,
-        None => return true,
+/// Mojang rules use a last-match-wins strategy: iterate all rules, track the last
+/// applicable action. **Default when `rules` is present but nothing matches is
+/// DISALLOW** — mirrors `Library.isRulesSatisfied` /
+/// HMCL `Library.appliesToCurrentEnvironment` (which starts at `DISALLOW`).
+///
+/// 1.1b 修正：此前"无规则命中 → 默认 allow"是错的——它会把只声明了别的平台的
+/// 库（例如 `{allow, os:{osx}}`）也塞进 Windows 的 classpath。声明了 `rules`
+/// 的库，规则不命中就表示"这个库不属于当前平台"。
+///
+/// `os`/`arch` 判断全部经注入的 [`PlatformDescriptor`]（指南 §5.7.1 第 3 条），
+/// 本模块不再出现 `cfg!(target_os = ...)`。
+pub fn library_applies(lib: &Library, platform: &PlatformDescriptor) -> bool {
+    let Some(rules) = &lib.rules else {
+        // 无 rules = 无条件适用。
+        return true;
     };
 
+    // 有 rules 但一条都没命中 → disallow（Mojang 默认值）。
     let mut allowed = false;
-    let mut any_matched = false;
 
     for rule in rules {
         let applies = match &rule.os {
             Some(os) => {
-                let os_name = os.name.as_deref().unwrap_or("");
-                match os_name {
-                    "osx" | "macos" => cfg!(target_os = "macos"),
-                    "windows" => cfg!(target_os = "windows"),
-                    "linux" => cfg!(target_os = "linux"),
-                    _ => false,
-                }
+                // `os.name` 缺省 = 不限制平台；`os.arch` 缺省 = 不限制架构。
+                let os_matches = match os.name.as_deref() {
+                    Some(name) => platform.matches_rule_os(name),
+                    None => true,
+                };
+                os_matches && platform.matches_rule_arch(os.arch.as_deref())
             }
             None => true,
         };
 
         if applies {
+            // last-match-wins；只有 "allow" 才是放行。
             allowed = rule.action == "allow";
-            any_matched = true;
         }
     }
 
-    if any_matched {
-        allowed
-    } else {
-        true // no matching rules → default allow
-    }
+    allowed
 }
 
 /// Resolve library download items for the current platform.
@@ -52,10 +57,17 @@ pub fn library_applies(lib: &Library) -> bool {
 /// This generates items for both the main artifact AND classifier JARs (natives).
 /// Native libraries with OS-specific classifiers like `natives-macos` are only
 /// downloaded for the current platform.
-pub fn resolve_library_items(libraries: &[Library], libs_dir: &Path) -> Vec<DownloadItem> {
+pub fn resolve_library_items(
+    libraries: &[Library],
+    libs_dir: &Path,
+    platform: &PlatformDescriptor,
+) -> Vec<DownloadItem> {
     let mut items = Vec::new();
 
-    for lib in libraries.iter().filter(|lib| library_applies(lib)) {
+    for lib in libraries
+        .iter()
+        .filter(|lib| library_applies(lib, platform))
+    {
         // 1. Main artifact (the standard JAR)
         if let Some(item) = make_library_item(lib, libs_dir) {
             items.push(item);
@@ -65,7 +77,7 @@ pub fn resolve_library_items(libraries: &[Library], libs_dir: &Path) -> Vec<Down
         if let Some(downloads) = &lib.downloads {
             if let Some(classifiers) = &downloads.classifiers {
                 for (classifier, entry) in classifiers {
-                    if is_current_platform_classifier(classifier) {
+                    if is_current_platform_classifier(classifier, platform) {
                         let full_name = format!("{}:{}", lib.name, classifier);
                         let dest = entry
                             .path
@@ -90,55 +102,16 @@ pub fn resolve_library_items(libraries: &[Library], libs_dir: &Path) -> Vec<Down
     items
 }
 
-/// Return the Minecraft-specific architecture name for the current platform.
+/// Check if a classifier matches the given platform.
 ///
-/// Minecraft uses different arch naming than Rust:
-/// - `arm64` on macOS ARM (vs Rust's `aarch64`)
-/// - `x86` on 32-bit x86 (same as Rust)
-/// - `x86_64` on 64-bit x86 (same as Rust)
-fn minecraft_arch() -> &'static str {
-    #[cfg(target_arch = "aarch64")]
-    {
-        "arm64"
-    }
-    #[cfg(target_arch = "x86_64")]
-    {
-        "x86_64"
-    }
-    #[cfg(target_arch = "x86")]
-    {
-        "x86"
-    }
-    #[cfg(not(any(target_arch = "aarch64", target_arch = "x86_64", target_arch = "x86")))]
-    {
-        "unknown"
-    }
-}
-
-/// Check if a classifier matches the current platform.
-pub(crate) fn is_current_platform_classifier(classifier: &str) -> bool {
-    // On each platform, match both the generic classifier (e.g. "natives-macos")
-    // and the arch-specific classifier (e.g. "natives-macos-arm64").
-    // Generic is always downloaded; arch-specific only if it matches current CPU.
-    #[cfg(target_os = "macos")]
-    {
-        let arch_specific = format!("natives-macos-{}", minecraft_arch());
-        classifier == "natives-macos" || classifier == "natives-osx" || classifier == arch_specific
-    }
-    #[cfg(target_os = "windows")]
-    {
-        let arch_specific = format!("natives-windows-{}", minecraft_arch());
-        classifier == "natives-windows" || classifier == arch_specific
-    }
-    #[cfg(target_os = "linux")]
-    {
-        let arch_specific = format!("natives-linux-{}", minecraft_arch());
-        classifier == "natives-linux" || classifier == "natives-unix" || classifier == arch_specific
-    }
-    #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
-    {
-        false
-    }
+/// 事实来源是 [`PlatformDescriptor::native_classifier_candidates`]，本函数
+/// 只做一次包含判断——不再自己拼 `natives-{os}-{arch}`（那曾导致 macOS ARM
+/// 与 `natives-osx` 写法的分叉）。
+pub(crate) fn is_current_platform_classifier(
+    classifier: &str,
+    platform: &PlatformDescriptor,
+) -> bool {
+    platform.accepts_native_classifier(classifier)
 }
 
 fn make_library_item(lib: &Library, libs_dir: &Path) -> Option<DownloadItem> {
@@ -241,10 +214,14 @@ pub fn make_library_path(name: &str, libs_dir: &Path) -> PathBuf {
 }
 
 /// Collect all library paths for the classpath.
-pub fn collect_classpath(libraries: &[Library], libs_dir: &Path) -> Vec<PathBuf> {
+pub fn collect_classpath(
+    libraries: &[Library],
+    libs_dir: &Path,
+    platform: &PlatformDescriptor,
+) -> Vec<PathBuf> {
     libraries
         .iter()
-        .filter(|lib| library_applies(lib))
+        .filter(|lib| library_applies(lib, platform))
         .map(|lib| {
             // If library has explicit download info, use artifact path if provided
             if let Some(artifact_path) = lib
@@ -285,13 +262,26 @@ mod tests {
         );
     }
 
+    /// 固定 macOS/arm64 描述符：规则测试与宿主平台解耦（1.1b）。
+    fn mac() -> PlatformDescriptor {
+        PlatformDescriptor::macos_arm64()
+    }
+
+    fn win() -> PlatformDescriptor {
+        PlatformDescriptor::new(
+            rmccc_platform::PlatformOs::Windows,
+            rmccc_platform::PlatformArch::X86_64,
+        )
+    }
+
     #[test]
     fn test_library_applies_no_rules() {
         let lib = Library {
             name: "test:lib:1.0".into(),
             ..Default::default()
         };
-        assert!(library_applies(&lib));
+        assert!(library_applies(&lib, &mac()));
+        assert!(library_applies(&lib, &win()));
     }
 
     #[test]
@@ -309,10 +299,9 @@ mod tests {
             rules: Some(rules),
             ..Default::default()
         };
-        #[cfg(target_os = "macos")]
-        assert!(library_applies(&lib));
-        #[cfg(not(target_os = "macos"))]
-        assert!(!library_applies(&lib));
+        // osx-only 规则：macOS 命中，Windows 不命中（同一份规则，确定性断言）。
+        assert!(library_applies(&lib, &mac()));
+        assert!(!library_applies(&lib, &win()));
     }
 
     #[test]
@@ -336,28 +325,155 @@ mod tests {
             rules: Some(rules),
             ..Default::default()
         };
-        assert!(!library_applies(&lib));
+        // 有 disallow 规则 → 任何平台都不适用。
+        assert!(!library_applies(&lib, &mac()));
+        assert!(!library_applies(&lib, &win()));
+    }
+
+    /// 回归测试（1.1b）：真实 1.20.4 manifest 的三类 library 形态。
+    ///
+    /// 修复前"无规则命中 → 默认 allow"，于是在 macOS 上会把 30 个
+    /// Windows/Linux natives 也选中（实测 88/88 全选），既白下载又把别的平台的
+    /// jar 塞进 classpath。修复后只选当前平台的 58 个。
+    ///
+    /// 这里用真实名字 + 真实规则结构做定点断言，不依赖网络。
+    #[test]
+    fn test_library_selection_matches_real_1_20_4_semantics() {
+        let lib = |name: &str, rules: Option<Vec<LibraryRule>>| Library {
+            name: name.to_string(),
+            rules,
+            ..Default::default()
+        };
+        let allow_os = |os: &str| LibraryRule {
+            action: "allow".into(),
+            os: Some(OsRule {
+                name: Some(os.into()),
+                arch: None,
+                version: None,
+            }),
+        };
+
+        // 1) 无 rules → 任何平台都适用（如 org.lwjgl:lwjgl:3.3.2 主库）。
+        let plain = lib("org.lwjgl:lwjgl:3.3.2", None);
+        // 2) 仅 macOS 的 natives（真实 manifest 里就是这一条规则）。
+        let mac_native = lib(
+            "org.lwjgl:lwjgl:3.3.2:natives-macos",
+            Some(vec![allow_os("osx")]),
+        );
+        // 3) 仅 Windows 的 natives。
+        let win_native = lib(
+            "org.lwjgl:lwjgl:3.3.2:natives-windows",
+            Some(vec![allow_os("windows")]),
+        );
+        // 4) 仅 Linux 的 netty epoll。
+        let linux_epoll = lib(
+            "io.netty:netty-transport-native-epoll:4.1.97.Final:linux-x86_64",
+            Some(vec![allow_os("linux")]),
+        );
+
+        let mac = rmccc_platform::PlatformDescriptor::macos_arm64();
+        assert!(library_applies(&plain, &mac), "无 rules 的库必须保留");
+        assert!(library_applies(&mac_native, &mac), "macOS natives 必须保留");
+        assert!(
+            !library_applies(&win_native, &mac),
+            "Windows natives 不得进入 macOS classpath（修复前会误选）"
+        );
+        assert!(
+            !library_applies(&linux_epoll, &mac),
+            "Linux natives 不得进入 macOS classpath（修复前会误选）"
+        );
+
+        // 反向：Windows 描述符下选择结果互补。
+        let win = PlatformDescriptor::new(
+            rmccc_platform::PlatformOs::Windows,
+            rmccc_platform::PlatformArch::X86_64,
+        );
+        assert!(library_applies(&plain, &win));
+        assert!(!library_applies(&mac_native, &win));
+        assert!(library_applies(&win_native, &win));
+        assert!(!library_applies(&linux_epoll, &win));
+    }
+
+    /// 回归测试（1.1b）：`rules` 存在但一条都不命中 → **不适用**（Mojang 默认 disallow）。
+    #[test]
+    fn test_rules_present_but_no_match_is_denied() {
+        let lib = Library {
+            name: "example:only-solaris:1.0".into(),
+            rules: Some(vec![LibraryRule {
+                action: "allow".into(),
+                os: Some(OsRule {
+                    name: Some("solaris".into()),
+                    arch: None,
+                    version: None,
+                }),
+            }]),
+            ..Default::default()
+        };
+        assert!(!library_applies(&lib, &mac()));
+        assert!(!library_applies(&lib, &win()));
     }
 
     #[test]
     fn test_is_current_platform_classifier() {
-        #[cfg(target_os = "macos")]
-        {
-            assert!(super::is_current_platform_classifier("natives-macos"));
-            assert!(super::is_current_platform_classifier("natives-osx"));
-            assert!(!super::is_current_platform_classifier("natives-windows"));
-            assert!(!super::is_current_platform_classifier("natives-linux"));
-        }
-        #[cfg(target_os = "windows")]
-        {
-            assert!(super::is_current_platform_classifier("natives-windows"));
-            assert!(!super::is_current_platform_classifier("natives-macos"));
-        }
-        #[cfg(target_os = "linux")]
-        {
-            assert!(super::is_current_platform_classifier("natives-linux"));
-            assert!(super::is_current_platform_classifier("natives-unix"));
-            assert!(!super::is_current_platform_classifier("natives-macos"));
-        }
+        // macOS（含历史别名 natives-osx 与架构专用变体）
+        assert!(super::is_current_platform_classifier(
+            "natives-macos",
+            &mac()
+        ));
+        assert!(super::is_current_platform_classifier("natives-osx", &mac()));
+        assert!(super::is_current_platform_classifier(
+            "natives-macos-arm64",
+            &mac()
+        ));
+        assert!(!super::is_current_platform_classifier(
+            "natives-windows",
+            &mac()
+        ));
+        assert!(!super::is_current_platform_classifier(
+            "natives-linux",
+            &mac()
+        ));
+
+        // Windows（含历史 -64 写法）
+        assert!(super::is_current_platform_classifier(
+            "natives-windows",
+            &win()
+        ));
+        assert!(super::is_current_platform_classifier(
+            "natives-windows-64",
+            &win()
+        ));
+        assert!(!super::is_current_platform_classifier(
+            "natives-macos",
+            &win()
+        ));
+
+        // Linux（含 natives-unix 别名）
+        let linux = PlatformDescriptor::new(
+            rmccc_platform::PlatformOs::Linux,
+            rmccc_platform::PlatformArch::X86_64,
+        );
+        assert!(super::is_current_platform_classifier(
+            "natives-linux",
+            &linux
+        ));
+        assert!(super::is_current_platform_classifier(
+            "natives-unix",
+            &linux
+        ));
+        assert!(!super::is_current_platform_classifier(
+            "natives-macos",
+            &linux
+        ));
+
+        // 未知平台：任何 native 都不命中。
+        let unknown = PlatformDescriptor::new(
+            rmccc_platform::PlatformOs::Unknown,
+            rmccc_platform::PlatformArch::Unknown,
+        );
+        assert!(!super::is_current_platform_classifier(
+            "natives-linux",
+            &unknown
+        ));
     }
 }

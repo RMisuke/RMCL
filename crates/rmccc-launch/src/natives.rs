@@ -32,6 +32,20 @@ pub fn is_native(lib: &rmccc_version::Library) -> bool {
     classifiers.iter().any(|c| name.contains(c))
 }
 
+/// 从 Maven 坐标里取出 native classifier（`group:artifact:version:classifier`）。
+///
+/// 例：`org.lwjgl:lwjgl:3.3.2:natives-macos-arm64` → `Some("natives-macos-arm64")`。
+pub fn native_classifier_of(library_name: &str) -> Option<&str> {
+    let parts: Vec<&str> = library_name.split(':').collect();
+    if parts.len() >= 4 {
+        let last = parts[parts.len() - 1];
+        if last.starts_with("natives-") {
+            return Some(last);
+        }
+    }
+    None
+}
+
 /// Remove the contents of a directory without removing the directory itself
 /// (HMCL `FileUtils.cleanDirectoryQuietly`). Failures are logged, not fatal.
 pub fn clean_directory_quietly(dir: &Path) {
@@ -88,12 +102,38 @@ fn should_extract(relative_path: &str, lib: &rmccc_version::Library) -> bool {
 ///
 /// # Returns
 /// Number of files extracted (or verified as existing).
+/// 把 zip 条目名解析为安全的相对路径；拒绝绝对路径、`..`、Windows 盘符前缀与空路径。
+///
+/// 这是 zip-slip 防护的唯一判定点（P2-4）：`decompress_natives` 只用它产出的相对路径
+/// 拼接目标目录，任何试图逃出 `natives_dir` 的条目都会被丢弃。
+fn safe_relative_entry(name: &str) -> Option<std::path::PathBuf> {
+    let path = Path::new(name);
+    if path.is_absolute() {
+        return None;
+    }
+    let mut rel = std::path::PathBuf::new();
+    for comp in path.components() {
+        match comp {
+            std::path::Component::Normal(part) => rel.push(part),
+            std::path::Component::CurDir => {}
+            // ParentDir (`..`)、Prefix（Windows 盘符）、RootDir 一律拒绝。
+            _ => return None,
+        }
+    }
+    if rel.as_os_str().is_empty() {
+        None
+    } else {
+        Some(rel)
+    }
+}
+
 pub fn decompress_natives(
     libraries: &[rmccc_version::Library],
     libs_dir: &Path,
     natives_dir: &Path,
     skip_glfw: bool,
     skip_openal: bool,
+    platform: &rmccc_platform::PlatformDescriptor,
 ) -> Result<u32> {
     std::fs::create_dir_all(natives_dir)?;
     // HMCL cleanDirectoryQuietly — re-extract from a clean slate.
@@ -102,6 +142,19 @@ pub fn decompress_natives(
     let mut count = 0u32;
 
     for lib in libraries.iter().filter(|l| is_native(l)) {
+        // 只解压属于当前平台的 native 库：Mojang manifest 会列出所有平台的
+        // natives（`natives-windows*` / `natives-linux` …），它们既不该下载也
+        // 不该解压。以前会对缺失的异平台 jar 逐条 warn，安装日志因此满是噪音。
+        if let Some(classifier) = native_classifier_of(&lib.name) {
+            if !platform.accepts_native_classifier(classifier) {
+                tracing::trace!(
+                    library = %lib.name,
+                    "Skipping native library for another platform"
+                );
+                continue;
+            }
+        }
+
         let jar_path = resolve_library_path(&lib.name, libs_dir);
         if !jar_path.exists() {
             tracing::warn!("Native library JAR not found: {}", jar_path.display());
@@ -165,7 +218,12 @@ pub fn decompress_natives(
                 continue;
             }
 
-            let dest_path = natives_dir.join(&entry_name);
+            // zip-slip 防护（P2-4）：只接受安全的相对条目名。
+            let Some(rel) = safe_relative_entry(&entry_name) else {
+                tracing::warn!(entry = %entry_name, "Skipping unsafe zip entry (zip-slip)");
+                continue;
+            };
+            let dest_path = natives_dir.join(&rel);
 
             // Skip if file already exists with matching size (idempotent)
             if dest_path.exists() {
@@ -338,6 +396,26 @@ mod tests {
         ));
         assert!(!should_extract("org/lwjgl/glfw/GLFW.class", &lib));
         assert!(should_extract("libglfw.dylib", &lib));
+    }
+
+    #[test]
+    fn test_safe_relative_entry_blocks_zip_slip() {
+        assert_eq!(
+            safe_relative_entry("lib/x.dll"),
+            Some(std::path::PathBuf::from("lib/x.dll"))
+        );
+        assert_eq!(
+            safe_relative_entry("a/b/c.dylib"),
+            Some(std::path::PathBuf::from("a/b/c.dylib"))
+        );
+        // `..` anywhere is rejected.
+        assert_eq!(safe_relative_entry("../evil.dll"), None);
+        assert_eq!(safe_relative_entry("a/../../evil.dll"), None);
+        // Absolute paths are rejected.
+        assert_eq!(safe_relative_entry("/etc/evil.dll"), None);
+        // Empty / dot-only entries are rejected.
+        assert_eq!(safe_relative_entry(""), None);
+        assert_eq!(safe_relative_entry("."), None);
     }
 
     #[test]

@@ -1,15 +1,16 @@
 //! AES-256-GCM token encryption.
 //!
 //! Encrypts JSON payloads at rest using a random 32-byte key file. The key file
-//! is created with restricted permissions (0o600 on Unix). This is the single
-//! encryption primitive; storage-level concerns belong to
-//! [`AccountRepository`](crate::AccountRepository).
+//! is created with owner-only permissions via [`PlatformFs::restrict_owner_only`]
+//! (Unix `0600` / Windows ACL). This is the single encryption primitive;
+//! storage-level concerns belong to [`AccountRepository`](crate::AccountRepository).
 
 use aes_gcm::aead::{Aead, KeyInit};
 use aes_gcm::{Aes256Gcm, Nonce};
 use base64::engine::general_purpose::STANDARD as B64;
 use base64::Engine;
 use rmccc_error::{Result, RmcccError};
+use rmccc_platform::PlatformFs;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
@@ -42,7 +43,10 @@ pub struct TokenVault {
 
 impl TokenVault {
     /// Load existing key or generate a new one.
-    pub fn init(key_path: &Path) -> Result<Self> {
+    ///
+    /// 权限收紧经注入的 [`PlatformFs`]（Unix `0600` / Windows ACL），本函数
+    /// 不再出现 `#[cfg(unix)]` / `#[cfg(windows)]`（指南 §5.7.1）。
+    pub fn init(key_path: &Path, fs: &dyn PlatformFs) -> Result<Self> {
         let key_bytes = if key_path.exists() {
             std::fs::read(key_path)?
         } else {
@@ -52,30 +56,9 @@ impl TokenVault {
             rand::thread_rng().fill_bytes(&mut key);
             std::fs::write(key_path, key)?;
 
-            // Restrict permissions on Unix
-            #[cfg(unix)]
-            {
-                use std::os::unix::fs::PermissionsExt;
-                std::fs::set_permissions(key_path, std::fs::Permissions::from_mode(0o600))?;
-            }
-
-            // P2-11：Windows 上用 icacls 移除继承并仅授予当前用户读写权限。
-            #[cfg(windows)]
-            {
-                let user = std::process::Command::new("cmd")
-                    .args(["/C", "echo %USERNAME%"])
-                    .output()
-                    .ok()
-                    .and_then(|o| String::from_utf8(o.stdout).ok())
-                    .map(|s| s.trim().to_string())
-                    .unwrap_or_default();
-                if !user.is_empty() {
-                    let _ = std::process::Command::new("icacls")
-                        .arg(key_path)
-                        .args(["/inheritance:r", &format!("{user}:(R,W)")])
-                        .output();
-                }
-            }
+            // 仅属主可读写。密钥文件权限收紧失败必须报错——悄悄放过等于把
+            // 令牌明文暴露给同机其他用户。
+            fs.restrict_owner_only(key_path)?;
 
             key.to_vec()
         };
@@ -169,13 +152,14 @@ impl TokenVault {
 mod tests {
     use super::*;
     use crate::account_id::AccountID;
+    use rmccc_platform::Platform;
 
     #[test]
     fn test_encrypt_decrypt_roundtrip() {
         let tmp = std::env::temp_dir().join("rmccc_test_key");
         let _ = std::fs::remove_file(&tmp); // clean up
 
-        let vault = TokenVault::init(&tmp).unwrap();
+        let vault = TokenVault::init(&tmp, Platform::current().fs.as_ref()).unwrap();
         let session = AuthSession {
             account_id: AccountID::generate().to_string(),
             provider: "test".into(),
@@ -201,7 +185,7 @@ mod tests {
         let tmp = std::env::temp_dir().join("rmccc_test_key_v");
         let _ = std::fs::remove_file(&tmp);
 
-        let vault = TokenVault::init(&tmp).unwrap();
+        let vault = TokenVault::init(&tmp, Platform::current().fs.as_ref()).unwrap();
         let encrypted = vault
             .encrypt_payload(&serde_json::json!({"k": "v"}))
             .unwrap();

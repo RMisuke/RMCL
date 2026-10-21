@@ -218,7 +218,11 @@ impl Profile {
 /// with the launcher-wide defaults (HMCL `GameSettings.Effective`).
 ///
 /// The launcher only ever consumes these, never the raw profile.
-#[derive(Debug, Clone, PartialEq)]
+///
+/// 也经 IPC 暴露给前端（`instance_resolved_settings`），这样"某字段当前继承时
+/// 生效值是多少"只有一个来源（审计 P2-8）。
+#[derive(Debug, Clone, PartialEq, serde::Serialize, ts_rs::TS)]
+#[ts(export_to = "types.ts")]
 pub struct ResolvedInstanceSettings {
     /// Normalised isolation value (`never` | `modded` | `always`).
     pub isolation: String,
@@ -416,6 +420,11 @@ impl ProfileStore {
     }
 
     /// Delete a profile and optionally clean up its game directory.
+    /// 删除 profile。
+    ///
+    /// `cleanup_game_dir` **只**会删除该实例自己的运行目录；当 `game_dir` 就是
+    /// 共享游戏根（`versions/` `libraries/` `assets/` 的存放处）时该参数被忽略，
+    /// 否则会连带删掉**其它所有实例**的游戏文件（ADR-002 决策 3）。
     pub fn delete(&self, id: &str, cleanup_game_dir: bool) -> Result<()> {
         let path = self.profile_path(id);
         if !path.exists() {
@@ -429,13 +438,28 @@ impl ProfileStore {
 
         std::fs::remove_file(&path)?;
 
-        if cleanup_game_dir && profile.game_dir.exists() {
-            std::fs::remove_dir_all(&profile.game_dir)?;
-            tracing::info!(profile_id = %id, "Game directory cleaned up");
+        if cleanup_game_dir {
+            if Self::is_shared_game_root(&profile.game_dir) {
+                tracing::warn!(
+                    profile_id = %id,
+                    game_dir = %profile.game_dir.display(),
+                    "Refusing to delete the shared game root; only the profile was removed"
+                );
+            } else if profile.game_dir.exists() {
+                std::fs::remove_dir_all(&profile.game_dir)?;
+                tracing::info!(profile_id = %id, "Instance directory cleaned up");
+            }
         }
 
         tracing::info!(profile_id = %id, "Profile deleted");
         Ok(())
+    }
+
+    /// `game_dir` 是否就是共享游戏根（含 `versions/` 或 `libraries/` 的目录）。
+    ///
+    /// 用磁盘特征而不是配置判断，避免 `ProfileStore` 依赖 `AppConfig`。
+    fn is_shared_game_root(game_dir: &std::path::Path) -> bool {
+        game_dir.join("versions").exists() || game_dir.join("libraries").exists()
     }
 
     /// Update the last_played timestamp.
@@ -531,6 +555,52 @@ mod tests {
         assert!(store.get("p1").unwrap().is_none());
 
         assert!(store.delete("nope", false).is_err());
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// ADR-002 决策 3：`cleanup=true` 绝不能删共享游戏根。
+    #[test]
+    fn test_delete_never_removes_shared_game_root() {
+        let dir = temp_profiles_dir("del-shared");
+        let store = ProfileStore::new(dir.clone());
+
+        // 造一个"共享游戏根"：含 versions/ 与 libraries/，里面放标记文件。
+        let game_root = dir.join("instances");
+        std::fs::create_dir_all(game_root.join("versions/1.20.4")).unwrap();
+        std::fs::create_dir_all(game_root.join("libraries")).unwrap();
+        let marker = game_root.join("versions/1.20.4/1.20.4.json");
+        std::fs::write(&marker, "{}").unwrap();
+
+        let mut profile = make_profile("p-shared");
+        profile.game_dir = game_root.clone();
+        store.save(&profile).unwrap();
+
+        // 即使要求清理，也只删 profile，不动共享库。
+        store.delete("p-shared", true).unwrap();
+        assert!(store.get("p-shared").unwrap().is_none());
+        assert!(marker.exists(), "共享游戏根必须保留");
+        assert!(game_root.join("libraries").exists(), "libraries 必须保留");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 隔离实例（game_dir 不是共享根）在 `cleanup=true` 时正常清理自己的目录。
+    #[test]
+    fn test_delete_cleans_isolated_instance_dir() {
+        let dir = temp_profiles_dir("del-isolated");
+        let store = ProfileStore::new(dir.clone());
+
+        let instance_dir = dir.join("instances/isolated-1");
+        std::fs::create_dir_all(instance_dir.join("mods")).unwrap();
+        std::fs::write(instance_dir.join("options.txt"), "x").unwrap();
+
+        let mut profile = make_profile("p-iso");
+        profile.game_dir = instance_dir.clone();
+        store.save(&profile).unwrap();
+
+        store.delete("p-iso", true).unwrap();
+        assert!(!instance_dir.exists(), "隔离实例目录应被清理");
 
         let _ = std::fs::remove_dir_all(&dir);
     }

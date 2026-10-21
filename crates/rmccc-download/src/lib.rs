@@ -10,6 +10,8 @@
 //! used by Minecraft's asset storage. This enables deduplication across
 //! game instances and modloader installations.
 
+#![allow(clippy::double_must_use)] // 工具链 1.99.1 新 lint：async_trait 宏生成的 #[must_use] 与 Future/Result 重叠，非业务逻辑
+
 pub mod provider;
 
 use rmccc_error::{Result, RmcccError};
@@ -401,10 +403,12 @@ impl ConcurrentDownloadManager {
                     tracing::info!(batch_id = %batch_id, "Batch completed: {total_files} files");
                 }
 
-                // Signal completion so callers waiting via wait_for_batch() are notified.
-                batch_state.completion.notify_one();
-
-                // Emit final progress with failure count
+                // Emit final progress with failure count.
+                //
+                // This MUST happen before signalling completion: callers that
+                // read the failure count out of the final callback (pipeline
+                // `SetupReport`) would otherwise race the waiter and observe a
+                // stale zero.
                 progress(DownloadProgress {
                     batch_id: batch_id.clone(),
                     completed_files: fc,
@@ -414,6 +418,9 @@ impl ConcurrentDownloadManager {
                     failed_files: ff,
                     current_file: None,
                 });
+
+                // Signal completion so callers waiting via wait_for_batch() are notified.
+                batch_state.completion.notify_one();
             }
         });
 

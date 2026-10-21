@@ -9,6 +9,7 @@
 //! Following HMCL's [`Arguments`] and [`Argument`] patterns.
 
 use crate::types::{ArgumentRule, ArgumentValue, VersionArgument};
+use rmccc_platform::PlatformDescriptor;
 use std::collections::HashMap;
 
 /// Standard template variable names used by Minecraft.
@@ -58,6 +59,7 @@ pub mod vars {
 /// * `height` - Optional window height
 #[allow(clippy::too_many_arguments)]
 pub fn build_template_vars(
+    platform: &PlatformDescriptor,
     username: &str,
     uuid: &str,
     access_token: &str,
@@ -100,14 +102,10 @@ pub fn build_template_vars(
         vars::LAUNCHER_VERSION.to_string(),
         launcher_version.to_string(),
     );
-    // Java classpath separator: ':' on Unix, ';' on Windows
-    #[cfg(target_os = "windows")]
-    let cp_separator = ";";
-    #[cfg(not(target_os = "windows"))]
-    let cp_separator = ":";
+    // Java classpath separator: ':' on Unix, ';' on Windows（经平台描述符，无裸 cfg）
     vars.insert(
         vars::CLASSPATH_SEPARATOR.to_string(),
-        cp_separator.to_string(),
+        platform.classpath_separator().to_string(),
     );
 
     // Library directory (NeoForge uses ${library_directory} in boot layer module path)
@@ -181,6 +179,7 @@ pub fn replace_templates(arg: &str, vars: &HashMap<String, String>) -> String {
 /// # Returns
 /// A vector of resolved argument strings.
 pub fn resolve_arguments(
+    platform: &PlatformDescriptor,
     args: &[VersionArgument],
     vars: &HashMap<String, String>,
     features: &HashMap<String, bool>,
@@ -193,7 +192,7 @@ pub fn resolve_arguments(
                 result.push(replace_templates(s, vars));
             }
             VersionArgument::Ruled { rules, value } => {
-                if rules_match(rules, features) {
+                if rules_match(rules, features, platform) {
                     match value {
                         ArgumentValue::Single(s) => {
                             result.push(replace_templates(s, vars));
@@ -217,7 +216,11 @@ pub fn resolve_arguments(
 /// Rules use an "allow" (default) or "disallow" action. If any rule disallows,
 /// the argument is excluded. If any rule allows, the argument is included
 /// (assuming no disallow rule matched).
-fn rules_match(rules: &[ArgumentRule], features: &HashMap<String, bool>) -> bool {
+fn rules_match(
+    rules: &[ArgumentRule],
+    features: &HashMap<String, bool>,
+    platform: &PlatformDescriptor,
+) -> bool {
     if rules.is_empty() {
         return true;
     }
@@ -226,7 +229,7 @@ fn rules_match(rules: &[ArgumentRule], features: &HashMap<String, bool>) -> bool
     let mut disallowed = false;
 
     for rule in rules {
-        let matches = rule_matches(rule, features);
+        let matches = rule_matches(rule, features, platform);
         if matches {
             match rule.action.as_str() {
                 "disallow" => disallowed = true,
@@ -249,27 +252,26 @@ fn rules_match(rules: &[ArgumentRule], features: &HashMap<String, bool>) -> bool
 }
 
 /// Check if a single rule matches the current environment.
-fn rule_matches(rule: &ArgumentRule, features: &HashMap<String, bool>) -> bool {
+fn rule_matches(
+    rule: &ArgumentRule,
+    features: &HashMap<String, bool>,
+    platform: &PlatformDescriptor,
+) -> bool {
     // Check OS condition
     if let Some(os) = &rule.os {
-        let current_os = current_os_name();
         let matches_os = match &os.name {
             Some(name) => {
-                if name.starts_with('^') {
-                    // Regex pattern (HMCL uses simple prefix matching too)
-                    let pattern = name.trim_start_matches('^');
-                    current_os.contains(pattern)
+                if let Some(pattern) = name.strip_prefix('^') {
+                    // Regex pattern (HMCL uses simple substring matching too)
+                    platform.os.rule_name().contains(pattern)
                 } else {
-                    current_os == name.as_str()
+                    platform.matches_rule_os(name)
                 }
             }
             None => true,
         };
 
-        let matches_arch = match &os.arch {
-            Some(arch) => arch == current_arch(),
-            None => true,
-        };
+        let matches_arch = platform.matches_rule_arch(os.arch.as_deref());
 
         if !matches_os || !matches_arch {
             return false;
@@ -288,46 +290,6 @@ fn rule_matches(rule: &ArgumentRule, features: &HashMap<String, bool>) -> bool {
     true
 }
 
-/// Get the current OS name as recognized by Minecraft's version JSON rules.
-fn current_os_name() -> &'static str {
-    #[cfg(target_os = "windows")]
-    {
-        "windows"
-    }
-    #[cfg(target_os = "macos")]
-    {
-        "osx"
-    }
-    #[cfg(target_os = "linux")]
-    {
-        "linux"
-    }
-    #[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
-    {
-        "unknown"
-    }
-}
-
-/// Get the current CPU architecture.
-fn current_arch() -> &'static str {
-    #[cfg(target_arch = "x86_64")]
-    {
-        "x86_64"
-    }
-    #[cfg(target_arch = "aarch64")]
-    {
-        "arm64"
-    }
-    #[cfg(target_arch = "x86")]
-    {
-        "x86"
-    }
-    #[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64", target_arch = "x86")))]
-    {
-        "unknown"
-    }
-}
-
 /// Parse legacy `minecraftArguments` string into individual tokens.
 ///
 /// The legacy format is a single space-separated string with ${variable} templates.
@@ -342,6 +304,11 @@ pub fn parse_legacy_arguments(minecraft_args: &str) -> Vec<String> {
 mod tests {
     use super::*;
     use crate::types::OsCondition;
+
+    /// 固定 macOS/arm64 描述符：规则测试从此与宿主平台解耦（1.1b）。
+    fn mac() -> PlatformDescriptor {
+        PlatformDescriptor::macos_arm64()
+    }
 
     #[test]
     fn test_replace_simple_variable() {
@@ -391,7 +358,7 @@ mod tests {
         vars.insert("auth_player_name".to_string(), "Steve".to_string());
         vars.insert("version_name".to_string(), "1.20.4".to_string());
 
-        let result = resolve_arguments(&args, &vars, &HashMap::new());
+        let result = resolve_arguments(&mac(), &args, &vars, &HashMap::new());
         assert_eq!(result, vec!["--username Steve", "--version 1.20.4"]);
     }
 
@@ -411,12 +378,16 @@ mod tests {
             value: ArgumentValue::Single("-Xdock:name=Minecraft".to_string()),
         }];
 
-        let result = resolve_arguments(&args, &HashMap::new(), &HashMap::new());
-
-        #[cfg(target_os = "macos")]
+        // 固定 macOS 描述符 → 断言与宿主平台无关。
+        let result = resolve_arguments(&mac(), &args, &HashMap::new(), &HashMap::new());
         assert_eq!(result, vec!["-Xdock:name=Minecraft"]);
-        #[cfg(not(target_os = "macos"))]
-        assert!(result.is_empty());
+
+        // 同一份规则喂 Windows 描述符 → 不命中。
+        let win = PlatformDescriptor::new(
+            rmccc_platform::PlatformOs::Windows,
+            rmccc_platform::PlatformArch::X86_64,
+        );
+        assert!(resolve_arguments(&win, &args, &HashMap::new(), &HashMap::new()).is_empty());
     }
 
     #[test]
@@ -446,12 +417,12 @@ mod tests {
         vars.insert("resolution_width".to_string(), "1920".to_string());
         vars.insert("resolution_height".to_string(), "1080".to_string());
 
-        let result = resolve_arguments(&args, &vars, &features);
+        let result = resolve_arguments(&mac(), &args, &vars, &features);
         assert_eq!(result, vec!["--width", "1920", "--height", "1080"]);
 
         // Without the feature, the argument should be excluded
         let empty_features = HashMap::new();
-        let result2 = resolve_arguments(&args, &vars, &empty_features);
+        let result2 = resolve_arguments(&mac(), &args, &vars, &empty_features);
         assert!(result2.is_empty());
     }
 
@@ -467,6 +438,7 @@ mod tests {
     #[test]
     fn test_build_template_vars_coverage() {
         let vars = build_template_vars(
+            &mac(),
             "Steve",
             "uuid",
             "token",
@@ -555,12 +527,16 @@ mod tests {
             value: ArgumentValue::Single("--linux-only-arg".to_string()),
         }];
 
-        let result = resolve_arguments(&args, &HashMap::new(), &HashMap::new());
+        // 固定 macOS 描述符 → 「非 linux 允许」的分支可确定性断言。
+        let result = resolve_arguments(&mac(), &args, &HashMap::new(), &HashMap::new());
+        assert_eq!(result, vec!["--linux-only-arg"]);
 
-        #[cfg(target_os = "linux")]
-        assert!(result.is_empty()); // disallowed on linux
-        #[cfg(not(target_os = "linux"))]
-        assert_eq!(result, vec!["--linux-only-arg"]); // allowed elsewhere
+        // Linux 描述符 → 被 disallow。
+        let linux = PlatformDescriptor::new(
+            rmccc_platform::PlatformOs::Linux,
+            rmccc_platform::PlatformArch::X86_64,
+        );
+        assert!(resolve_arguments(&linux, &args, &HashMap::new(), &HashMap::new()).is_empty());
     }
 
     #[test]
@@ -579,14 +555,14 @@ mod tests {
             ]),
         }];
 
-        let result = resolve_arguments(&args, &HashMap::new(), &HashMap::new());
+        let result = resolve_arguments(&mac(), &args, &HashMap::new(), &HashMap::new());
         assert_eq!(result, vec!["--width", "1920", "--height", "1080"]);
     }
 
     #[test]
     fn test_empty_arguments_list() {
         let args: Vec<VersionArgument> = vec![];
-        let result = resolve_arguments(&args, &HashMap::new(), &HashMap::new());
+        let result = resolve_arguments(&mac(), &args, &HashMap::new(), &HashMap::new());
         assert!(result.is_empty());
     }
 
@@ -605,6 +581,7 @@ mod tests {
     #[test]
     fn test_build_template_vars_no_resolution() {
         let vars = build_template_vars(
+            &mac(),
             "Alex",
             "uuid-here",
             "token123",
@@ -645,7 +622,7 @@ mod tests {
         }];
 
         // Feature exists but is false, so rule shouldn't match
-        let result = resolve_arguments(&args, &HashMap::new(), &features);
+        let result = resolve_arguments(&mac(), &args, &HashMap::new(), &features);
         assert!(result.is_empty());
     }
 }

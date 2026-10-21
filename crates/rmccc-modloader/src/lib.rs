@@ -11,8 +11,11 @@
 //! Patches ([`GameInstancePatch`]) are layered onto [`rmccc_version::GameVersion`]
 //! via [`GameInstancePatch::merge_into`], enabling non-destructive modloader installation.
 
+#![allow(clippy::double_must_use)] // 工具链 1.99.1 新 lint：async_trait 宏生成的 #[must_use] 与 Future/Result 重叠，非业务逻辑
+
 pub mod analyzer;
 pub mod install_task;
+pub mod installer;
 pub mod patch;
 pub mod remote_version;
 pub mod version_list;
@@ -42,6 +45,7 @@ pub use analyzer::{
     VANILLA_MAIN, VANILLA_ONLY_MAIN,
 };
 pub use install_task::InstallTask;
+pub use installer::{installer_urls, needs_installer_jar, InstallerJarRunner};
 pub use patch::{
     GameInstancePatch, PRIORITY_LITELOADER, PRIORITY_LOADER, PRIORITY_MC, PRIORITY_OPTIFINE,
 };
@@ -132,39 +136,38 @@ pub struct LoaderVersion {
     pub stable: bool,
 }
 
-// ── Legacy trait (deprecated, kept for compat) ──
-
-#[async_trait::async_trait]
-pub trait ModLoaderProvider: Send + Sync {
-    fn loader_type(&self) -> ModLoaderType;
-    async fn list_versions(&self, game_version: &str) -> Result<Vec<LoaderVersion>>;
-    async fn install(
-        &self,
-        game_version: &str,
-        loader_version: &str,
-        game_dir: &Path,
-        java_path: &Path,
-    ) -> Result<String>;
-}
-
-pub fn create_provider(
-    loader_type: &ModLoaderType,
-    client: reqwest::Client,
-) -> Result<Box<dyn ModLoaderProvider>> {
-    match loader_type {
-        ModLoaderType::Fabric => Ok(Box::new(fabric::FabricInstaller::new(client))),
-        ModLoaderType::Forge => Ok(Box::new(forge::ForgeInstaller::new(client))),
-        ModLoaderType::NeoForge => Ok(Box::new(neoforge::NeoForgeInstaller::new(client))),
-        _ => Err(RmcccError::Other(format!(
-            "Legacy provider not available for {loader_type:?}"
-        ))),
-    }
-}
-
 // ── DependencyManager — unified entry point ──
 
 /// Progress callback for version list loading and installation.
 pub type ProgressCallback = Arc<dyn Fn(&str, u32, u32) + Send + Sync>;
+
+/// loader 安装产物。
+///
+/// 两种形态来自 Minecraft 生态的现实差异，而不是我们的实现选择：
+/// 官方安装器型的 loader 由安装器自己写版本 JSON，patch 型的 loader 由我们
+/// 写增量 JSON（HMCL 语义，可回滚、可叠加）。
+#[derive(Debug, Clone)]
+pub enum LoaderInstallOutcome {
+    /// 官方安装器已写好自己的版本 JSON；只需用这个 id 更新 profile。
+    InstallerJar { version_id: String },
+    /// 需要调用方写增量 JSON：`{ id: version_id, inheritsFrom: game_version, patches: [...] }`。
+    Patch {
+        version_id: String,
+        /// 装箱：`GameInstancePatch` 比另一个变体大一个数量级，直接内联会让
+        /// 整个 enum 膨胀（clippy::large_enum_variant）。
+        patch: Box<GameInstancePatch>,
+    },
+}
+
+impl LoaderInstallOutcome {
+    /// 安装完成后的版本 id（profile 的 `game_version` 应指向它）。
+    pub fn version_id(&self) -> &str {
+        match self {
+            LoaderInstallOutcome::InstallerJar { version_id } => version_id,
+            LoaderInstallOutcome::Patch { version_id, .. } => version_id,
+        }
+    }
+}
 
 /// Unified dependency manager — routes modloader install requests
 /// to the appropriate [`VersionList`] and [`InstallTask`].
@@ -252,9 +255,55 @@ impl DependencyManager {
         Ok(versions)
     }
 
-    /// Install a modloader into a game version.
+    /// **唯一**的 loader 安装入口（审计 P1-4）。
     ///
-    /// Returns the modified [`rmccc_version::GameVersion`] with the patch applied.
+    /// 两类 loader 由这里内部路由，调用方（`rmccc-core` 的编排、Tauri、CLI）
+    /// 不再各自 `match`：
+    ///
+    /// | loader | 安装方式 | 产物 |
+    /// |---|---|---|
+    /// | Forge / NeoForge | 运行官方 installer JAR | 安装器自写 `versions/<id>/<id>.json` |
+    /// | 其余 6 种 | 打 [`GameInstancePatch`] | 调用方写增量 JSON（`inheritsFrom` + `patches`） |
+    pub async fn install_loader(
+        &self,
+        loader_type: &ModLoaderType,
+        game_version: &str,
+        base_version: &rmccc_version::GameVersion,
+        loader_version: &str,
+        game_dir: &Path,
+        java_path: &Path,
+    ) -> Result<LoaderInstallOutcome> {
+        if installer::needs_installer_jar(loader_type) {
+            let runner = installer::InstallerJarRunner {
+                client: &self.client,
+                java_path,
+                game_dir,
+            };
+            let version_id = runner
+                .run(loader_type, game_version, loader_version)
+                .await?;
+            return Ok(LoaderInstallOutcome::InstallerJar { version_id });
+        }
+
+        let (mut merged, patch) = self
+            .install_with_patch(
+                loader_type,
+                game_version,
+                base_version,
+                loader_version,
+                game_dir,
+                java_path,
+            )
+            .await?;
+        // `install_with_patch` 已把 patch 合进 merged；这里只取 patch 生成的 id。
+        merged.id = format!("{game_version}-{}-{}", patch.id, patch.version);
+        Ok(LoaderInstallOutcome::Patch {
+            version_id: merged.id.clone(),
+            patch: Box::new(patch),
+        })
+    }
+
+    /// 安装并把结果直接合进 [`rmccc_version::GameVersion`]（不带增量 patch）。
     pub async fn install(
         &self,
         loader_type: &ModLoaderType,

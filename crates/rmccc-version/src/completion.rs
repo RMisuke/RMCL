@@ -37,7 +37,11 @@ pub struct MissingItem {
 }
 
 /// Scan an installed version against its resolved manifest and report missing files.
-pub fn check_completion(game_dir: &Path, resolved: &ResolvedVersion) -> Vec<MissingItem> {
+pub fn check_completion(
+    game_dir: &Path,
+    resolved: &ResolvedVersion,
+    platform: &rmccc_platform::PlatformDescriptor,
+) -> Vec<MissingItem> {
     let mut missing = Vec::new();
     let launch = &resolved.launch;
 
@@ -85,7 +89,7 @@ pub fn check_completion(game_dir: &Path, resolved: &ResolvedVersion) -> Vec<Miss
     for lib in launch
         .libraries
         .iter()
-        .filter(|l| libraries::library_applies(l))
+        .filter(|l| libraries::library_applies(l, platform))
     {
         let lib_path = lib
             .downloads
@@ -105,7 +109,7 @@ pub fn check_completion(game_dir: &Path, resolved: &ResolvedVersion) -> Vec<Miss
         if let Some(dl) = &lib.downloads {
             if let Some(classifiers) = &dl.classifiers {
                 for (classifier, entry) in classifiers {
-                    if libraries::is_current_platform_classifier(classifier) {
+                    if libraries::is_current_platform_classifier(classifier, platform) {
                         let native_path = entry
                             .path
                             .as_ref()
@@ -140,6 +144,7 @@ pub async fn build_completion_downloads(
     client: &reqwest::Client,
     game_dir: &Path,
     resolved: &ResolvedVersion,
+    platform: &rmccc_platform::PlatformDescriptor,
 ) -> Result<Vec<DownloadItem>> {
     let launch = &resolved.launch;
     let mut items = Vec::new();
@@ -239,7 +244,7 @@ pub async fn build_completion_downloads(
     for lib in launch
         .libraries
         .iter()
-        .filter(|l| libraries::library_applies(l))
+        .filter(|l| libraries::library_applies(l, platform))
     {
         let lib_path = lib
             .downloads
@@ -276,7 +281,7 @@ pub async fn build_completion_downloads(
         if let Some(dl) = &lib.downloads {
             if let Some(classifiers) = &dl.classifiers {
                 for (classifier, entry) in classifiers {
-                    if !libraries::is_current_platform_classifier(classifier) {
+                    if !libraries::is_current_platform_classifier(classifier, platform) {
                         continue;
                     }
                     let native_path = entry
@@ -310,6 +315,11 @@ pub async fn build_completion_downloads(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 固定 macOS/arm64 描述符：断言与宿主平台解耦（1.1b）。
+    fn mac() -> rmccc_platform::PlatformDescriptor {
+        rmccc_platform::PlatformDescriptor::macos_arm64()
+    }
     use crate::types::GameVersion;
 
     #[test]
@@ -333,7 +343,7 @@ mod tests {
             launch: launch.clone(),
             standalone: GameVersion::default(),
         };
-        let missing = check_completion(game_dir, &resolved);
+        let missing = check_completion(game_dir, &resolved, &mac());
         assert!(missing.iter().any(|m| m.kind == MissingKind::ClientJar));
     }
 }

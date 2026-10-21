@@ -1,14 +1,24 @@
-//! 游戏安装 / 修复 / 启动编排（P1-01）。
+//! 游戏安装 / 修复 / 启动编排（P1-01，P1-3 收敛为唯一入口）。
 //!
 //! 从 `src-cli/src/context.rs` 抽取：核心编排逻辑集中于此，进度与输出通过
-//! 回调传递，CLI 仅负责呈现（`println!/eprint!` 留在 CLI 层，不进入本模块）。
-//! Tauri 命令层亦可复用本模块以消除两套启动/安装实现。
+//! 回调传递，呈现层（`println!/eprint!`、Tauri 事件）留在各自的适配层。
+//!
+//! **P1-3**：Tauri 命令层与 CLI 曾各自复刻安装 / 修复 / 启动三条链路，
+//! 修一处漏一处且 GUI 那份没有单测。现在两边都只调用本模块：
+//!
+//! | 操作 | 编排函数 | 调用方 |
+//! |------|----------|--------|
+//! | 安装版本 | [`install_game`] + [`commit_install`] | `version_install`（Tauri/CLI） |
+//! | 修复资源 | [`repair_instance`] / [`ensure_launch_ready`] | `instance_repair`（Tauri）、`resource repair`（CLI） |
+//! | 启动游戏 | [`launch_game`] | `launch_start`（Tauri/CLI） |
 
 use crate::CoreContext;
 use rmccc_auth::Account;
 use rmccc_error::{Result, RmcccError};
+use rmccc_launch::{ManagedProcess, ProcessListener};
 use rmccc_version::GameRepository as _;
 use std::path::Path;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
 /// 管道级进度事件：阶段消息与下载进度统一走回调上报，模块内部不直接打印。
@@ -31,18 +41,71 @@ pub type ProgressCb = Arc<dyn Fn(&ProgressMsg) + Send + Sync>;
 /// 游戏 stdout/stderr 输出回调（逐行转发）。
 pub type GameOutputCb = Arc<dyn Fn(&str) + Send + Sync>;
 
+/// 一次安装 / 修复的结果摘要（P1-3）。
+///
+/// 取代此前 "有失败也返回 Ok(())" 的隐式约定：调用方据此决定是否提交
+/// profile、是否上报错误，而不是各自去猜下载批次的结果。
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct SetupReport {
+    /// 本次涉及的下载条目数（0 表示本来就不缺东西）。
+    pub total_files: usize,
+    /// 下载失败的条目数（0 表示全部成功）。
+    pub failed_files: u64,
+}
+
+impl SetupReport {
+    /// 是否全部下载成功（无失败条目）。
+    pub fn is_complete(&self) -> bool {
+        self.failed_files == 0
+    }
+
+    /// 是否无事可做（没有需要下载/修复的条目）。
+    pub fn is_noop(&self) -> bool {
+        self.total_files == 0
+    }
+}
+
 fn noop_progress() -> Arc<dyn Fn(&ProgressMsg) + Send + Sync> {
     Arc::new(|_| {})
 }
 
-/// 把下载批次的底层进度回调包装为管道进度回调。
+fn emit(progress: Option<&ProgressCb>, msg: ProgressMsg) {
+    if let Some(cb) = progress {
+        cb(&msg);
+    }
+}
+
+/// 下载批次的失败条目计数。
+///
+/// `DownloadManager` 不暴露批次结果查询，失败数只出现在**最终**进度回调
+/// （`current_file == None`）。这里在进度回调里摘取一次，供 [`SetupReport`]
+/// 汇总——两个适配层不再各自维护一份 `Arc<Mutex<Option<u64>>>`。
+#[derive(Clone, Default)]
+struct FailureTally(Arc<AtomicU64>);
+
+impl FailureTally {
+    fn observe(&self, p: &rmccc_download::DownloadProgress) {
+        if p.current_file.is_none() {
+            self.0.store(p.failed_files, Ordering::Relaxed);
+        }
+    }
+
+    fn get(&self) -> u64 {
+        self.0.load(Ordering::Relaxed)
+    }
+}
+
+/// 把下载批次的底层进度回调包装为管道进度回调，并顺带记录失败数。
 fn progress_download_cb(
     progress: Option<&ProgressCb>,
     label: &str,
+    tally: &FailureTally,
 ) -> Arc<dyn Fn(rmccc_download::DownloadProgress) + Send + Sync> {
     let label = label.to_string();
     let cb = progress.cloned().unwrap_or_else(noop_progress);
+    let tally = tally.clone();
     Arc::new(move |p| {
+        tally.observe(&p);
         cb(&ProgressMsg::Download {
             label: label.clone(),
             progress: p,
@@ -50,10 +113,29 @@ fn progress_download_cb(
     })
 }
 
-fn emit(progress: Option<&ProgressCb>, msg: ProgressMsg) {
-    if let Some(cb) = progress {
-        cb(&msg);
-    }
+fn repo_lock_error() -> RmcccError {
+    RmcccError::Other("game repository lock poisoned".to_string())
+}
+
+/// 经 `download_provider` 为下载项注入镜像候选（P1-05）。
+///
+/// `candidates[0]` 作主 URL，其余作回退候选；Mojang 源下原样返回。
+fn inject_candidates(
+    provider: &dyn rmccc_download::provider::DownloadProvider,
+    items: Vec<rmccc_download::DownloadItem>,
+) -> Vec<rmccc_download::DownloadItem> {
+    items
+        .into_iter()
+        .map(|mut item| {
+            let candidates = provider.inject_url_with_candidates(&item.url);
+            item.url = candidates
+                .first()
+                .cloned()
+                .unwrap_or_else(|| item.url.clone());
+            item.candidates = candidates.into_iter().skip(1).collect();
+            item
+        })
+        .collect()
 }
 
 /// 解析游戏版本：优先本地 patched JSON（含 `inheritsFrom` 继承链合并），
@@ -113,340 +195,330 @@ pub async fn resolve_version(
     Ok(resolved)
 }
 
+// ────────────────────────────── Install ──────────────────────────────
+
 /// 安装游戏资源（client jar + 依赖库 + 资源文件 + natives 解压）。
-/// 对应 CLI `resource download` 编排（P1-01 抽取）。
+///
+/// 三个下载类别合并为**一个批次**：进度单调（前端百分比不再回弹）、
+/// 失败数只有一个来源，且磁盘空间可以按总大小预检。阶段文案仍经
+/// [`ProgressMsg::Stage`] 上报，呈现层观感不变。
+///
+/// 只负责"让文件落盘 + 暴露结果"，不碰 profile：安装成功后的提交由
+/// [`commit_install`] 完成（CLI 与 Tauri 共用同一条提交路径）。
 pub async fn install_game(
     core: &CoreContext,
     profile: &rmccc_profile::Profile,
     version_id: &str,
     progress: Option<&ProgressCb>,
-) -> Result<()> {
-    let version = resolve_version(core, version_id, &profile.game_dir).await?;
+) -> Result<SetupReport> {
+    // 安装目标 = profile 的共享游戏根（profile 创建时即 `resolved_game_root()`，
+    // 与 `GameRepository` 索引的是同一个目录，P2-9 单一取值点）。
+    let game_dir = profile.game_dir.clone();
+    let version = resolve_version(core, version_id, &game_dir).await?;
 
     for subdir in &["versions", "libraries", "assets"] {
-        std::fs::create_dir_all(profile.game_dir.join(subdir))?;
+        std::fs::create_dir_all(game_dir.join(subdir))?;
     }
 
-    download_client_jar(core, profile, &version, version_id, progress).await?;
-    let libs_dir = download_libraries(core, profile, &version, progress).await?;
-    download_assets(core, profile, &version, progress).await?;
-    extract_natives(&version, &libs_dir, &profile.game_dir, version_id, progress)?;
+    // 版本 JSON 先落盘：Minecraft 自己读 `versions/{id}/{id}.json` 且要求
+    // Mojang 原始 camelCase 格式。已存在（patched/继承链）时不覆盖。
+    write_version_json(&game_dir, version_id, &version)?;
 
-    tracing::info!(
-        profile_id = %profile.id,
-        version = %version_id,
-        "Version installed"
+    // 一次性解析全部下载项，便于按总大小做磁盘预检。
+    let mut items = Vec::new();
+    if let Some(item) = client_jar_item(&game_dir, version_id, &version)? {
+        items.push(item);
+    }
+    items.extend(library_items(
+        &version,
+        &game_dir,
+        &core.platform.descriptor,
+    ));
+    items.extend(asset_items(core, &version, &game_dir).await?);
+
+    let total = items.len();
+    if total == 0 {
+        extract_natives(
+            &version,
+            &game_dir,
+            version_id,
+            &core.platform.descriptor,
+            progress,
+        )?;
+        tracing::info!(version = %version_id, "Nothing to download, version already complete");
+        return Ok(SetupReport::default());
+    }
+
+    // 磁盘空间预检（含 20% 余量，对齐 HMCL）。
+    let total_size: u64 = items.iter().filter_map(|i| i.size).sum();
+    if total_size > 0 {
+        rmccc_download::check_disk_space(&game_dir, (total_size as f64 * 1.2) as u64)?;
+    }
+
+    let items = inject_candidates(core.download_provider.as_ref(), items);
+    emit(
+        progress,
+        ProgressMsg::Stage(format!("下载游戏文件 ({total} 个)...")),
     );
-    Ok(())
-}
-
-/// Step 1: Download the client JAR and save version JSON.
-async fn download_client_jar(
-    core: &CoreContext,
-    profile: &rmccc_profile::Profile,
-    version: &rmccc_version::GameVersion,
-    version_id: &str,
-    progress: Option<&ProgressCb>,
-) -> Result<()> {
-    let client_dl = match version.downloads.get("client") {
-        Some(dl) => dl,
-        None => return Ok(()),
-    };
-
-    let jar_path = profile
-        .game_dir
-        .join("versions")
-        .join(version_id)
-        .join(format!("{version_id}.jar"));
-    let jar_parent = jar_path
-        .parent()
-        .ok_or_else(|| RmcccError::Other(format!("Invalid jar path: {}", jar_path.display())))?;
-    std::fs::create_dir_all(jar_parent)?;
-
-    let candidates = core
-        .download_provider
-        .inject_url_with_candidates(&client_dl.url);
-    let items = vec![rmccc_download::DownloadItem {
-        url: candidates[0].clone(),
-        dest: jar_path,
-        expected_sha1: Some(client_dl.sha1.clone()),
-        size: Some(client_dl.size),
-        use_cache: true,
-        candidates: candidates[1..].to_vec(),
-    }];
-    emit(progress, ProgressMsg::Stage("下载客户端 JAR...".into()));
+    let tally = FailureTally::default();
     let handle = core
         .download_manager
-        .download_batch(items, progress_download_cb(progress, "JAR"))
+        .download_batch(items, progress_download_cb(progress, "游戏文件", &tally))
         .await?;
     core.download_manager.wait_for_batch(&handle.id).await;
     emit(
         progress,
-        ProgressMsg::StageDone("✅ 客户端 JAR 下载完成".into()),
+        ProgressMsg::StageDone(format!("✅ 游戏文件下载完成 ({total} 个)")),
     );
 
-    let version_json_path = profile
-        .game_dir
+    let failed_files = tally.get();
+    let report = SetupReport {
+        total_files: total,
+        failed_files,
+    };
+
+    // 有失败条目时不解压 natives：那会拿残缺的依赖库去解压，报错信息比
+    // "有 N 个文件下载失败" 更难定位。
+    if report.is_complete() {
+        extract_natives(
+            &version,
+            &game_dir,
+            version_id,
+            &core.platform.descriptor,
+            progress,
+        )?;
+    }
+
+    tracing::info!(
+        profile_id = %profile.id,
+        version = %version_id,
+        total_files = total,
+        failed_files,
+        "Version resources installed"
+    );
+    Ok(report)
+}
+
+/// 安装完成后的提交：把 profile 指向新版本并刷新本地索引。
+///
+/// 重新从 store 读取 profile（而不是复用安装开始时的快照），避免用几秒前的
+/// 旧数据覆盖用户在下载期间改过的设置。
+pub fn commit_install(core: &CoreContext, profile_id: &str, version_id: &str) -> Result<()> {
+    let mut profile = core
+        .profile_store
+        .get(profile_id)?
+        .ok_or_else(|| RmcccError::ProfileNotFound(profile_id.to_string()))?;
+    profile.game_version = version_id.to_string();
+    core.profile_store.save(&profile)?;
+    refresh_repository(core)
+}
+
+/// 重新扫描本地版本索引（安装 / 修复后调用，让新文件被观察到）。
+pub fn refresh_repository(core: &CoreContext) -> Result<()> {
+    core.game_repository
+        .write()
+        .map_err(|_| repo_lock_error())?
+        .refresh()
+}
+
+/// 写入 `versions/{id}/{id}.json`（已存在则保留，patched JSON 不被冲掉）。
+fn write_version_json(
+    game_dir: &Path,
+    version_id: &str,
+    version: &rmccc_version::GameVersion,
+) -> Result<()> {
+    let path = game_dir
         .join("versions")
         .join(version_id)
         .join(format!("{version_id}.json"));
-    if !version_json_path.exists() {
-        if let Some(ref raw_json) = version.raw_json {
-            std::fs::write(&version_json_path, raw_json)?;
-        }
+    // 优先 Mojang 原始 JSON（camelCase）；本地解析出来的版本没有 raw_json 时
+    // 退回结构体序列化（引擎仍可启动）。
+    let content = match version.raw_json {
+        Some(ref raw) => raw.clone(),
+        None => serde_json::to_string_pretty(version)?,
+    };
+    write_if_absent(&path, &content)
+}
+
+/// 写文件，但目标已存在时保持原样。
+///
+/// 这是 `write_version_json` 的核心语义：patched / 继承链 JSON 绝不能被
+/// Mojang 原始元数据覆盖（`inheritsFrom` 一旦丢失，Forge/NeoForge 实例就废了）。
+fn write_if_absent(path: &Path, content: &str) -> Result<()> {
+    if path.exists() {
+        return Ok(());
     }
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    std::fs::write(path, content)?;
     Ok(())
 }
 
-/// Step 2: Download library files.
-async fn download_libraries(
-    core: &CoreContext,
-    profile: &rmccc_profile::Profile,
-    version: &rmccc_version::GameVersion,
-    progress: Option<&ProgressCb>,
-) -> Result<std::path::PathBuf> {
-    let libs_dir = profile.game_dir.join("libraries");
-    let lib_items: Vec<rmccc_download::DownloadItem> =
-        rmccc_version::libraries::resolve_library_items(&version.libraries, &libs_dir)
-            .into_iter()
-            .map(|mut item| {
-                let candidates = core.download_provider.inject_url_with_candidates(&item.url);
-                item.url = candidates[0].clone();
-                item.candidates = candidates[1..].to_vec();
-                item
-            })
-            .collect();
-    let lib_count = lib_items.len();
-    if !lib_items.is_empty() {
-        emit(
-            progress,
-            ProgressMsg::Stage(format!("下载依赖库 ({} 个)...", lib_count)),
-        );
-        let handle = core
-            .download_manager
-            .download_batch(lib_items, progress_download_cb(progress, "依赖库"))
-            .await?;
-        core.download_manager.wait_for_batch(&handle.id).await;
-        emit(
-            progress,
-            ProgressMsg::StageDone(format!("✅ 依赖库下载完成 ({} 个)", lib_count)),
-        );
-    }
-    Ok(libs_dir)
-}
-
-/// Step 3: Download asset files.
-async fn download_assets(
-    core: &CoreContext,
-    profile: &rmccc_profile::Profile,
-    version: &rmccc_version::GameVersion,
-    progress: Option<&ProgressCb>,
-) -> Result<()> {
-    let asset_items: Vec<rmccc_download::DownloadItem> =
-        rmccc_version::assets::resolve_asset_items(
-            &core.http_client,
-            &version.asset_index,
-            &profile.game_dir.join("assets"),
-        )
-        .await?
-        .into_iter()
-        .map(|mut item| {
-            let candidates = core.download_provider.inject_url_with_candidates(&item.url);
-            item.url = candidates[0].clone();
-            item.candidates = candidates[1..].to_vec();
-            item
-        })
-        .collect();
-    let asset_count = asset_items.len();
-    if !asset_items.is_empty() {
-        emit(
-            progress,
-            ProgressMsg::Stage(format!("下载资源文件 ({} 个)...", asset_count)),
-        );
-        let handle = core
-            .download_manager
-            .download_batch(
-                asset_items,
-                progress_download_cb(progress, &format!("资源 ({})", asset_count)),
-            )
-            .await?;
-        core.download_manager.wait_for_batch(&handle.id).await;
-        emit(
-            progress,
-            ProgressMsg::StageDone(format!("✅ 资源文件下载完成 ({} 个)", asset_count)),
-        );
-    }
-    Ok(())
-}
-
-/// Step 4: Extract native libraries.
-fn extract_natives(
-    version: &rmccc_version::GameVersion,
-    libs_dir: &Path,
+/// 客户端 JAR 下载项（元数据里没有 `downloads.client` 时为 `None`）。
+fn client_jar_item(
     game_dir: &Path,
     version_id: &str,
+    version: &rmccc_version::GameVersion,
+) -> Result<Option<rmccc_download::DownloadItem>> {
+    let Some(client_dl) = version.downloads.get("client") else {
+        return Ok(None);
+    };
+    let dest = game_dir
+        .join("versions")
+        .join(version_id)
+        .join(format!("{version_id}.jar"));
+    if let Some(parent) = dest.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    Ok(Some(rmccc_download::DownloadItem {
+        url: client_dl.url.clone(),
+        dest,
+        expected_sha1: Some(client_dl.sha1.clone()),
+        size: Some(client_dl.size),
+        use_cache: true,
+        candidates: Vec::new(),
+    }))
+}
+
+/// 依赖库下载项（按当前平台过滤）。
+fn library_items(
+    version: &rmccc_version::GameVersion,
+    game_dir: &Path,
+    platform: &rmccc_platform::PlatformDescriptor,
+) -> Vec<rmccc_download::DownloadItem> {
+    rmccc_version::libraries::resolve_library_items(
+        &version.libraries,
+        &game_dir.join("libraries"),
+        platform,
+    )
+}
+
+/// 资源文件下载项（资源索引缺失时会先拉索引）。
+async fn asset_items(
+    core: &CoreContext,
+    version: &rmccc_version::GameVersion,
+    game_dir: &Path,
+) -> Result<Vec<rmccc_download::DownloadItem>> {
+    rmccc_version::assets::resolve_asset_items(
+        &core.http_client,
+        &version.asset_index,
+        &game_dir.join("assets"),
+    )
+    .await
+}
+
+/// 解压 native 库到 `versions/{id}/natives`。
+fn extract_natives(
+    version: &rmccc_version::GameVersion,
+    game_dir: &Path,
+    version_id: &str,
+    platform: &rmccc_platform::PlatformDescriptor,
     progress: Option<&ProgressCb>,
 ) -> Result<()> {
     let natives_dir = game_dir.join("versions").join(version_id).join("natives");
     emit(progress, ProgressMsg::Stage("解压 Native 库...".into()));
-    let natives_count =
-        rmccc_launch::decompress_natives(&version.libraries, libs_dir, &natives_dir, false, false)?;
-    if natives_count > 0 {
-        emit(
-            progress,
-            ProgressMsg::StageDone(format!("✅ Native 库解压完成 ({} 个文件)", natives_count)),
-        );
+    let count = rmccc_launch::decompress_natives(
+        &version.libraries,
+        &game_dir.join("libraries"),
+        &natives_dir,
+        false,
+        false,
+        platform,
+    )?;
+    let msg = if count > 0 {
+        format!("✅ Native 库解压完成 ({count} 个文件)")
     } else {
-        emit(
-            progress,
-            ProgressMsg::StageDone("✅ Native 库检查完成 (无需解压)".into()),
-        );
-    }
+        "✅ Native 库检查完成 (无需解压)".to_string()
+    };
+    emit(progress, ProgressMsg::StageDone(msg));
     Ok(())
 }
 
-/// 启动前资源完整性检查与修复（P1-01 抽取自 CLI `repair_resources`）。
+// ────────────────────────────── Repair ──────────────────────────────
+
+/// 完整性修复：按本地仓库解析出的 launch 视图，扫描 client jar / 资源索引与
+/// objects / 依赖库，缺失则经 `download_manager` 补齐（含磁盘空间预检）。
 ///
-/// 检查 client JAR / 版本 JSON / 资源索引 / 依赖库，缺失则自动补下载。
-/// 返回是否发生了修复。
-pub async fn repair_resources(
+/// 以**版本 id** 为入口（`GameRepository` 的实例视图），因此 Tauri 的
+/// `instance_repair` 与 CLI 的 `resource repair`（经 [`ensure_launch_ready`]
+/// 传入 profile 的版本）走的是同一份实现。
+pub async fn repair_instance(
+    core: &CoreContext,
+    version_id: &str,
+    progress: Option<&ProgressCb>,
+) -> Result<SetupReport> {
+    // 解析阶段持有 std RwLock 读锁，必须在 await 前释放。
+    let (game_root, resolved) = {
+        let repo = core.game_repository.read().map_err(|_| repo_lock_error())?;
+        let resolved = repo
+            .get_resolved(version_id)
+            .map_err(|e| RmcccError::Other(e.to_string()))?;
+        (repo.game_dir().to_path_buf(), resolved)
+    };
+
+    let items = rmccc_version::completion::build_completion_downloads(
+        &core.http_client,
+        &game_root,
+        &resolved,
+        &core.platform.descriptor,
+    )
+    .await?;
+    let total = items.len();
+    if total == 0 {
+        tracing::info!(version = %version_id, "Instance is complete — nothing to repair");
+        return Ok(SetupReport::default());
+    }
+
+    let total_bytes: u64 = items.iter().filter_map(|i| i.size).sum();
+    if total_bytes > 0 {
+        rmccc_download::check_disk_space(&game_root, total_bytes)?;
+    }
+
+    let items = inject_candidates(core.download_provider.as_ref(), items);
+    emit(
+        progress,
+        ProgressMsg::Stage(format!("补齐缺失文件 ({total} 个)...")),
+    );
+    let tally = FailureTally::default();
+    let handle = core
+        .download_manager
+        .download_batch(items, progress_download_cb(progress, "完整性修复", &tally))
+        .await?;
+    core.download_manager.wait_for_batch(&handle.id).await;
+
+    // 重新扫描仓库，让缺失计数刷新。
+    refresh_repository(core)?;
+
+    emit(
+        progress,
+        ProgressMsg::StageDone(format!("✅ 缺失文件补齐完成 ({total} 个)")),
+    );
+    Ok(SetupReport {
+        total_files: total,
+        failed_files: tally.get(),
+    })
+}
+
+/// 启动前资源完整性检查与自动补齐（对齐 HMCL `checkGameCompletionAsync`）。
+///
+/// [`repair_instance`] 的 profile 视图：用 profile 当前指向的版本做修复。
+pub async fn ensure_launch_ready(
     core: &CoreContext,
     profile: &rmccc_profile::Profile,
     progress: Option<&ProgressCb>,
-) -> Result<bool> {
-    let version = resolve_version(core, &profile.game_version, &profile.game_dir).await?;
-
-    let inject_candidates =
-        |url: &str| -> Vec<String> { core.download_provider.inject_url_with_candidates(url) };
-
-    let mut repaired = false;
-    let version_dir = profile
-        .game_dir
-        .join("versions")
-        .join(&profile.game_version);
-
-    // Check client JAR
-    let jar_path = version_dir.join(format!("{}.jar", profile.game_version));
-    let jar_needs_repair =
-        !jar_path.exists() || std::fs::metadata(&jar_path).map(|m| m.len()).unwrap_or(0) == 0;
-    if jar_needs_repair {
-        if let Some(client_dl) = version.downloads.get("client") {
-            let jar_parent = jar_path.parent().ok_or_else(|| {
-                RmcccError::Other(format!("Invalid jar path: {}", jar_path.display()))
-            })?;
-            std::fs::create_dir_all(jar_parent)?;
-            let candidates = inject_candidates(&client_dl.url);
-            let items = vec![rmccc_download::DownloadItem {
-                url: candidates[0].clone(),
-                dest: jar_path,
-                expected_sha1: Some(client_dl.sha1.clone()),
-                size: Some(client_dl.size),
-                use_cache: true,
-                candidates: candidates[1..].to_vec(),
-            }];
-            emit(progress, ProgressMsg::Stage("修复客户端 JAR...".into()));
-            let handle = core
-                .download_manager
-                .download_batch(items, progress_download_cb(progress, "JAR"))
-                .await?;
-            core.download_manager.wait_for_batch(&handle.id).await;
-            emit(
-                progress,
-                ProgressMsg::StageDone("✅ 客户端 JAR 已修复".into()),
-            );
-            repaired = true;
-        }
-    }
-
-    // Check version JSON
-    let json_path = version_dir.join(format!("{}.json", profile.game_version));
-    if !json_path.exists() {
-        if let Some(ref raw_json) = version.raw_json {
-            let json_parent = json_path.parent().ok_or_else(|| {
-                RmcccError::Other(format!("Invalid json path: {}", json_path.display()))
-            })?;
-            std::fs::create_dir_all(json_parent)?;
-            std::fs::write(&json_path, raw_json)?;
-            emit(
-                progress,
-                ProgressMsg::StageDone("✅ 版本 JSON 已写入".into()),
-            );
-            repaired = true;
-        }
-    }
-
-    // Check asset index
-    let index_path = profile
-        .game_dir
-        .join("assets")
-        .join("indexes")
-        .join(format!("{}.json", version.asset_index.id));
-    if !index_path.exists() {
-        // Re-download the asset index
-        let resp = core
-            .http_client
-            .get(&version.asset_index.url)
-            .send()
-            .await
-            .map_err(|e| RmcccError::Network(e.to_string()))?;
-        let body = resp
-            .bytes()
-            .await
-            .map_err(|e| RmcccError::Network(e.to_string()))?;
-        let index_parent = index_path.parent().ok_or_else(|| {
-            RmcccError::Other(format!("Invalid index path: {}", index_path.display()))
-        })?;
-        std::fs::create_dir_all(index_parent)?;
-        std::fs::write(&index_path, &body)?;
-        emit(
-            progress,
-            ProgressMsg::StageDone(format!(
-                "✅ 资源索引已修复: {}.json",
-                version.asset_index.id
-            )),
-        );
-        repaired = true;
-    }
-
-    // Check library files
-    let libs_dir = profile.game_dir.join("libraries");
-    let lib_items = rmccc_version::libraries::resolve_library_items(&version.libraries, &libs_dir);
-    let missing_libs: Vec<_> = lib_items
-        .into_iter()
-        .filter(|item| !item.dest.exists())
-        .collect();
-    if !missing_libs.is_empty() {
-        let count = missing_libs.len();
-        emit(
-            progress,
-            ProgressMsg::Stage(format!("修复依赖库 ({} 个缺失)...", count)),
-        );
-        let items: Vec<_> = missing_libs
-            .into_iter()
-            .map(|mut item| {
-                let candidates = inject_candidates(&item.url);
-                item.url = candidates[0].clone();
-                item.candidates = candidates[1..].to_vec();
-                item
-            })
-            .collect();
-        let handle = core
-            .download_manager
-            .download_batch(items, progress_download_cb(progress, "依赖库修复"))
-            .await?;
-        core.download_manager.wait_for_batch(&handle.id).await;
-        emit(
-            progress,
-            ProgressMsg::StageDone(format!("✅ 依赖库已修复 ({} 个)", count)),
-        );
-        repaired = true;
-    }
-
-    Ok(repaired)
+) -> Result<SetupReport> {
+    repair_instance(core, &profile.game_version, progress).await
 }
 
-/// Detect Java installation for launch (custom path or auto-detect).
+// ────────────────────────────── Launch ──────────────────────────────
+
+/// 检测启动所需 Java（自定义路径优先，否则自动探测）。
+///
+/// 自定义路径不存在时返回 [`RmcccError::JavaNotFound`]——此前 CLI 检查而
+/// Tauri 只检查"路径形态"，于是填了个错路径仍会走到 spawn 才失败。
 fn detect_launch_java(
+    core: &CoreContext,
     profile: &rmccc_profile::Profile,
     game_version: &rmccc_version::GameVersion,
 ) -> Result<rmccc_launch::JavaInstallation> {
@@ -464,6 +536,9 @@ fn detect_launch_java(
             } else {
                 home.join("bin").join("java")
             };
+            if !bin.exists() {
+                return Err(RmcccError::JavaNotFound);
+            }
             Ok(rmccc_launch::JavaInstallation {
                 path: bin,
                 major_version: required_java,
@@ -471,7 +546,7 @@ fn detect_launch_java(
                 is_64bit: true,
             })
         }
-        None => rmccc_launch::find_java(required_java),
+        None => core.platform.java.find(required_java),
     }
 }
 
@@ -490,126 +565,45 @@ async fn resolve_launch_auth(core: &CoreContext) -> Result<(String, String, Stri
     }
 }
 
-/// 启动前资源完整性检查与自动补齐（对齐 HMCL `checkGameCompletionAsync`）。
+/// 启动游戏并返回已托管进程（命令行生成、native 解压、log4j 提取、环境变量
+/// 注入、进程监控、输出转发全部由 [`rmccc_launch::DefaultLauncher`] 承担）。
 ///
-/// 基于本地仓库解析 launch 视图，扫描 client jar / asset index + objects /
-/// libraries / natives，缺失则经 `download_manager` 补齐（含磁盘空间预检）。
-/// 返回是否发生了修复。
-pub async fn ensure_launch_ready(
-    core: &CoreContext,
-    profile: &rmccc_profile::Profile,
-    progress: Option<&ProgressCb>,
-) -> Result<bool> {
-    let (game_root, resolved, http_client) = {
-        let repo = core
-            .game_repository
-            .read()
-            .map_err(|_| RmcccError::Other("game repository lock poisoned".to_string()))?;
-        let game_root = repo.game_dir().to_path_buf();
-        let resolved = repo
-            .get_resolved(&profile.game_version)
-            .map_err(|e| RmcccError::Other(e.to_string()))?;
-        (game_root, resolved, core.http_client.clone())
-    };
-
-    let missing = rmccc_version::completion::check_completion(&game_root, &resolved);
-    if missing.is_empty() {
-        return Ok(false);
-    }
-
-    let items =
-        rmccc_version::completion::build_completion_downloads(&http_client, &game_root, &resolved)
-            .await?;
-    if items.is_empty() {
-        return Ok(false);
-    }
-
-    let total_bytes: u64 = items.iter().filter_map(|i| i.size).sum();
-    let count = items.len();
-    emit(
-        progress,
-        ProgressMsg::Stage(format!("补齐缺失文件 ({} 个)...", count)),
-    );
-    if total_bytes > 0 {
-        rmccc_download::check_disk_space(&game_root, total_bytes)?;
-    }
-
-    let items: Vec<_> = items
-        .into_iter()
-        .map(|mut item| {
-            let candidates = core.download_provider.inject_url_with_candidates(&item.url);
-            item.url = candidates.first().cloned().unwrap_or(item.url.clone());
-            item.candidates = candidates.into_iter().skip(1).collect();
-            item
-        })
-        .collect();
-
-    let handle = core
-        .download_manager
-        .download_batch(items, progress_download_cb(progress, "完整性修复"))
-        .await?;
-    core.download_manager.wait_for_batch(&handle.id).await;
-
-    // Re-scan the repository so the index reflects the repaired files.
-    core.game_repository
-        .write()
-        .map_err(|_| RmcccError::Other("game repository lock poisoned".to_string()))?
-        .refresh()?;
-
-    emit(
-        progress,
-        ProgressMsg::StageDone(format!("✅ 缺失文件补齐完成 ({} 个)", count)),
-    );
-    Ok(true)
-}
-
-/// CLI 输出监听器：逐行转发游戏输出到回调（HMCL `ProcessListener`）。
-struct CliListener {
-    output: GameOutputCb,
-}
-
-impl rmccc_launch::ProcessListener for CliListener {
-    fn on_log(&self, line: String, _is_stderr: bool) {
-        (self.output)(&line);
-    }
-    fn on_exit(&self, _exit_code: i32, _exit_type: rmccc_launch::ExitType) {}
-}
-
-/// 启动游戏并阻塞直至退出（P1-01 抽取自 CLI `launch_run`）。
-///
-/// 经 [`rmccc_launch::DefaultLauncher`] 编排完整启动流程（命令行生成、native
-/// 解压、log4j 提取、环境变量注入、进程监控），游戏输出经 `output` 回调逐行
-/// 转发。返回游戏进程退出码。启动成功后更新 `last_played`。
+/// **不阻塞**：进程刚起来就返回，呈现层自行决定等不等（CLI 经 exit 信号通道
+/// 等，Tauri 直接返回给前端并由监听器上报退出事件）。启动成功后更新
+/// `last_played`。
 pub async fn launch_game(
     core: &CoreContext,
     profile: &rmccc_profile::Profile,
-    instance_id: &str,
-    output: &GameOutputCb,
+    listener: Arc<dyn ProcessListener>,
     progress: Option<&ProgressCb>,
-) -> Result<i32> {
+) -> Result<Arc<ManagedProcess>> {
     // 本地解析 launch 视图（HMCL resolved.launch，离线可用）。
     let game_version = {
-        let repo = core
-            .game_repository
-            .read()
-            .map_err(|_| RmcccError::Other("game repository lock poisoned".to_string()))?;
-        let resolved = repo
-            .get_resolved(&profile.game_version)
-            .map_err(|e| RmcccError::Other(e.to_string()))?;
-        resolved.launch
+        let repo = core.game_repository.read().map_err(|_| repo_lock_error())?;
+        repo.get_resolved(&profile.game_version)
+            .map_err(|e| RmcccError::Other(e.to_string()))?
+            .launch
     };
 
-    let java_install = detect_launch_java(profile, &game_version)?;
+    let java_install = detect_launch_java(core, profile, &game_version)?;
+    tracing::info!(
+        profile_id = %profile.id,
+        java_version = java_install.major_version,
+        java_path = %java_install.path.display(),
+        "Launching Minecraft"
+    );
     let (username, uuid_str, access_token, user_type) = resolve_launch_auth(core).await?;
     let auth = rmccc_launch::AuthInfo::new(username, uuid_str, access_token, user_type);
-    let options =
-        rmccc_launch::LaunchOptions::from_profile(profile, &core.config, java_install.clone());
-
-    let listener: Arc<dyn rmccc_launch::ProcessListener> = Arc::new(CliListener {
-        output: output.clone(),
-    });
+    let options = rmccc_launch::LaunchOptions::from_profile(
+        profile,
+        &core.config,
+        java_install.clone(),
+        core.platform.clone(),
+    );
 
     let launcher = rmccc_launch::DefaultLauncher::new(
+        // `DefaultLauncher` 的 instance_id 用于定位 `versions/{id}/`（natives 等），
+        // 因此传版本 id 而非 profile id。
         profile.game_version.clone(),
         game_version,
         auth,
@@ -631,25 +625,18 @@ pub async fn launch_game(
         .map_err(|e| RmcccError::Other(e.to_string()))?;
     emit(progress, ProgressMsg::StageDone("游戏已启动。".into()));
 
-    let exit_code = managed.wait_exit().await;
-    emit(progress, ProgressMsg::StageDone("游戏已退出。".into()));
-
-    // ── Update last_played ──
-    if let Ok(Some(ref mut p)) = core.profile_store.get(instance_id) {
-        p.last_played = Some(chrono::Utc::now());
-        if let Err(e) = core.profile_store.save(p) {
-            tracing::warn!(profile_id = %instance_id, error = ?e, "Failed to save last_played");
-        }
+    // last_played 在启动成功处更新（此前 CLI 在 exit 后、Tauri 在 spawn 后各写一遍）。
+    if let Err(e) = core.profile_store.touch(&profile.id) {
+        tracing::warn!(profile_id = %profile.id, error = %e, "Failed to update last_played");
     }
 
-    Ok(exit_code)
+    Ok(managed)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    /// P1-01：resolve_version 在本地 JSON 缺失时回退到 provider（不 panic）。
     #[test]
     fn test_progress_msg_construction() {
         let msg = ProgressMsg::Stage("下载客户端 JAR...".to_string());
@@ -664,5 +651,243 @@ mod tests {
         let cb = noop_progress();
         let cb: Arc<dyn Fn(&ProgressMsg) + Send + Sync> = cb;
         cb(&ProgressMsg::Stage("x".to_string()));
+    }
+
+    #[test]
+    fn test_emit_without_callback_is_noop() {
+        emit(None, ProgressMsg::StageDone("done".into()));
+    }
+
+    #[test]
+    fn test_failure_tally_only_records_final_callback() {
+        let tally = FailureTally::default();
+        // 中间进度：失败数还未定稿，不应被记住。
+        tally.observe(&rmccc_download::DownloadProgress {
+            batch_id: "b".into(),
+            completed_files: 1,
+            total_files: 4,
+            downloaded_bytes: 0,
+            total_bytes: 0,
+            failed_files: 3,
+            current_file: Some("a.jar".into()),
+        });
+        assert_eq!(tally.get(), 0);
+
+        // 最终进度：current_file == None，失败数定稿。
+        tally.observe(&rmccc_download::DownloadProgress {
+            batch_id: "b".into(),
+            completed_files: 4,
+            total_files: 4,
+            downloaded_bytes: 0,
+            total_bytes: 0,
+            failed_files: 2,
+            current_file: None,
+        });
+        assert_eq!(tally.get(), 2);
+    }
+
+    #[test]
+    fn test_setup_report_classification() {
+        assert!(SetupReport::default().is_noop());
+        assert!(SetupReport::default().is_complete());
+
+        let repaired = SetupReport {
+            total_files: 5,
+            failed_files: 0,
+        };
+        assert!(!repaired.is_noop());
+        assert!(repaired.is_complete());
+
+        let partial = SetupReport {
+            total_files: 5,
+            failed_files: 2,
+        };
+        assert!(!partial.is_noop());
+        assert!(!partial.is_complete());
+    }
+
+    #[test]
+    fn test_inject_candidates_without_mirror_keeps_url() {
+        // 无镜像时 `DownloadProvider` 原样返回，候选列表为空（不 panic）。
+        let provider = rmccc_download::provider::MojangDownloadProvider;
+        let items = inject_candidates(
+            &provider,
+            vec![rmccc_download::DownloadItem {
+                url: "https://example.invalid/a.jar".into(),
+                dest: std::path::PathBuf::from("/tmp/a.jar"),
+                expected_sha1: None,
+                size: None,
+                use_cache: false,
+                candidates: vec!["stale".into()],
+            }],
+        );
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].url, "https://example.invalid/a.jar");
+        assert!(items[0].candidates.is_empty());
+    }
+
+    #[test]
+    fn test_write_if_absent_preserves_existing_file() {
+        let dir = std::env::temp_dir().join(format!("rmccc-pipeline-{}", uuid_like()));
+        let path = dir.join("versions").join("1.20.4").join("1.20.4.json");
+
+        write_if_absent(&path, r#"{"id":"1.20.4"}"#).expect("first write");
+        assert_eq!(
+            std::fs::read_to_string(&path).unwrap(),
+            r#"{"id":"1.20.4"}"#
+        );
+
+        // 第二次调用不能覆盖已有内容（patched JSON 必须保留）。
+        write_if_absent(&path, r#"{"id":"patched"}"#).expect("second write");
+        assert_eq!(
+            std::fs::read_to_string(&path).unwrap(),
+            r#"{"id":"1.20.4"}"#
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // ── 编排测试（无网络）：覆盖 GUI / CLI 共用的三条链路 ──
+
+    /// 最小可用版本 JSON：无 client 下载、无依赖库、无资源索引，
+    /// 因此 `install_game` / `repair_instance` 都不会触网。
+    const MINIMAL_VERSION_JSON: &str = r#"{
+        "id": "1.20.4",
+        "type": "release",
+        "mainClass": "net.minecraft.client.main.Main",
+        "assetIndex": { "id": "", "url": "", "sha1": "", "size": 0, "total_size": 0 },
+        "downloads": {},
+        "libraries": [],
+        "javaVersion": null
+    }"#;
+
+    fn test_env(tag: &str) -> (std::path::PathBuf, crate::CoreContext) {
+        let dir = std::env::temp_dir().join(format!("rmccc-{tag}-{}", uuid_like()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("create data dir");
+        let core = crate::CoreContext::new(&dir).expect("CoreContext");
+        (dir, core)
+    }
+
+    fn seed_version(core: &crate::CoreContext, version_id: &str) {
+        let dir = core
+            .config
+            .resolved_game_root()
+            .join("versions")
+            .join(version_id);
+        std::fs::create_dir_all(&dir).expect("version dir");
+        std::fs::write(dir.join(format!("{version_id}.json")), MINIMAL_VERSION_JSON)
+            .expect("version json");
+    }
+
+    fn seed_profile(
+        core: &crate::CoreContext,
+        id: &str,
+        version_id: &str,
+    ) -> rmccc_profile::Profile {
+        let profile = rmccc_profile::Profile {
+            id: id.to_string(),
+            name: format!("test-{id}"),
+            game_version: version_id.to_string(),
+            game_dir: core.config.resolved_game_root(),
+            ..Default::default()
+        };
+        core.profile_store.save(&profile).expect("save profile");
+        profile
+    }
+
+    #[tokio::test]
+    async fn test_install_game_noop_when_version_complete() {
+        let (dir, core) = test_env("install-noop");
+        seed_version(&core, "1.20.4");
+        let profile = seed_profile(&core, "p-install", "1.20.4");
+
+        let report = install_game(&core, &profile, "1.20.4", None)
+            .await
+            .expect("install_game");
+
+        assert!(report.is_complete(), "no failed files expected");
+        assert!(report.is_noop(), "complete version needs no downloads");
+        // 版本 JSON 仍在（不被覆盖）。
+        let json = core
+            .config
+            .resolved_game_root()
+            .join("versions")
+            .join("1.20.4")
+            .join("1.20.4.json");
+        assert!(json.exists());
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn test_repair_instance_noop_when_nothing_downloadable() {
+        let (dir, core) = test_env("repair-noop");
+        seed_version(&core, "1.20.4");
+        refresh_repository(&core).expect("refresh");
+
+        let report = repair_instance(&core, "1.20.4", None)
+            .await
+            .expect("repair_instance");
+
+        assert!(report.is_complete());
+        assert!(report.is_noop());
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn test_ensure_launch_ready_delegates_to_repair() {
+        let (dir, core) = test_env("ensure-ready");
+        seed_version(&core, "1.20.4");
+        refresh_repository(&core).expect("refresh");
+        let profile = seed_profile(&core, "p-ensure", "1.20.4");
+
+        let report = ensure_launch_ready(&core, &profile, None)
+            .await
+            .expect("ensure_launch_ready");
+
+        assert!(report.is_noop());
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_commit_install_points_profile_at_version_and_refreshes_index() {
+        let (dir, core) = test_env("commit-install");
+        seed_version(&core, "1.20.4");
+        let profile = seed_profile(&core, "p-commit", "0.0.0-nonexistent");
+
+        commit_install(&core, "p-commit", "1.20.4").expect("commit_install");
+
+        let updated = core
+            .profile_store
+            .get(&profile.id)
+            .expect("get profile")
+            .expect("profile exists");
+        assert_eq!(updated.game_version, "1.20.4");
+        // 索引已刷新：新版本可被仓库解析。
+        let repo = core.game_repository.read().expect("repo lock");
+        assert!(repo.get_instance_ids().iter().any(|id| id == "1.20.4"));
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_commit_install_rejects_unknown_profile() {
+        let (dir, core) = test_env("commit-missing");
+        let err = commit_install(&core, "nope", "1.20.4").expect_err("must fail");
+        assert!(matches!(err, RmcccError::ProfileNotFound(_)));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 无依赖的唯一后缀（避免引入 uuid 依赖）。
+    fn uuid_like() -> String {
+        use std::time::{SystemTime, UNIX_EPOCH};
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        format!("{}-{}", std::process::id(), nanos)
     }
 }

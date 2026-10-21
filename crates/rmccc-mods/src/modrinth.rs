@@ -76,10 +76,10 @@ impl ModSource for ModrinthSource {
             )));
         }
 
-        let body = resp
-            .text()
-            .await
-            .map_err(|e| RmcccError::Network(e.to_string()))?;
+        let status = resp.status();
+        let body = resp.text().await.map_err(|e| {
+            RmcccError::Network(format!("version body decode failed ({status}): {e:?}"))
+        })?;
 
         let raw: SearchResponse = serde_json::from_str(&body)
             .map_err(|e| RmcccError::Other(format!("Modrinth search parse error: {e}")))?;
@@ -181,10 +181,11 @@ impl ModSource for ModrinthSource {
             )));
         }
 
+        let status = resp.status();
         resp.bytes()
             .await
             .map(|b| b.to_vec())
-            .map_err(|e| RmcccError::Network(e.to_string()))
+            .map_err(|e| RmcccError::Network(format!("mod body decode failed ({status}): {e:?}")))
     }
 }
 

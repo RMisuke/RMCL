@@ -255,8 +255,10 @@ pub async fn spawn_managed(
     response_file: &std::path::Path,
     game_dir: &std::path::Path,
     max_lines: usize,
+    platform: &rmccc_platform::Platform,
 ) -> Result<Arc<ManagedProcess>> {
-    let child = crate::process::spawn_game(java_path, response_file, game_dir, None).await?;
+    let child =
+        crate::process::spawn_game(java_path, response_file, game_dir, None, platform).await?;
     let managed = Arc::new(ManagedProcess::new(profile_id, child, max_lines));
     let _monitor_handle = managed.clone().start_monitors();
     Ok(managed)

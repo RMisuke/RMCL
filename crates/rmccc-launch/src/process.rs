@@ -4,6 +4,7 @@
 //! patterns for argument deduplication and pipeline construction.
 
 use rmccc_error::{Result, RmcccError};
+use rmccc_platform::{Platform, PlatformDescriptor};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
@@ -23,6 +24,7 @@ pub fn build_response_file(
     game_args: &[String],
     main_class: &str,
     game_dir: &Path,
+    platform: &Platform,
 ) -> Result<PathBuf> {
     let file_path = game_dir.join(format!(".launch-args-{}", uuid::Uuid::new_v4()));
 
@@ -40,12 +42,8 @@ pub fn build_response_file(
 
     std::fs::write(&file_path, &content)?;
 
-    // Restrict permissions on Unix
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(&file_path, std::fs::Permissions::from_mode(0o600))?;
-    }
+    // 仅属主可读写（argfile 里有 accessToken）。经平台后端，无裸 cfg。
+    platform.fs.restrict_owner_only(&file_path)?;
 
     tracing::debug!(
         path = %file_path.display(),
@@ -83,6 +81,7 @@ pub async fn spawn_game(
     response_file: &Path,
     game_dir: &Path,
     extra_env: Option<HashMap<String, String>>,
+    platform: &Platform,
 ) -> Result<tokio::process::Child> {
     let mut cmd = tokio::process::Command::new(java_path);
     cmd.arg(format!("@{}", response_file.display()))
@@ -90,9 +89,11 @@ pub async fn spawn_game(
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped());
 
-    // P2-17：Unix 下让游戏进程自成进程组，便于 killpg 统一终止进程树。
-    #[cfg(unix)]
-    cmd.process_group(0);
+    // P2-17：让游戏进程自成进程组，退出时按进程组整体终止（Unix `setpgid`，
+    // Windows 后端为 no-op 待 Job Object）。经平台后端，无裸 cfg。
+    platform
+        .process
+        .configure_child_process_group(cmd.as_std_mut())?;
 
     // Inject environment variables
     if let Some(env) = extra_env {
@@ -428,6 +429,7 @@ impl LaunchArgBuilder {
     /// applicable for the target Java version are silently skipped.
     #[allow(clippy::too_many_arguments)]
     pub fn jvm_args(
+        platform: &PlatformDescriptor,
         classpath: &[PathBuf],
         memory_mb: u32,
         extra_jvm_args: &[String],
@@ -461,7 +463,7 @@ impl LaunchArgBuilder {
         // ── Encoding settings ──
         // Java < 19: sun.stdout/stderr.encoding
         // Java >= 19: stdout/stderr.encoding (sun.* removed in 19)
-        let encoding = default_encoding();
+        let encoding = platform.default_encoding();
         cmd.add_default("-Dfile.encoding=", encoding);
         if jv < 19 {
             cmd.add_default("-Dsun.stdout.encoding=", encoding);
@@ -479,10 +481,9 @@ impl LaunchArgBuilder {
         // ── Minecraft client.jar path ──
         cmd.add_default("-Dminecraft.client.jar=", ""); // caller overrides if needed
 
-        // ── macOS dock settings ──
-        #[cfg(target_os = "macos")]
-        {
-            cmd.add_default("-Xdock:name=", "Minecraft");
+        // ── 平台专属 JVM 参数（macOS `-Xdock:name`；数据来自适配层）──
+        for (key, value) in platform.extra_jvm_args() {
+            cmd.add_default(key, &value.replace("{instance}", "Minecraft"));
         }
 
         // ── GC tuning (Java 8+) ──
@@ -542,7 +543,7 @@ impl LaunchArgBuilder {
         }
 
         // ── Classpath ──
-        let separator = if cfg!(windows) { ";" } else { ":" };
+        let separator = platform.classpath_separator();
         let cp = classpath
             .iter()
             .map(|p| p.display().to_string())
@@ -598,27 +599,6 @@ impl LaunchArgBuilder {
         ];
         args.extend(extra_game_args.iter().cloned());
         args
-    }
-}
-
-/// Get the native charset name for the current platform.
-pub(crate) fn default_encoding() -> &'static str {
-    #[cfg(windows)]
-    {
-        // On Windows, try to detect the system code page
-        "GBK" // fallback
-    }
-    #[cfg(target_os = "macos")]
-    {
-        "UTF-8"
-    }
-    #[cfg(target_os = "linux")]
-    {
-        "UTF-8"
-    }
-    #[cfg(not(any(windows, target_os = "macos", target_os = "linux")))]
-    {
-        "UTF-8"
     }
 }
 
@@ -713,6 +693,7 @@ mod tests {
     #[test]
     fn test_jvm_args_with_dedup() {
         let args = LaunchArgBuilder::jvm_args(
+            &PlatformDescriptor::macos_arm64(),
             &[PathBuf::from("/game/libraries/lib.jar")],
             2048,
             &["-Dfile.encoding=GBK".to_string()], // user override
@@ -754,6 +735,7 @@ mod tests {
     #[test]
     fn test_jvm_args_zero_memory() {
         let args = LaunchArgBuilder::jvm_args(
+            &PlatformDescriptor::macos_arm64(),
             &[PathBuf::from("/game/lib.jar")],
             0, // no memory limit
             &[],
@@ -773,6 +755,7 @@ mod tests {
     #[test]
     fn test_jvm_args_java_version_8() {
         let args = LaunchArgBuilder::jvm_args(
+            &PlatformDescriptor::macos_arm64(),
             &[],
             1024,
             &[],
@@ -794,6 +777,7 @@ mod tests {
     #[test]
     fn test_jvm_args_java_version_16() {
         let args = LaunchArgBuilder::jvm_args(
+            &PlatformDescriptor::macos_arm64(),
             &[],
             2048,
             &[],
@@ -889,11 +873,13 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("rmcl-test-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&dir).unwrap();
 
+        let platform = Platform::current();
         let result = build_response_file(
             &["-Xmx2G".to_string(), "-Dfoo=bar".to_string()],
             &["--username".to_string(), "Steve".to_string()],
             "net.minecraft.client.main.Main",
             &dir,
+            &platform,
         );
         assert!(result.is_ok());
         let path = result.unwrap();
@@ -910,11 +896,13 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("rmcl-test-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&dir).unwrap();
 
+        let platform = Platform::current();
         let path = build_response_file(
             &["-Xmx2G".to_string()],
             &["--accessToken".to_string(), "SECRET".to_string()],
             "net.minecraft.client.main.Main",
             &dir,
+            &platform,
         )
         .unwrap();
         assert!(path.exists());

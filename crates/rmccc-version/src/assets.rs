@@ -31,6 +31,12 @@ pub async fn resolve_asset_items(
     asset_index: &super::types::AssetIndex,
     assets_dir: &Path,
 ) -> Result<Vec<DownloadItem>> {
+    // 没有资源索引（无 `assetIndex` 的旧版本 / 精简 manifest）时无事可做，
+    // 不要为一个空 URL 发请求（那只会得到一条难以理解的网络错误）。
+    if asset_index.id.is_empty() || asset_index.url.is_empty() {
+        return Ok(Vec::new());
+    }
+
     // Download the asset index JSON
     let resp = client
         .get(&asset_index.url)

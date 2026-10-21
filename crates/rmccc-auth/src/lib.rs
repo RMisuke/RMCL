@@ -1,5 +1,7 @@
 //! Authentication module: Microsoft OAuth2, offline auth, and encrypted storage.
 
+#![allow(clippy::double_must_use)] // 工具链 1.99.1 新 lint：async_trait 宏生成的 #[must_use] 与 Future/Result 重叠，非业务逻辑
+
 pub mod account;
 pub mod account_id;
 pub mod auth_info;
