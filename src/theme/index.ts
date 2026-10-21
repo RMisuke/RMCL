@@ -37,6 +37,10 @@ export type ThemeMode = "light" | "dark";
 let currentPreference: string | null = null;
 let systemMedia: MediaQueryList | null = null;
 let modeChangeListener: ((mode: ThemeMode) => void) | null = null;
+/// Last applied tokens, so the plugin UI bridge can hand the same palette to
+/// isolated frames without re-reading the backend.
+let currentTokens: ThemeTokens | null = null;
+const tokenListeners = new Set<(tokens: ThemeTokens) => void>();
 
 function isDark(hex: string): boolean {
   const value = hex.replace("#", "");
@@ -103,6 +107,14 @@ export function applyThemeTokens(tokens: ThemeTokens): ThemeMode {
   }
 
   root.dataset.themeMode = mode;
+  currentTokens = tokens;
+  for (const listener of tokenListeners) {
+    try {
+      listener(tokens);
+    } catch (e) {
+      console.warn("theme: token listener failed", e);
+    }
+  }
   if (modeChangeListener) modeChangeListener(mode);
   return mode;
 }
@@ -142,6 +154,17 @@ export async function applyThemePreference(
 
 export function getThemePreference(): string | null {
   return currentPreference;
+}
+
+/** The tokens currently applied to the shell (null before the first apply). */
+export function currentThemeTokens(): ThemeTokens | null {
+  return currentTokens;
+}
+
+/** Subscribe to token changes; returns an unsubscribe function. */
+export function onThemeTokens(listener: (tokens: ThemeTokens) => void): () => void {
+  tokenListeners.add(listener);
+  return () => tokenListeners.delete(listener);
 }
 
 /** Subscribe to effective-mode changes (used by the title bar / status UI). */

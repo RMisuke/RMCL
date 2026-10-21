@@ -4,7 +4,7 @@
 //!
 //! `tauri::test` 的 mock 运行时会把整条命令链泛型化到 `MockRuntime`，而
 //! `AppState` 持有 `tauri::AppHandle`（默认 Wry 运行时）——要用它的前提是把
-//! **74 个命令**全部改成 `fn<R: Runtime>(state: State<'_, AppState<R>>, app: AppHandle<R>, ..)`。
+//! **75 个命令**全部改成 `fn<R: Runtime>(state: State<'_, AppState<R>>, app: AppHandle<R>, ..)`。
 //! 那是比本切片大得多的改动，收益却不比下面这层高多少。
 //!
 //! 因此这里测的是**契约本身**，也就是命令体真正依赖的三件事：
@@ -133,7 +133,7 @@ fn ipc_registry_is_covered_by_the_frontend_api() {
 #[test]
 fn ipc_command_count_is_stable() {
     // 新增命令时这条会失败——提醒同时更新 bindings.rs / api.ts / 本文件。
-    assert_eq!(crate::handlers::IPC_COMMANDS.len(), 74);
+    assert_eq!(crate::handlers::IPC_COMMANDS.len(), 75);
 }
 
 // ────────────────────────── 2. 错误码契约 ──────────────────────────
@@ -783,6 +783,76 @@ fn frontend_log_rejects_oversized_payloads() {
         crate::commands::ui::frontend_log("error".into(), too_long),
         ErrorCode::ValidationError,
     );
+}
+
+// ────────────────────────── 10. 隔离插件 UI（Phase 4，ADR-006）──────────────────────────
+
+#[test]
+fn plugin_ui_bridge_accepts_a_well_formed_request() {
+    let (req, method) = crate::commands::plugin_ui::prepare_invocation(
+        "dev.rmccc.card",
+        r#"{"v":1,"id":"r1","method":"instances.list"}"#,
+    )
+    .unwrap();
+    assert_eq!(req.id, "r1");
+    assert_eq!(method.capability, Some("instance.read"));
+}
+
+#[test]
+fn plugin_ui_bridge_rejects_protocol_and_shape_errors() {
+    use rmccc_core::rmccc_plugin::ui::BridgeErrorCode;
+    let cases = [
+        // 版本不符
+        (
+            r#"{"v":2,"id":"r1","method":"host.info"}"#,
+            BridgeErrorCode::ProtocolVersion,
+        ),
+        // 未知方法
+        (
+            r#"{"v":1,"id":"r2","method":"fs.read"}"#,
+            BridgeErrorCode::UnsupportedMethod,
+        ),
+        // 形状非法（缺 id）
+        (
+            r#"{"v":1,"method":"host.info"}"#,
+            BridgeErrorCode::Validation,
+        ),
+        // 请求 ID 非法
+        (
+            r#"{"v":1,"id":"bad id","method":"host.info"}"#,
+            BridgeErrorCode::Validation,
+        ),
+        // 多余字段（deny_unknown_fields）
+        (
+            r#"{"v":1,"id":"r3","method":"host.info","x":1}"#,
+            BridgeErrorCode::Validation,
+        ),
+    ];
+    for (raw, expected) in cases {
+        let err =
+            crate::commands::plugin_ui::prepare_invocation("dev.rmccc.card", raw).unwrap_err();
+        assert_eq!(err.code, expected, "raw: {raw}");
+    }
+}
+
+#[test]
+fn plugin_ui_bridge_rejects_invalid_plugin_ids() {
+    use rmccc_core::rmccc_plugin::ui::BridgeErrorCode;
+    let err = crate::commands::plugin_ui::prepare_invocation(
+        "../etc",
+        r#"{"v":1,"id":"r4","method":"host.info"}"#,
+    )
+    .unwrap_err();
+    assert_eq!(err.code, BridgeErrorCode::Validation);
+}
+
+#[test]
+fn plugin_ui_bridge_enforces_the_request_size_cap() {
+    use rmccc_core::rmccc_plugin::ui::BridgeErrorCode;
+    let padding = "x".repeat(64 * 1024);
+    let raw = format!(r#"{{"v":1,"id":"r5","method":"host.info","params":{{"p":"{padding}"}}}}"#);
+    let err = crate::commands::plugin_ui::prepare_invocation("dev.rmccc.card", &raw).unwrap_err();
+    assert_eq!(err.code, BridgeErrorCode::TooLarge);
 }
 
 // ────────────────────────── 测试辅助 ──────────────────────────

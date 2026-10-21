@@ -90,15 +90,36 @@ pub async fn dashboard_get_theme_tokens(
     key: String,
 ) -> Result<ThemeTokens, IpcError> {
     let core = state.core.read().await;
-    match key.as_str() {
-        "builtin:dark" | "" => Ok(builtin_dark()),
+    theme_tokens_for(&core, &key, "dark")
+}
+
+/// 把主题 key 解析为令牌（宿主唯一真相，Phase 3 命令与隔离 UI 桥共用）。
+///
+/// `key` 为空、`system` 或未知值时，按 `fallback_mode`（`light`/`dark`）回退到内置主题；
+/// `fallback_mode` 来自 WebView 的 `prefers-color-scheme`，因为"跟随系统"只有渲染侧知道。
+pub(crate) fn theme_tokens_for(
+    core: &rmccc_core::CoreContext,
+    key: &str,
+    fallback_mode: &str,
+) -> Result<ThemeTokens, IpcError> {
+    match key {
+        "builtin:dark" => Ok(builtin_dark()),
         "builtin:light" => Ok(builtin_light()),
+        "" | "system" => Ok(if fallback_mode == "light" {
+            builtin_light()
+        } else {
+            builtin_dark()
+        }),
         _ => {
             let contributions = core.plugin_manager.contributions();
             let Some(view) = contributions.themes.iter().find(|t| t.key == key) else {
                 // 未知主题回退到安全内置主题（ADR-005 决策 7）。
-                tracing::warn!(%key, "unknown theme key, falling back to builtin dark");
-                return Ok(builtin_dark());
+                tracing::warn!(%key, "unknown theme key, falling back to the built-in theme");
+                return Ok(if fallback_mode == "light" {
+                    builtin_light()
+                } else {
+                    builtin_dark()
+                });
             };
             let Some(dir) = core.plugin_manager.installed_dir(&view.plugin_id) else {
                 return Ok(builtin_dark());

@@ -2089,3 +2089,65 @@ select.settings-input option {
   gap: 6px;
   flex-shrink: 0;
 }
+
+/* ── Isolated plugin UI frame (Phase 4, ADR-006) ── */
+
+.plugin-frame {
+  position: relative;
+  display: flex;
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
+  border-radius: 12px;
+  background: var(--surface-card);
+}
+
+.plugin-frame-body {
+  flex: 1;
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  border: 0;
+  background: transparent;
+}
+
+.plugin-frame-body.is-hidden {
+  visibility: hidden;
+}
+
+.plugin-frame-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 16px;
+  text-align: center;
+  font-size: 12px;
+  color: var(--text-secondary);
+  background: color-mix(in srgb, var(--surface-card) 92%, transparent);
+}
+
+.plugin-frame-overlay-error {
+  color: var(--color-red);
+}
+
+.plugin-frame-error-title {
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.plugin-frame-error-detail {
+  font: 11px/1.6 ui-monospace, Menlo, monospace;
+  max-width: 90%;
+  word-break: break-word;
+}
+
+.plugin-frame-error-hint {
+  font-size: 11px;
+  color: var(--text-secondary);
+}

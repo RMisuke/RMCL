@@ -17,6 +17,10 @@ pub struct AppState {
     /// in IPC commands without holding a read lock.
     pub http_client: reqwest::Client,
 
+    /// HTTP client for plugin `network.request` (ADR-006): redirects disabled so a
+    /// 30x cannot escape the declared host allowlist, short timeout, no cookies.
+    pub ui_http_client: reqwest::Client,
+
     /// Tauri app handle for event emission.
     pub app_handle: tauri::AppHandle,
 
@@ -31,10 +35,17 @@ impl AppState {
     ) -> rmccc_error::Result<Self> {
         let core = rmccc_core::CoreContext::new(data_dir)?;
         let http_client = core.http_client.clone();
+        let ui_http_client = reqwest::Client::builder()
+            .redirect(reqwest::redirect::Policy::none())
+            .timeout(std::time::Duration::from_secs(30))
+            .user_agent(concat!("RMCCC/", env!("CARGO_PKG_VERSION"), " (plugin-ui)"))
+            .build()
+            .unwrap_or_else(|_| reqwest::Client::new());
 
         Ok(Self {
             core: Arc::new(RwLock::new(core)),
             http_client,
+            ui_http_client,
             app_handle,
             running_games: Arc::new(dashmap::DashMap::new()),
         })

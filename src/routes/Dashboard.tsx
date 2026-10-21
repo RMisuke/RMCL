@@ -24,6 +24,7 @@ import {
   type WidgetInstance,
 } from "../ipc/api";
 import { showToast } from "../components/Toast";
+import { PluginFrame } from "../plugin-ui/PluginFrame";
 import { EVENTS } from "../ipc/events";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { t } from "../i18n";
@@ -900,6 +901,18 @@ const Dashboard: Component = () => {
             (d) => d.pluginId === w.pluginId && d.widgetId === w.widgetId
           );
           if (descriptor) {
+            // Phase 4：声明了 entry.ui 的插件跑在隔离 iframe 里（ADR-006）；
+            // 其余插件仍是宿主绘制的声明式卡片。
+            if (descriptor.uiUrl) {
+              return (
+                <PluginFrame
+                  pluginId={w.pluginId}
+                  cardId={w.widgetId.slice("dashboard-card:".length)}
+                  title={descriptor.displayName}
+                  uiUrl={descriptor.uiUrl}
+                />
+              );
+            }
             return <PluginDashCard widget={w} descriptor={descriptor} />;
           }
         }

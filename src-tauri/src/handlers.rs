@@ -77,6 +77,7 @@ pub const IPC_COMMANDS: &[&str] = &[
     "plugin_config_reset",
     "plugin_capabilities",
     "plugin_contributions",
+    "plugin_ui_invoke",
     "dashboard_get_layout",
     "dashboard_save_layout",
     "dashboard_reset_layout",
@@ -175,6 +176,8 @@ pub fn invoke_handlers() -> impl Fn(tauri::ipc::Invoke<tauri::Wry>) -> bool + Se
         commands::plugin::plugin_config_reset,
         commands::plugin::plugin_capabilities,
         commands::plugin::plugin_contributions,
+        // ── isolated plugin UI (Phase 4, ADR-006) ──
+        commands::plugin_ui::plugin_ui_invoke,
         // ── dashboard (Phase 3) ──
         commands::dashboard::dashboard_get_layout,
         commands::dashboard::dashboard_save_layout,

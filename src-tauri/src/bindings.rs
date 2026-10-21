@@ -92,6 +92,11 @@ pub fn generate_types() -> Result<String, String> {
         ts::<rmccc_core::rmccc_dashboard::ThemeInfo>()?,
         ts::<rmccc_core::rmccc_dashboard::ThemeTokens>()?,
         ts::<rmccc_core::rmccc_dashboard::ThemePreference>()?,
+        // ── Isolated plugin UI (Phase 4, ADR-006) ──
+        ts::<rmccc_core::rmccc_plugin::ui::BridgeRequest>()?,
+        ts::<rmccc_core::rmccc_plugin::ui::BridgeErrorCode>()?,
+        ts::<crate::commands::plugin_ui::BridgeReply>()?,
+        ts::<crate::commands::plugin_ui::BridgeApiError>()?,
     ];
 
     for t in &types {

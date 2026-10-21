@@ -43,6 +43,7 @@ export type {
   ThemeInfo,
   ThemeTokens,
   WidgetInstance,
+  BridgeReply,
 } from "./types";
 
 import type {
@@ -80,6 +81,7 @@ import type {
   ThemeInfo,
   ThemeTokens,
   WidgetInstance,
+  BridgeReply,
 } from "./types";
 
 // Input DTOs: partial updates. The fields come from the ts-rs generated types
@@ -297,3 +299,16 @@ export const reportFrontendMessage = (
   message: string,
   level: "trace" | "debug" | "info" | "warn" | "error" = "error"
 ) => safeInvoke<null>("frontend_log", { level, message });
+
+// ── Isolated plugin UI（Phase 4，ADR-006）──
+
+export const pluginUi = {
+  /**
+   * 把 iframe 的**原始**消息转发给宿主桥。
+   *
+   * 传原始字符串而不是解析后的对象：Rust 侧会重新解析并校验协议（大小/形状/版本/方法），
+   * 前端只做来源与配额检查，不参与授权。
+   */
+  invoke: (pluginId: string, request: string) =>
+    safeInvoke<BridgeReply>("plugin_ui_invoke", { pluginId, request }),
+};

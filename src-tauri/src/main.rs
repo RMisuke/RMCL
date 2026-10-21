@@ -122,6 +122,11 @@ fn main() {
     }
 
     let app = tauri::Builder::default()
+        // 隔离插件 UI 的独立源（ADR-006）：与 `tauri://localhost` 不同 scheme+host，
+        // iframe 因此拿不到宿主 DOM，也拿不到注入的 Tauri API。
+        .register_uri_scheme_protocol(rmccc_core::rmccc_plugin::ui::UI_SCHEME, |ctx, request| {
+            commands::plugin_ui::serve_asset(ctx.app_handle(), &request)
+        })
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
