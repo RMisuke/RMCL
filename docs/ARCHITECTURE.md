@@ -1921,3 +1921,71 @@ WebView 收到空 asset map，`index.html` 与模块脚本全 404。
 
 排障开关：`RMCCC_WEBVIEW_PROBE=1` 运行主可执行时，4s 后把 WebView 实际加载的 URL、
 `#root` 子节点数、脚本/样式数量写进日志并画在页面上（正常启动无副作用）。
+
+## 23. 隔离 UI 扩展与 SDK（Phase 4）
+
+第三方 UI 不允许在主窗口的 JS 环境里执行（同环境即可拿到全部 Tauri API，指南 §6.2）。
+Phase 4 的边界是三层叠加，任何一层失效都还有下一层：
+
+| 层 | 实现 | 保证 |
+|----|------|------|
+| **独立源** | `<iframe sandbox src="rmcccplugin://<pluginId>/ui/…">`；`src-tauri` 注册该 URI 方案，只服务插件安装目录 `ui/` 内的白名单文件 | 与主窗口（`tauri://localhost`）不同源：无宿主 DOM、无 `__TAURI_INTERNALS__` |
+| **CSP** | HTML 响应头：`default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src 'none'; form-action 'none'; base-uri 'none'; object-src 'none'` | 不能加载远程脚本/样式，**不能自己发网络请求**（只能走桥） |
+| **逐条授权** | `plugin_ui_invoke` 每条消息重新 `ensure_enabled` + `authorize`；`network.request` 以目标 host 为作用域 | 撤销能力后下一条消息立即被拒 |
+
+### 23.1 协议（UI API v1）
+
+`postMessage` 传 **JSON 字符串**（不是对象）：宿主可以对长度、形状、版本一次校验。
+
+```text
+frame → host   { v:1, type:"ready" }
+host  → frame  { v:1, type:"init", pluginId, cardId?, theme, limits }
+frame → host   { v:1, id, method, params? }
+host  → frame  { v:1, id, ok:true, result } | { v:1, id, ok:false, error:{ code, message, retryable } }
+host  → frame  { v:1, type:"theme", theme } / { v:1, type:"revoke", capability }
+```
+
+| method | 能力 | 说明 |
+|--------|------|------|
+| `host.info` | — | `uiApiVersion` / `appVersion` / `pluginId` / `cardId` / `platform` |
+| `theme.get` | — | 当前生效令牌（shell 直接应答：只有它知道"跟随系统"的结果） |
+| `settings.get` | `settings.read` | 语言、主题偏好、默认内存（无路径/凭据） |
+| `instances.list` | `instance.read` | 实例概要（id/name/version/loader/memory/lastPlayed） |
+| `network.request` | `network.request` + 声明 host | 宿主 HTTP client：GET/POST、无重定向、2 MiB、30 s |
+
+超时 5–30 s（按方法），请求 ≤64 KiB，响应 ≤512 KiB，同插件并发 ≤8。
+错误码是桥自己的封闭枚举（12 项），不复用应用内 `ErrorCode`——线上契约要稳定。
+
+### 23.2 前端容器
+
+`src/plugin-ui/bridge.ts`（宿主侧传输层，**不做授权**）+ `PluginFrame.tsx`（三态容器）：
+
+- 只接受 `event.source === iframe.contentWindow` 的消息；origin 必须是 `null`（sandbox 不透明源）
+  或 `rmcccplugin://`；
+- 非字符串、超长、缺 `id/method` 的消息丢弃并记日志；
+- 请求超时/卡片卸载时清理计时器并回 `timeout`/`cancelled`；
+- `init` 到达才算 ready；8 s 未 ready 显示错误态（插件抛异常时的兜底）。
+
+`WidgetDescriptor.ui_url` 决定渲染路径：有 `uiUrl` → iframe；否则宿主绘制的声明式卡片。
+
+### 23.3 SDK 与工具
+
+```text
+plugin-sdk/
+├── packages/plugin-api/    # 线协议类型 + 方法表（@rmccc/plugin-api）
+├── packages/plugin-ui/     # 运行时 client（@rmccc/plugin-ui，纯 ESM，可 vendored）
+├── templates/dashboard-card/
+├── scripts/cli.mjs         # validate / pack（pack 调 rmcli，与安装器同规则）
+├── test/                   # schema ↔ Rust ↔ SDK 三处方法表/错误码必须一致
+└── docs/                   # getting-started / api-reference / security / publishing
+```
+
+根 `package.json` 暴露 `pnpm plugin:validate` / `pnpm plugin:pack` / `pnpm sdk:test`。
+
+### 23.4 平台与遗留
+
+- **Windows/Linux**：WebView2 / WebKitGTK 对自定义方案与 CSP 的行为未实测，
+  隔离 UI 的跨平台一致性标记 **deferred（release-blocked）**，不得宣称可用。
+- **页面容器**：`settingsPages` 已经带 `uiUrl`，但 Settings 里的 iframe 路由留到后续切片；
+  当前只在 Dashboard 卡片渲染隔离 UI。
+- **不是进程隔离**：iframe 与宿主同 WebView 进程；逻辑插件的进程/WASM 运行时是 Phase 5。

@@ -276,6 +276,38 @@
     严格 clippy ✅、`pnpm typecheck` ✅、`pnpm build` ✅。
   - 体积：GUI 未剥离 11.39 MiB / 手动 strip **7.79 MiB**（ADR-011 仍通过）。
 
+- **Phase 4 隔离 UI 扩展与 SDK（2026-10-21）—— 4.1–4.5 完成**
+  - **ADR-006 accepted**：容器 = 主窗口内 `<iframe sandbox src="rmcccplugin://<id>/…">`（独立源，
+    不是独立 WebView：卡片要进网格）；协议 = 版本化 postMessage（`UI_API_VERSION = 1`）；
+    资源 = 自定义 URI 方案只服务 `ui/` 白名单；授权 = 每条消息重新判定。
+  - **新增 `crates/rmccc-plugin/src/ui.rs`**：方法表（`host.info` / `theme.get` / `settings.get` /
+    `instances.list` / `network.request`，各自能力+超时）、12 个线上错误码、请求解析
+    （≤64 KiB/形状/版本/方法/ID）、资源白名单、严格 CSP（`connect-src 'none'`）。16 项单测。
+  - **包与 Manifest 开放 UI**：`ui/` 目录与 `entry.ui` 从"拒绝"改为"校验后允许"（必须位于 `ui/`、
+    `.html`、文件存在、且与 `dashboardCards`/`settingsPages` 互相印证）；`logic/` 仍拒绝。
+  - **宿主桥 `plugin_ui_invoke`（注册表 74→75）**：接收 iframe 的**原始** JSON 重新解析，
+    逐条 `ensure_enabled` + `authorize`（`network.request` 以目标 host 为作用域），
+    返回带线上错误码的 `BridgeReply`；`network.request` 用独立 HTTP client（禁重定向、30 s、2 MiB）。
+  - **`rmcccplugin://` 方案处理器**：只服务该插件 `<install>/ui/` 内白名单文件，
+    HTML 带 CSP 与 `nosniff`；未启用/无 `dashboard.cards`·`ui.pages` 一律 403。
+  - **前端**：`src/plugin-ui/bridge.ts`（source/origin/大小/并发/超时/错误转发）+ `PluginFrame.tsx`
+    （加载/错误/就绪三态、8 s 未 ready 判失败、主题变更推送）；`WidgetDescriptor.ui_url` 驱动
+    Dashboard 自动选择 iframe 或声明式卡片。
+  - **SDK `plugin-sdk/`**：`@rmccc/plugin-api`（线协议类型 + 方法表）、`@rmccc/plugin-ui`
+    （运行时 client，纯 ESM/JSDoc）、`templates/dashboard-card`、`scripts/cli.mjs`
+    （`validate`/`pack`，与安装器同规则）、`docs/`（入门/API/安全/发布）、
+    **跨工件契约测试**（schema ↔ Rust ↔ SDK 的方法表与错误码必须一致）。
+  - **样例**：`examples/plugins/server-dashboard` 升级为隔离 UI 卡片并通过桥读取实例/设置；
+    同时在真实 `.app` 中验证了"未授权 → 拒绝错误态 → 授权 → 正常数据"的完整链路。
+  - **顺手修掉 Phase 2 的一个权限漏洞**：升级新增低风险能力时既不在 granted 也不在 pending
+    （插件能启用但永远拿不到），`pending` 已改为"所有已声明未授予"，升级仍不自动授权。
+  - 门禁：`cargo test --workspace` **525 passed / 0 failed**、`fmt`/`clippy --all-targets -D warnings`/
+    严格 clippy ✅、`pnpm typecheck` ✅、`pnpm build` ✅（JS 170.21 kB / gzip 49.59 kB；
+    CSS 42.15 kB / gzip 8.71 kB）、`pnpm sdk:test` 4 项 ✅。
+  - 体积：GUI 未剥离 11.53 MiB / 手动 strip **7.85 MiB**（ADR-011 仍通过）。
+  - 遗留（deferred）：Windows/Linux 隔离 UI 行为（release-blocked）、插件页面（settingsPages）的
+    iframe 路由、`plugin:dev` 热更新（与"不信任任意路径"冲突）、前端组件测试仍为 0。
+
 **2026-10-20（第 7 轮）**：产出**全量架构与审计文档** [`AUDIT_2026-10-20.md`](AUDIT_2026-10-20.md)，
 并修正本文档与 `ARCHITECTURE.md`、`DEVELOPMENT_PLAN.md` 中过期的数字。
 
@@ -454,12 +486,12 @@ Game repository refreshed game_dir=.../instances instances=1        ← 修复 1
 | 编译 | `cargo check --workspace --all-targets` **通过**；clippy 无 warning |
 | 前端类型 | `pnpm typecheck` **通过** |
 | CI lint 三门禁 | `cargo fmt --check` / `clippy --all-targets -D warnings` / `clippy --lib --bins -D clippy::panic -D clippy::unwrap_used` **全部本地通过** |
-| 测试 | **497 passed / 0 failed**（2026-10-21 全量复跑；插件 74 项 + Dashboard 17 项 + bundle 校验 6 项） |
+| 测试 | **525 passed / 0 failed**（2026-10-21 全量复跑；插件 98 项 + Dashboard 17 项 + SDK 契约 4 项） |
 | 版本控制 | HEAD = `80887ce`；Phase 1/2 变更**尚未提交**（80+ 路径，待用户决定提交粒度） |
-| 发布体积 | GUI 未剥离 11.39 MiB / 手动 strip **7.79 MiB**；CLI 手动 strip **4.48 MiB**（ADR-011：stripped < 10 MiB ✅；`strip = true` 仍失效） |
-| 代码规模 | Rust 181 文件 / **43,070 行**；前端 20 文件 / **6,589 行** + `app.css` 2,091 行（详见 [`AUDIT_2026-10-20.md`](AUDIT_2026-10-20.md)） |
+| 发布体积 | GUI 未剥离 11.53 MiB / 手动 strip **7.85 MiB**；CLI 手动 strip **4.48 MiB**（ADR-011：stripped < 10 MiB ✅；`strip = true` 仍失效） |
+| 代码规模 | Rust 183 文件 / **44,584 行**；前端 22 文件 / **7,105 行**；SDK 19 文件 / **1,306 行**（详见 [`AUDIT_2026-10-20.md`](AUDIT_2026-10-20.md)） |
 | 文档同步 | `ARCHITECTURE.md` / `AUDIT` / `roadmap` 已按 Phase 1/2 实现回填；ADR-002/003/004/011 accepted |
-| 阶段判断 | **Phase 0 / 0.5 / 1 / 2 完成；Phase 3.1–3.5 完成**；下一步 Phase 4（隔离 UI + SDK，先建 ADR-006） |
+| 阶段判断 | **Phase 0 / 0.5 / 1 / 2 / 3 完成；Phase 4.1–4.5 完成**；下一步 Phase 5（逻辑运行时，先建 ADR-007） |
 
 **最重要的三个判断**：
 

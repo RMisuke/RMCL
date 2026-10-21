@@ -1,7 +1,9 @@
 # Phase 4 — 隔离 UI 扩展与 SDK
 
-> **对应指南**：§6.2 阶段 B、§9.6、§13，§17 Phase 4。**状态**：pending。
-> **前置**：Phase 2 协议 + Phase 3 卡片宿主。**ADR-006**（隔离容器 + 消息桥）须在实现前 accepted。
+> **对应指南**：§6.2 阶段 B、§9.6、§13，§17 Phase 4。**状态**：4.1–4.5 完成（2026-10-21）。
+> **前置**：Phase 2 协议 + Phase 3 卡片宿主。**ADR-006 accepted（2026-10-21）**。
+>
+> 完成情况见文末 §8；验收项逐条对照 §4。
 
 ## 1. 目标
 
@@ -60,3 +62,28 @@
 
 - `ARCHITECTURE.md` 增"隔离 UI + SDK"章节；`plugin-sdk/` 目录建立。
 - `AUDIT` §1.3"UI 扩展能力"更新；`PROJECT_STATUS` 回填。
+
+## 8. 完成记录（2026-10-21）
+
+| 切片 | 产出 | 证据 |
+|------|------|------|
+| 4.1 ADR-006 | [`ADR-006`](../adr/ADR-006-isolated-ui-container-and-host-bridge.md) accepted；[`schemas/plugin-ui-bridge.schema.json`](../../schemas/plugin-ui-bridge.schema.json)（`$defs` 12 个，jsonschema 校验通过） | ADR 索引已更新 |
+| 4.2 Host Bridge | `crates/rmccc-plugin/src/ui.rs`：`UI_API_VERSION=1`、方法表（能力+超时）、`BridgeErrorCode` 12 项、`parse_request`（大小/形状/版本/方法/ID）、资源白名单、CSP；`plugin_ui_invoke` 每条消息重新 `ensure_enabled` + `authorize`（`network.request` 带 host 作用域） | 16 项 ui.rs 单测 + 4 项 IPC 契约测试 |
+| 4.3 隔离容器 | `rmcccplugin://<pluginId>/` 自定义 URI 方案（`serve_asset`：只服务 `ui/`、`X-Content-Type-Options`、HTML 带 CSP、403/404 面）；前端 `src/plugin-ui/{bridge.ts,PluginFrame.tsx}`（source/origin/大小/并发/超时校验，iframe `sandbox="allow-scripts allow-same-origin"`） | 真实 `.app` 中示例卡片渲染成功（见 §4.5） |
+| 4.4 SDK | `plugin-sdk/`：`@rmccc/plugin-api`（线协议类型）、`@rmccc/plugin-ui`（运行时 client，纯 ESM）、`templates/dashboard-card`、`scripts/cli.mjs`（validate/pack）、`docs/`（入门/API/安全/发布）、跨工件契约测试（schema ↔ Rust ↔ SDK） | `pnpm sdk:test` 4 项通过；`cli.mjs validate` 对两个官方样例通过 |
+| 4.5 样例与端到端 | `examples/plugins/server-dashboard` 升级为隔离 UI 卡片（`ui/` + `entry.ui`，走桥读取实例/设置，`network.request` 需授权） | 打包→安装→授权→启用→在 Dashboard 渲染出真实数据（`测试0 · 26.3-fabric-0.20.1 · fabric`，badge `ready`）；撤销能力后请求被拒 |
+
+### 验收对照
+
+- [x] 外部样例可独立构建/打包/安装；无法越权调 Tauri IPC 或文件 API
+      （独立源 + 无 `__TAURI_INTERNALS__` + `connect-src 'none'` + 只服务 `ui/`）。
+- [x] Host Bridge 消息 schema/超时/取消/错误映射有测试（`ui.rs` 16 项 + `ipc_tests` 4 项 + SDK 契约测试 4 项）。
+- [x] 卡片 error boundary + 权限拒绝态 + unsupported 态齐备（`PluginFrame` 三态 + `BridgeErrorCode`）。
+- [x] CSP 收紧；远程脚本被拒（`script-src 'self'` / `connect-src 'none'`）。
+- [x] ADR-006 accepted；`pnpm typecheck` / `pnpm build` 通过；Windows UI 一致性 = deferred。
+
+### 意外收获（Phase 2 遗留缺陷）
+
+升级新增**低风险**能力时，它既不在 `granted` 也不在 `pending`：插件能启用但永远拿不到该能力
+（隔离 UI 的 `instances.list` 就是这样被锁死）。已修正 `PermissionStore::pending` 为
+"所有已声明未授予"，并补了升级测试；升级仍然**不自动授予任何权限**。
