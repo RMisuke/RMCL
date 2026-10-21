@@ -23,11 +23,20 @@ export type {
   LocaleInfo,
   IpcError,
   ErrorCode,
+  ResolvedInstanceSettings,
   JavaInfo,
   InstanceInfo,
   MissingFileInfo,
   InstancePaths,
   DownloadProgressPayload,
+  PluginList,
+  PluginDetail,
+  InstallReport,
+  PluginSummary,
+  PluginConfigView,
+  PluginConfig,
+  CapabilityInfo,
+  PluginContributions,
 } from "./types";
 
 import type {
@@ -37,6 +46,8 @@ import type {
   AccountMetadata,
   Profile,
   ModVersion,
+  ModInfo,
+  ModSearchResult,
   VersionInfo,
   AppConfig,
   UserSettings,
@@ -48,6 +59,15 @@ import type {
   InstancePaths,
   ModList,
   LoaderVersion,
+  ResolvedInstanceSettings,
+  PluginList,
+  PluginDetail,
+  InstallReport,
+  PluginSummary,
+  PluginConfigView,
+  PluginConfig,
+  CapabilityInfo,
+  PluginContributions,
 } from "./types";
 
 // Input DTOs: partial updates. The fields come from the ts-rs generated types
@@ -73,120 +93,159 @@ export async function safeInvoke<T>(
 // ── Auth ──
 
 export const auth = {
-  microsoftLogin: () => invoke<AuthSession>("auth_microsoft_login"),
+  microsoftLogin: () => safeInvoke<AuthSession>("auth_microsoft_login"),
   offlineLogin: (username: string) =>
-    invoke<AuthSession>("auth_offline_login", { username }),
-  logout: () => invoke<void>("auth_logout"),
-  getSession: () => invoke<AuthSession | null>("auth_get_session"),
-  refreshToken: () => invoke<AuthSession | null>("auth_refresh_token"),
-  listAccounts: () => invoke<AccountMetadata[]>("auth_list_accounts"),
+    safeInvoke<AuthSession>("auth_offline_login", { username }),
+  logout: () => safeInvoke<void>("auth_logout"),
+  getSession: () => safeInvoke<AuthSession | null>("auth_get_session"),
+  refreshToken: () => safeInvoke<AuthSession | null>("auth_refresh_token"),
+  listAccounts: () => safeInvoke<AccountMetadata[]>("auth_list_accounts"),
   switchAccount: (accountId: string) =>
-    invoke<AuthSession>("auth_switch_account", { accountId }),
+    safeInvoke<AuthSession>("auth_switch_account", { accountId }),
   removeAccount: (accountId: string) =>
-    invoke<void>("auth_remove_account", { accountId }),
+    safeInvoke<void>("auth_remove_account", { accountId }),
 };
 
 // ── Profiles ──
 
 export const profiles = {
-  list: () => invoke<Profile[]>("profile_list"),
+  list: () => safeInvoke<Profile[]>("profile_list"),
   create: (name: string, gameVersion: string) =>
-    invoke<Profile>("profile_create", { name, gameVersion }),
+    safeInvoke<Profile>("profile_create", { name, gameVersion }),
   update: (id: string, opts: ProfileUpdateOpts) =>
-    invoke<Profile>("profile_update", { id, opts }),
-  delete: (id: string) => invoke<void>("profile_delete", { id }),
+    safeInvoke<Profile>("profile_update", { id, opts }),
+  delete: (id: string) => safeInvoke<void>("profile_delete", { id }),
 };
 
 // ── Versions ──
 
 export const versions = {
-  list: () => invoke<VersionInfo[]>("version_list"),
+  list: () => safeInvoke<VersionInfo[]>("version_list"),
   install: (version: string, profileId: string) =>
-    invoke<void>("version_install", { version, profileId }),
+    safeInvoke<void>("version_install", { version, profileId }),
 };
 
 // ── Launch ──
 
 export const launch = {
-  start: (profileId: string) => invoke<void>("launch_start", { profileId }),
-  kill: (profileId: string) => invoke<void>("launch_kill", { profileId }),
-  status: () => invoke<string[]>("launch_status"),
+  start: (profileId: string) => safeInvoke<void>("launch_start", { profileId }),
+  kill: (profileId: string) => safeInvoke<void>("launch_kill", { profileId }),
+  status: () => safeInvoke<string[]>("launch_status"),
 };
 
 // ── Mods ──
 
 export const mods = {
   search: (query: string, gameVersion?: string, loader?: string, page?: number, limit?: number) =>
-    invoke("mod_search", { query, gameVersion, loader, page, limit }),
+    safeInvoke<ModSearchResult>("mod_search", { query, gameVersion, loader, page, limit }),
   getVersions: (modId: string) =>
-    invoke<ModVersion[]>("mod_get_versions", { modId }),
+    safeInvoke<ModVersion[]>("mod_get_versions", { modId }),
   getDownloadUrl: (versionId: string) =>
-    invoke<string>("mod_get_download_url", { versionId }),
+    safeInvoke<string>("mod_get_download_url", { versionId }),
   list: (profileId: string) =>
-    invoke<ModList>("mod_list", { profileId }),
+    safeInvoke<ModList>("mod_list", { profileId }),
   toggle: (profileId: string, modFilename: string, enabled: boolean) =>
-    invoke<void>("mod_toggle", { profileId, modFilename, enabled }),
+    safeInvoke<void>("mod_toggle", { profileId, modFilename, enabled }),
   install: (profileId: string, version: ModVersion) =>
-    invoke<string>("mod_install", { profileId, version }),
+    safeInvoke<string>("mod_install", { profileId, version }),
   remove: (profileId: string, modFilename: string) =>
-    invoke<void>("mod_remove", { profileId, modFilename }),
+    safeInvoke<void>("mod_remove", { profileId, modFilename }),
+  pickAndInstall: (profileId: string) =>
+    safeInvoke<string | null>("mod_pick_and_install", { profileId }),
 };
 
 // ── Mod loaders ──
 
 export const modLoader = {
   list: (loaderType: string, gameVersion: string) =>
-    invoke<LoaderVersion[]>("modloader_list", { loaderType, gameVersion }),
+    safeInvoke<LoaderVersion[]>("modloader_list", { loaderType, gameVersion }),
   install: (profileId: string, loaderType: string, loaderVersion: string) =>
-    invoke<void>("modloader_install", { profileId, loaderType, loaderVersion }),
+    safeInvoke<void>("modloader_install", { profileId, loaderType, loaderVersion }),
 };
 
 // ── Downloads ──
 
 export const downloads = {
-  cancel: (batchId: string) => invoke<void>("download_cancel", { batchId }),
-  pause: (batchId: string) => invoke<void>("download_pause", { batchId }),
-  resume: (batchId: string) => invoke<void>("download_resume", { batchId }),
+  cancel: (batchId: string) => safeInvoke<void>("download_cancel", { batchId }),
+  pause: (batchId: string) => safeInvoke<void>("download_pause", { batchId }),
+  resume: (batchId: string) => safeInvoke<void>("download_resume", { batchId }),
 };
 
 // ── Instances（本地实例仓库 / 路径）──
 
 export const instances = {
   /** Effective on-disk locations; the run dir depends on the isolation setting. */
-  paths: (id: string) => invoke<InstancePaths>("instance_paths", { id }),
-  refresh: () => invoke<number>("instance_refresh"),
+  paths: (id: string) => safeInvoke<InstancePaths>("instance_paths", { id }),
+  refresh: () => safeInvoke<number>("instance_refresh"),
   checkCompletion: (id: string) =>
-    invoke<MissingFileInfo[]>("instance_check_completion", { id }),
-  repair: (id: string) => invoke<void>("instance_repair", { id }),
+    safeInvoke<MissingFileInfo[]>("instance_check_completion", { id }),
+  repair: (id: string) => safeInvoke<void>("instance_repair", { id }),
+  /**
+   * Effective launch values (instance overrides merged with launcher defaults).
+   * Single source of truth for "what will actually be used" — the settings page
+   * must not re-derive inheritance in TypeScript (audit P2-8).
+   */
+  resolvedSettings: (id: string) =>
+    safeInvoke<ResolvedInstanceSettings>("instance_resolved_settings", { id }),
 };
 
 // ── Settings ──
 
 export const settings = {
-  get: () => invoke<AppConfig>("settings_get"),
-  set: (opts: SettingsUpdate) => invoke<AppConfig>("settings_set", { opts }),
-  detectJava: () => invoke<JavaInfo[]>("java_detect"),
+  get: () => safeInvoke<AppConfig>("settings_get"),
+  set: (opts: SettingsUpdate) => safeInvoke<AppConfig>("settings_set", { opts }),
+  detectJava: () => safeInvoke<JavaInfo[]>("java_detect"),
 };
 
 // ── User-level settings（UI 语言等）──
 
 export const userSettings = {
-  get: () => invoke<UserSettings>("settings_get_user"),
+  get: () => safeInvoke<UserSettings>("settings_get_user"),
   /** `locale: ""` = follow the system language; a tag pins it; `null` = unchanged. */
   set: (opts: UserSettingsUpdate) =>
-    invoke<UserSettings>("settings_set_user", { opts }),
-  supportedLocales: () => invoke<LocaleInfo[]>("settings_supported_locales"),
+    safeInvoke<UserSettings>("settings_set_user", { opts }),
+  supportedLocales: () => safeInvoke<LocaleInfo[]>("settings_supported_locales"),
 };
 
 // ── Logs（P3-01：补 log_get/log_clear wrapper）──
 
 export const logs = {
-  get: (lines?: number) => invoke<string[]>("log_get", { lines }),
-  clear: () => invoke<void>("log_clear"),
+  get: (lines?: number) => safeInvoke<string[]>("log_get", { lines }),
+  clear: () => safeInvoke<void>("log_clear"),
 };
 
 // ── External ──
 
 export const external = {
-  openUrl: (url: string) => invoke<void>("open_external_url", { url }),
+  openUrl: (url: string) => safeInvoke<void>("open_external_url", { url }),
+};
+
+// ── Plugins（Phase 2 声明式插件）──
+
+export const plugins = {
+  list: (includeRemoved = false) =>
+    safeInvoke<PluginList>("plugin_list", { includeRemoved }),
+  inspect: (id: string) => safeInvoke<PluginDetail>("plugin_inspect", { id }),
+  install: (path: string) => safeInvoke<InstallReport>("plugin_install", { path }),
+  pickAndInstall: () =>
+    safeInvoke<InstallReport | null>("plugin_pick_and_install"),
+  enable: (id: string) => safeInvoke<PluginSummary>("plugin_enable", { id }),
+  disable: (id: string) => safeInvoke<PluginSummary>("plugin_disable", { id }),
+  remove: (id: string, deleteData = false) =>
+    safeInvoke<void>("plugin_remove", { id, deleteData }),
+  rollback: (id: string) => safeInvoke<PluginSummary>("plugin_rollback", { id }),
+  grant: (id: string, capability: string) =>
+    safeInvoke<PluginSummary>("plugin_grant", { id, capability }),
+  revoke: (id: string, capability: string) =>
+    safeInvoke<PluginSummary>("plugin_revoke", { id, capability }),
+  configGet: (id: string) =>
+    safeInvoke<PluginConfigView>("plugin_config_get", { id }),
+  configSet: (id: string, values: unknown) =>
+    safeInvoke<PluginConfig>("plugin_config_set", { id, values }),
+  configReset: (id: string) =>
+    safeInvoke<PluginConfig>("plugin_config_reset", { id }),
+  capabilities: () =>
+    safeInvoke<CapabilityInfo[]>("plugin_capabilities"),
+  contributions: () =>
+    safeInvoke<PluginContributions>("plugin_contributions"),
 };

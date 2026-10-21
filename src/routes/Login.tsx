@@ -1,7 +1,7 @@
 import { Component, createSignal, Show, onMount, onCleanup } from "solid-js";
 import { useNavigate } from "@solidjs/router";
 import { listen } from "@tauri-apps/api/event";
-import { auth, safeInvoke, type AuthSession } from "../ipc/api";
+import { auth, external, type AuthSession } from "../ipc/api";
 import { EVENTS } from "../ipc/events";
 import { t } from "../i18n";
 
@@ -35,7 +35,7 @@ const Login: Component = () => {
     setLoading(true);
     setError(null);
 
-    const result = await safeInvoke<AuthSession>("auth_offline_login", { username });
+    const result = await auth.offlineLogin(username);
     setLoading(false);
 
     if (result.ok) {
@@ -51,7 +51,7 @@ const Login: Component = () => {
     setDeviceCode(null);
 
     // invoke 在设备码轮询完成前不会 resolve；验证码通过 auth://device-code 事件实时到达
-    const result = await safeInvoke<AuthSession>("auth_microsoft_login");
+    const result = await auth.microsoftLogin();
     setLoading(false);
 
     if (result.ok) {
@@ -66,9 +66,7 @@ const Login: Component = () => {
     if (!dc) return;
     // 经 Tauri command 走 tauri-plugin-opener（带 http/https 校验），
     // 失败时在 UI 展示错误而非静默。
-    const result = await safeInvoke<void>("open_external_url", {
-      url: dc.verification_uri,
-    });
+    const result = await external.openUrl(dc.verification_uri);
     if (!result.ok) {
       setError(result.error.message);
     }

@@ -3,6 +3,9 @@ import solid from "vite-plugin-solid";
 import tailwindcss from "@tailwindcss/vite";
 
 export default defineConfig({
+  // Relative asset paths: the release WebView serves the bundle from
+  // `tauri://localhost`, where absolute `/assets/*` can miss the origin root.
+  base: "./",
   plugins: [solid(), tailwindcss()],
   clearScreen: false,
   server: {

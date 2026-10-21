@@ -2,10 +2,12 @@ import { Component, createSignal, onMount, Show, For } from "solid-js";
 import { useNavigate } from "@solidjs/router";
 import {
   settings,
-  safeInvoke,
+  auth,
+  logs,
   type AppConfig,
   type JavaInfo,
   type SettingsUpdate,
+  type AccountMetadata,
 } from "../ipc/api";
 import { showToast } from "../components/Toast";
 import {
@@ -51,8 +53,17 @@ const Settings: Component = () => {
   const [defaultPriority, setDefaultPriority] = createSignal("normal");
   const [autoMemory, setAutoMemory] = createSignal(false);
 
+  // ── Accounts (0.5.3) ──
+  const [accounts, setAccounts] = createSignal<AccountMetadata[]>([]);
+  const [accountsLoading, setAccountsLoading] = createSignal(false);
+  const [currentAccountId, setCurrentAccountId] = createSignal<string | null>(null);
+
+  // ── Logs (0.5.5) ──
+  const [logsText, setLogsText] = createSignal("");
+  const [logsLoading, setLogsLoading] = createSignal(false);
+
   onMount(async () => {
-    const result = await safeInvoke<AppConfig>("settings_get");
+    const result = await settings.get();
     if (result.ok) {
       const c = result.data;
       setConfig(c);
@@ -73,11 +84,12 @@ const Settings: Component = () => {
     }
     setLoading(false);
     await detectJava();
+    await loadAccounts();
   });
 
   const detectJava = async () => {
     setDetectingJava(true);
-    const result = await safeInvoke<JavaInfo[]>("java_detect");
+    const result = await settings.detectJava();
     if (result.ok) {
       setJavaInstallations(result.data);
     } else {
@@ -104,9 +116,7 @@ const Settings: Component = () => {
       auto_memory: autoMemory(),
     };
 
-    const result = await safeInvoke<AppConfig>("settings_set", {
-      opts,
-    });
+    const result = await settings.set(opts);
     setSaving(false);
 
     if (result.ok) {
@@ -143,6 +153,56 @@ const Settings: Component = () => {
     } catch (err) {
       showToast({ code: "error", message: String(err), retryable: false });
     }
+  };
+
+  // ── Accounts (0.5.3) ──
+  const loadAccounts = async () => {
+    setAccountsLoading(true);
+    const r = await auth.listAccounts();
+    const session = await auth.getSession();
+    setAccountsLoading(false);
+    if (r.ok) setAccounts(r.data);
+    else showToast(r.error);
+    setCurrentAccountId(session.ok && session.data ? session.data.account_id : null);
+  };
+
+  const handleSwitchAccount = async (id: string) => {
+    const r = await auth.switchAccount(id);
+    if (r.ok) {
+      setCurrentAccountId(id);
+      showToast({ code: "success", message: t("settings.accounts.switched"), retryable: false });
+    } else showToast(r.error);
+  };
+
+  const handleRemoveAccount = async (id: string) => {
+    const r = await auth.removeAccount(id);
+    if (r.ok) {
+      showToast({ code: "success", message: t("settings.accounts.removed"), retryable: false });
+      await loadAccounts();
+    } else showToast(r.error);
+  };
+
+  const handleRefreshAccounts = async () => {
+    const r = await auth.refreshToken();
+    if (r.ok) {
+      showToast({ code: "success", message: t("settings.accounts.refreshed"), retryable: false });
+      await loadAccounts();
+    } else showToast(r.error);
+  };
+
+  // ── Logs (0.5.5) ──
+  const loadLogs = async () => {
+    setLogsLoading(true);
+    const r = await logs.get(200);
+    setLogsLoading(false);
+    if (r.ok) setLogsText(r.data.join("\n"));
+    else showToast(r.error);
+  };
+
+  const clearLogs = async () => {
+    const r = await logs.clear();
+    if (r.ok) setLogsText("");
+    else showToast(r.error);
   };
 
   // ── Render ──
@@ -433,6 +493,65 @@ const Settings: Component = () => {
                   onInput={(e) => setMaxMemory(Number(e.currentTarget.value))}
                 />
               </div>
+            </div>
+          </div>
+
+          {/* ── Accounts (0.5.3) ── */}
+          <div class="settings-section">
+            <h3 class="settings-section-title">
+              {t("settings.accounts.title")}
+              <button class="settings-refresh-btn" onClick={loadAccounts} disabled={accountsLoading()}>
+                {accountsLoading() ? t("settings.loading") : t("settings.accounts.refresh")}
+              </button>
+            </h3>
+            <p class="settings-section-desc">{t("settings.accounts.desc")}</p>
+            <Show when={accounts().length > 0} fallback={<div class="settings-empty">{t("settings.accounts.empty")}</div>}>
+              <div class="java-list">
+                <For each={accounts()}>
+                  {(acc) => (
+                    <div class={`java-item ${currentAccountId() === acc.account_id ? "selected" : ""}`}>
+                      <div class="java-info">
+                        <div class="java-path">{acc.profile_name}</div>
+                        <div class="java-meta">{acc.type} · {acc.profile_id}</div>
+                      </div>
+                      <div class="modal-actions">
+                        <button
+                          class="modal-btn-primary"
+                          disabled={currentAccountId() === acc.account_id}
+                          onClick={() => handleSwitchAccount(acc.account_id)}
+                        >
+                          {currentAccountId() === acc.account_id ? t("settings.accounts.current") : t("settings.accounts.switch")}
+                        </button>
+                        <button class="modal-btn-cancel" onClick={() => handleRemoveAccount(acc.account_id)}>
+                          {t("settings.accounts.remove")}
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                </For>
+              </div>
+            </Show>
+            <div class="modal-actions">
+              <button class="modal-btn-cancel" onClick={handleRefreshAccounts}>
+                {t("settings.accounts.refreshToken")}
+              </button>
+            </div>
+          </div>
+
+          {/* ── Logs (0.5.5) ── */}
+          <div class="settings-section">
+            <h3 class="settings-section-title">
+              {t("settings.logs.title")}
+              <button class="settings-refresh-btn" onClick={loadLogs} disabled={logsLoading()}>
+                {logsLoading() ? t("settings.loading") : t("settings.logs.load")}
+              </button>
+            </h3>
+            <p class="settings-section-desc">{t("settings.logs.desc")}</p>
+            <Show when={logsText() !== ""} fallback={<div class="settings-empty">{t("settings.logs.empty")}</div>}>
+              <pre class="mod-log-pre">{logsText()}</pre>
+            </Show>
+            <div class="modal-actions">
+              <button class="modal-btn-cancel" onClick={clearLogs}>{t("settings.logs.clear")}</button>
             </div>
           </div>
 

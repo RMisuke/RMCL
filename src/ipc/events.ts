@@ -21,4 +21,7 @@ export const EVENTS = {
 
   // Mod Loader
   MODLOADER_INSTALL_PROGRESS: "modloader://progress",
+
+  // Instances
+  INSTANCES_REFRESHED: "instances://refreshed",
 } as const;

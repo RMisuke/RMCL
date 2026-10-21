@@ -12,7 +12,7 @@ import {
   profiles,
   versions,
   launch,
-  safeInvoke,
+  downloads,
   type AuthSession,
   type Profile,
   type VersionInfo,
@@ -124,7 +124,7 @@ const Dashboard: Component = () => {
 
   const loadSession = async () => {
     setAuthLoading(true);
-    const result = await safeInvoke<AuthSession | null>("auth_get_session");
+    const result = await auth.getSession();
     if (result.ok) {
       setSession(result.data);
       if (!result.data) {
@@ -138,7 +138,7 @@ const Dashboard: Component = () => {
 
   const loadProfiles = async () => {
     setProfilesLoading(true);
-    const result = await safeInvoke<Profile[]>("profile_list");
+    const result = await profiles.list();
     if (result.ok) {
       setProfileList(result.data);
       if (result.data.length > 0 && !selectedProfileId()) {
@@ -152,7 +152,7 @@ const Dashboard: Component = () => {
 
   const loadVersions = async () => {
     setVersionsLoading(true);
-    const result = await safeInvoke<VersionInfo[]>("version_list");
+    const result = await versions.list();
     if (result.ok) {
       setVersionList(result.data);
     } else {
@@ -162,7 +162,7 @@ const Dashboard: Component = () => {
   };
 
   const loadRunningStatus = async () => {
-    const result = await safeInvoke<string[]>("launch_status");
+    const result = await launch.status();
     if (result.ok) {
       setRunningProfiles(result.data);
     }
@@ -293,10 +293,7 @@ const Dashboard: Component = () => {
     if (!name || !gameVersion) return;
 
     setCreatingProfile(true);
-    const result = await safeInvoke<Profile>("profile_create", {
-      name,
-      gameVersion,
-    });
+    const result = await profiles.create(name, gameVersion);
     setCreatingProfile(false);
 
     if (!result.ok) {
@@ -317,7 +314,7 @@ const Dashboard: Component = () => {
   };
 
   const handleDeleteProfile = async (id: string) => {
-    const result = await safeInvoke<void>("profile_delete", { id });
+    const result = await profiles.delete(id);
     if (result.ok) {
       setProfileList((prev) => prev.filter((p) => p.id !== id));
       if (selectedProfileId() === id) {
@@ -341,10 +338,7 @@ const Dashboard: Component = () => {
 
     setInstallingVersion(versionId);
     setDownloading(true);
-    const result = await safeInvoke<void>("version_install", {
-      version: versionId,
-      profileId,
-    });
+    const result = await versions.install(versionId, profileId);
 
     if (!result.ok) {
       setInstallingVersion(null);
@@ -359,7 +353,7 @@ const Dashboard: Component = () => {
     if (!profileId) return;
 
     setLaunching(true);
-    const result = await safeInvoke<void>("launch_start", { profileId });
+    const result = await launch.start(profileId);
     setLaunching(false);
 
     if (!result.ok) {
@@ -368,7 +362,7 @@ const Dashboard: Component = () => {
   };
 
   const handleKill = async (profileId: string) => {
-    const result = await safeInvoke<void>("launch_kill", { profileId });
+    const result = await launch.kill(profileId);
     if (!result.ok) {
       showToast(result.error);
     }
@@ -377,14 +371,14 @@ const Dashboard: Component = () => {
   const handleCancelDownload = async () => {
     const batchId = downloadBatchId();
     if (!batchId) return;
-    const result = await safeInvoke<void>("download_cancel", { batchId });
+    const result = await downloads.cancel(batchId);
     if (!result.ok) {
       showToast(result.error);
     }
   };
 
   const handleLogout = async () => {
-    const result = await safeInvoke<void>("auth_logout");
+    const result = await auth.logout();
     if (result.ok) {
       navigate("/login");
     } else {
@@ -414,6 +408,9 @@ const Dashboard: Component = () => {
               </button>
               <button class="account-btn" onClick={() => navigate("/settings")}>
                 {t("dashboard.account.settings")}
+              </button>
+              <button class="account-btn" onClick={() => navigate("/plugins")}>
+                {t("plugins.title")}
               </button>
               <div style="flex:1" />
               <button
@@ -511,6 +508,12 @@ const Dashboard: Component = () => {
                   onClick={() => setShowCreateProfile(true)}
                 >
                   {t("dashboard.profile.add")}
+                </button>
+                <button
+                  class="add-server-btn"
+                  onClick={() => navigate("/mods")}
+                >
+                  {t("mods.title")}
                 </button>
               </div>
 

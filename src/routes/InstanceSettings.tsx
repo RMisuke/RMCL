@@ -8,7 +8,11 @@ import {
 } from "solid-js";
 import { useNavigate, useParams } from "@solidjs/router";
 import {
-  safeInvoke,
+  instances,
+  mods as modsApi,
+  modLoader,
+  profiles,
+  settings,
   type InstancePaths,
   type JavaInfo,
   type Profile,
@@ -16,7 +20,13 @@ import {
 // `ModList`, `LoaderVersion` and the *full* `ProfileUpdateOpts` (the one that
 // carries `override_properties`) only exist in the generated bridge: `../ipc/api`
 // re-exports a narrower hand-written `ProfileUpdateOpts` meant for creation.
-import type { LoaderVersion, ModList, ProfileUpdateOpts } from "../ipc/types";
+import type {
+  LoaderVersion,
+  MissingFileInfo,
+  ModList,
+  ProfileUpdateOpts,
+  ResolvedInstanceSettings,
+} from "../ipc/types";
 import { showToast } from "../components/Toast";
 import { t } from "../i18n";
 
@@ -179,6 +189,13 @@ const InstanceSettings: Component = () => {
   const [saving, setSaving] = createSignal(false);
   const [profile, setProfile] = createSignal<Profile | null>(null);
   const [paths, setPaths] = createSignal<InstancePaths | null>(null);
+  /// 生效值（实例覆盖 + 全局默认合并后的结果）。继承字段的提示只读这里，
+  /// 前端不再自己实现一遍继承规则（审计 P2-8）。
+  const [resolved, setResolved] = createSignal<ResolvedInstanceSettings | null>(null);
+
+  // ── Integrity (0.5.6) ──
+  const [missingFiles, setMissingFiles] = createSignal<MissingFileInfo[]>([]);
+  const [integrityLoading, setIntegrityLoading] = createSignal(false);
 
   // ── General ──
   const [name, setName] = createSignal("");
@@ -282,6 +299,20 @@ const InstanceSettings: Component = () => {
     </button>
   );
 
+  /// 生效值提示：字段处于"继承"状态时，显示后端算出的实际取值。
+  /// 返回 `null` 表示没有可显示的值（已覆盖 / 未加载 / 无对应字段）。
+  const effectiveHint = (field: OverrideField): string | null => {
+    const r = resolved();
+    if (!r || isOverridden(field)) return null;
+    // 少数后端字段名与 override 名不同（HMCL 沿用 `max_memory_mb`）。
+    const key = field === "memory_mb" ? "max_memory_mb" : field;
+    const value = (r as unknown as Record<string, unknown>)[key];
+    if (value === undefined || value === null || value === "") return null;
+    if (Array.isArray(value)) return value.length ? value.join(" ") : null;
+    if (typeof value === "boolean") return value ? "true" : "false";
+    return String(value);
+  };
+
   /// Field label (with an optional hint) and its inherit toggle on one line.
   const fieldHeader = (label: string, field: OverrideField, hint?: string) => (
     <div class="inherit-row">
@@ -289,6 +320,13 @@ const InstanceSettings: Component = () => {
         {label}
         <Show when={hint}>
           <span class="settings-hint">{hint}</span>
+        </Show>
+        <Show when={effectiveHint(field)}>
+          {(value) => (
+            <span class="settings-hint settings-hint-effective">
+              {t("instanceSettings.effective", { value: value() })}
+            </span>
+          )}
         </Show>
       </span>
       {inheritToggle(field)}
@@ -322,7 +360,7 @@ const InstanceSettings: Component = () => {
   /// Reads the stored profile. `hydrate` copies it into the form signals; the
   /// post-install refresh skips that so unsaved edits survive.
   const loadProfile = async (hydrate: boolean): Promise<Profile | null> => {
-    const result = await safeInvoke<Profile[]>("profile_list");
+    const result = await profiles.list();
     if (!result.ok) {
       showToast(result.error);
       return null;
@@ -364,10 +402,14 @@ const InstanceSettings: Component = () => {
     setNativeOpenal(p.use_native_openal);
   };
 
+  /// 生效值只从后端取（审计 P2-8 单一来源）。
+  const loadResolved = async () => {
+    const result = await instances.resolvedSettings(instanceId());
+    if (result.ok) setResolved(result.data);
+  };
+
   const loadPaths = async () => {
-    const result = await safeInvoke<InstancePaths>("instance_paths", {
-      id: instanceId(),
-    });
+    const result = await instances.paths(instanceId());
     if (result.ok) {
       setPaths(result.data);
     } else {
@@ -376,7 +418,7 @@ const InstanceSettings: Component = () => {
   };
 
   const detectJava = async () => {
-    const result = await safeInvoke<JavaInfo[]>("java_detect");
+    const result = await settings.detectJava();
     if (result.ok) {
       setJavaList(result.data);
     } else {
@@ -386,9 +428,7 @@ const InstanceSettings: Component = () => {
 
   const loadMods = async () => {
     setModsLoading(true);
-    const result = await safeInvoke<ModList>("mod_list", {
-      profileId: instanceId(),
-    });
+    const result = await modsApi.list(instanceId());
     if (result.ok) {
       setMods(result.data);
     } else {
@@ -397,11 +437,29 @@ const InstanceSettings: Component = () => {
     setModsLoading(false);
   };
 
+  const checkIntegrity = async () => {
+    setIntegrityLoading(true);
+    const r = await instances.checkCompletion(instanceId());
+    setIntegrityLoading(false);
+    if (r.ok) setMissingFiles(r.data);
+    else showToast(r.error);
+  };
+
+  const repairInstance = async () => {
+    setIntegrityLoading(true);
+    const r = await instances.repair(instanceId());
+    setIntegrityLoading(false);
+    if (r.ok) {
+      showToast({ code: "success", message: t("instanceSettings.integrity.repaired"), retryable: false });
+      await checkIntegrity();
+    } else showToast(r.error);
+  };
+
   onMount(async () => {
     const found = await loadProfile(true);
     setLoading(false);
     if (!found) return;
-    await Promise.all([loadPaths(), detectJava(), loadMods()]);
+    await Promise.all([loadPaths(), loadResolved(), detectJava(), loadMods()]);
   });
 
   // ── Actions ──
@@ -445,10 +503,7 @@ const InstanceSettings: Component = () => {
       env_vars: parseEnvVars(envVars()),
     };
 
-    const result = await safeInvoke<Profile>("profile_update", {
-      id: current.id,
-      opts,
-    });
+    const result = await profiles.update(current.id, opts);
     setSaving(false);
 
     if (result.ok) {
@@ -472,10 +527,7 @@ const InstanceSettings: Component = () => {
     setVersionState("loading");
     setLoaderVersions([]);
     setLoaderVersion("");
-    const result = await safeInvoke<LoaderVersion[]>("modloader_list", {
-      loaderType: loaderType(),
-      gameVersion: baseVersion(),
-    });
+    const result = await modLoader.list(loaderType(), baseVersion());
     if (result.ok) {
       setLoaderVersions(result.data);
       if (result.data.length > 0) {
@@ -495,11 +547,7 @@ const InstanceSettings: Component = () => {
     if (version === "") return;
 
     setInstallingLoader(true);
-    const result = await safeInvoke<void>("modloader_install", {
-      profileId: instanceId(),
-      loaderType: loaderType(),
-      loaderVersion: version,
-    });
+    const result = await modLoader.install(instanceId(), loaderType(), version);
     setInstallingLoader(false);
 
     if (result.ok) {
@@ -519,13 +567,19 @@ const InstanceSettings: Component = () => {
     }
   };
 
+  const installLocalMod = async () => {
+    const r = await modsApi.pickAndInstall(instanceId());
+    if (r.ok) {
+      if (r.data) {
+        showToast({ code: "success", message: t("instanceSettings.mods.localInstalled"), retryable: false });
+        await loadMods();
+      }
+    } else showToast(r.error);
+  };
+
   const toggleMod = async (filename: string, enabled: boolean) => {
     setModsBusy(filename);
-    const result = await safeInvoke<void>("mod_toggle", {
-      profileId: instanceId(),
-      modFilename: filename,
-      enabled,
-    });
+    const result = await modsApi.toggle(instanceId(), filename, enabled);
     setModsBusy(null);
     if (result.ok) {
       showToast({
@@ -541,10 +595,7 @@ const InstanceSettings: Component = () => {
 
   const removeMod = async (filename: string) => {
     setModsBusy(filename);
-    const result = await safeInvoke<void>("mod_remove", {
-      profileId: instanceId(),
-      modFilename: filename,
-    });
+    const result = await modsApi.remove(instanceId(), filename);
     setModsBusy(null);
     if (result.ok) {
       showToast({
@@ -656,6 +707,25 @@ const InstanceSettings: Component = () => {
                     })}
                   </span>
                 </div>
+              </div>
+
+              {/* ── Integrity (0.5.6) ── */}
+              <div class="settings-section">
+                <h3 class="settings-section-title">{t("instanceSettings.integrity.title")}</h3>
+                <p class="settings-section-desc">{t("instanceSettings.integrity.desc")}</p>
+                <div class="modal-actions">
+                  <button class="modal-btn-primary" disabled={integrityLoading()} onClick={checkIntegrity}>
+                    {integrityLoading() ? t("settings.loading") : t("instanceSettings.integrity.check")}
+                  </button>
+                  <button class="modal-btn-cancel" disabled={integrityLoading()} onClick={repairInstance}>
+                    {t("instanceSettings.integrity.repair")}
+                  </button>
+                </div>
+                <Show when={missingFiles().length > 0}>
+                  <div class="settings-hint">
+                    {t("instanceSettings.integrity.missing", { count: missingFiles().length })}
+                  </div>
+                </Show>
               </div>
 
               {/* ── Java ── */}
@@ -1075,9 +1145,11 @@ const InstanceSettings: Component = () => {
                   </Show>
                 </Show>
 
-                {/* Installing a mod from a local file is not offered: there is
-                    no file-picker plugin, and the remote path (`mod_install`)
-                    needs a `ModVersion` chosen on a mod-browser page. */}
+                <div class="modal-actions">
+                  <button class="modal-btn-primary" onClick={installLocalMod}>
+                    {t("instanceSettings.mods.installLocal")}
+                  </button>
+                </div>
               </div>
 
               {/* ── Advanced ── */}

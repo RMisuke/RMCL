@@ -6,6 +6,7 @@
  *   /login    → Login
  *   /settings → Settings
  *   /instances/:id → InstanceSettings (per-instance settings)
+ *   /plugins       → Plugins (declarative plugin manager)
  *
  * `root={App}` wraps every route in the application shell (title bar, rounded
  * window background, toast layer, window reveal), so the chrome stays mounted
@@ -18,6 +19,8 @@ import Login from "./routes/Login";
 import Dashboard from "./routes/Dashboard";
 import Settings from "./routes/Settings";
 import InstanceSettings from "./routes/InstanceSettings";
+import ModBrowser from "./routes/ModBrowser";
+import Plugins from "./routes/Plugins";
 import "./styles/app.css";
 
 render(
@@ -27,6 +30,8 @@ render(
       <Route path="/login" component={Login} />
       <Route path="/settings" component={Settings} />
       <Route path="/instances/:id" component={InstanceSettings} />
+      <Route path="/mods" component={ModBrowser} />
+      <Route path="/plugins" component={Plugins} />
     </Router>
   ),
   document.getElementById("root")!

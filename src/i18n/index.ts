@@ -110,19 +110,20 @@ export function nativeNameFor(code: string): string {
  */
 export async function initI18n(): Promise<void> {
   let pref: LocalePreference = null;
-  try {
-    const stored = await userSettings.get();
-    pref = stored.locale && stored.locale.trim() !== "" ? stored.locale : null;
-  } catch (e) {
-    console.warn("i18n: could not read user settings, following system language", e);
+  const stored = await userSettings.get();
+  if (stored.ok) {
+    pref = stored.data.locale && stored.data.locale.trim() !== "" ? stored.data.locale : null;
+  } else {
+    console.warn("i18n: could not read user settings, following system language", stored.error);
   }
   setPreference_(pref);
   apply(pref ? normalizeLocale(pref) : systemLocale());
 
-  try {
-    setSupported_(await userSettings.supportedLocales());
-  } catch (e) {
-    console.warn("i18n: could not load the supported locale list", e);
+  const supported = await userSettings.supportedLocales();
+  if (supported.ok) {
+    setSupported_(supported.data);
+  } else {
+    console.warn("i18n: could not load the supported locale list", supported.error);
   }
 }
 
@@ -134,7 +135,10 @@ export async function initI18n(): Promise<void> {
 export async function setLocale(next: LocalePreference): Promise<void> {
   setPreference_(next);
   apply(next ? normalizeLocale(next) : systemLocale());
-  await userSettings.set({ locale: next ?? "", check_updates: null });
+  const saved = await userSettings.set({ locale: next ?? "", check_updates: null });
+  if (!saved.ok) {
+    console.warn("i18n: could not persist the locale preference", saved.error);
+  }
 }
 
 /** Re-resolves the effective locale after an OS language change. */

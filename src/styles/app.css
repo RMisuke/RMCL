@@ -1492,3 +1492,454 @@ select.settings-input option {
   .launch-btn { width: 100%; }
   .col-right { flex-direction: column; }
 }
+
+/* ═══════════════════════════════════════════
+   Mod Browser (Phase 0.5.2)
+   ═══════════════════════════════════════════ */
+
+.mod-browser {
+  max-width: 980px;
+  margin: 0 auto;
+  padding: 20px 24px 40px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  overflow-y: auto;
+  height: 100%;
+}
+
+.mod-browser-header {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+
+.mod-browser-title {
+  font-size: 20px;
+  font-weight: 700;
+  color: var(--text-primary);
+  flex: 1;
+}
+
+.mod-instance-picker {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+
+.mod-instance-picker .modal-input {
+  min-width: 160px;
+}
+
+.mod-search-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.mod-search-row .modal-input {
+  flex: 1;
+}
+
+.mod-results {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.mod-item {
+  border: 1px solid var(--border-default);
+  border-radius: 10px;
+  background: var(--surface-card);
+  overflow: hidden;
+}
+
+.mod-item-head {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 14px;
+  background: none;
+  border: none;
+  cursor: pointer;
+  text-align: left;
+}
+
+.mod-item-head:hover {
+  background: var(--surface-hover);
+}
+
+.mod-icon {
+  width: 40px;
+  height: 40px;
+  border-radius: 8px;
+  object-fit: cover;
+  flex-shrink: 0;
+}
+
+.mod-meta { flex: 1; min-width: 0; }
+
+.mod-name {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.mod-author {
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.mod-desc {
+  font-size: 12px;
+  color: var(--text-secondary);
+  margin-top: 2px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mod-downloads {
+  font-size: 12px;
+  color: var(--text-secondary);
+  flex-shrink: 0;
+}
+
+.mod-versions {
+  border-top: 1px solid var(--border-divider);
+  padding: 8px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.mod-version-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.mod-version-row .modal-btn-primary { min-width: 72px; }
+
+.mod-version-name {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
+  min-width: 120px;
+}
+
+.mod-version-games {
+  font-size: 12px;
+  color: var(--text-secondary);
+  flex: 1;
+}
+
+.mod-pager {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+
+/* 生效值提示：字段处于"继承"状态时显示后端合并后的实际取值（审计 P2-8）。 */
+.settings-hint-effective {
+  color: var(--color-text-dim, #8a8f98);
+  font-variant-numeric: tabular-nums;
+}
+
+/* ── Plugins page (Phase 2) ── */
+
+.plugins-page .settings-content {
+  gap: 14px;
+}
+
+.plugins-unsigned-hint {
+  padding: 8px 12px;
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--color-yellow, #f5a524) 12%, transparent);
+  border: 1px solid color-mix(in srgb, var(--color-yellow, #f5a524) 35%, transparent);
+  font-size: 12px;
+}
+
+.plugin-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.plugin-card {
+  border: 1px solid var(--color-border, rgba(0, 0, 0, 0.1));
+  border-radius: 12px;
+  padding: 14px 16px;
+  background: var(--color-surface, rgba(255, 255, 255, 0.6));
+  transition: border-color 0.15s ease;
+}
+
+.plugin-card.is-selected {
+  border-color: var(--color-accent, #7c6cff);
+}
+
+.plugin-card-head {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.plugin-card-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  flex: 1;
+  min-width: 260px;
+}
+
+.plugin-name {
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.plugin-version,
+.plugin-mono {
+  font-family: var(--font-mono, ui-monospace, SFMono-Regular, monospace);
+  font-size: 11px;
+  color: var(--color-text-muted, #8b93a8);
+}
+
+.plugin-badge {
+  font-size: 10px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--color-border, rgba(0, 0, 0, 0.12));
+  color: var(--color-text-muted, #8b93a8);
+  white-space: nowrap;
+}
+
+.plugin-badge.state-enabled {
+  color: #15803d;
+  border-color: rgba(34, 197, 94, 0.4);
+  background: rgba(34, 197, 94, 0.1);
+}
+
+.plugin-badge.state-installed_disabled,
+.plugin-badge.state-pending {
+  color: #b45309;
+  border-color: rgba(245, 158, 11, 0.45);
+  background: rgba(245, 158, 11, 0.1);
+}
+
+.plugin-badge.state-disabled {
+  color: var(--color-text-muted, #8b93a8);
+}
+
+.plugin-badge.state-failed {
+  color: #b91c1c;
+  border-color: rgba(239, 68, 68, 0.45);
+  background: rgba(239, 68, 68, 0.1);
+}
+
+.plugin-card-actions {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.plugin-btn {
+  font-size: 11px;
+  padding: 5px 10px;
+  border-radius: 7px;
+}
+
+.plugin-btn-danger {
+  color: #b91c1c;
+}
+
+.plugin-description {
+  margin: 8px 0 6px;
+  font-size: 12px;
+  color: var(--color-text-muted, #8b93a8);
+  line-height: 1.5;
+}
+
+.plugin-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 14px;
+  font-size: 11px;
+  color: var(--color-text-muted, #8b93a8);
+}
+
+.plugin-detail {
+  margin-top: 14px;
+  padding-top: 14px;
+  border-top: 1px dashed var(--color-border, rgba(0, 0, 0, 0.12));
+}
+
+.plugin-detail-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr);
+  gap: 18px;
+}
+
+@media (max-width: 900px) {
+  .plugin-detail-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+.plugin-detail-title {
+  font-size: 12px;
+  font-weight: 600;
+  margin: 4px 0 8px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--color-text-muted, #8b93a8);
+}
+
+.plugin-perm-row,
+.plugin-dep-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 7px 0;
+  border-bottom: 1px solid var(--color-border, rgba(0, 0, 0, 0.06));
+  font-size: 12px;
+}
+
+.plugin-perm-main {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  min-width: 0;
+}
+
+.plugin-perm-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.plugin-perm-main code,
+.plugin-dep-row code {
+  font-family: var(--font-mono, ui-monospace, SFMono-Regular, monospace);
+  font-size: 11px;
+}
+
+.plugin-risk {
+  font-size: 10px;
+  padding: 1px 6px;
+  border-radius: 999px;
+  border: 1px solid currentColor;
+}
+
+.plugin-risk.risk-low {
+  color: #15803d;
+}
+
+.plugin-risk.risk-medium {
+  color: #b45309;
+}
+
+.plugin-risk.risk-high {
+  color: #b91c1c;
+}
+
+.plugin-scope,
+.plugin-perm-reason {
+  font-size: 10px;
+  color: var(--color-text-muted, #8b93a8);
+}
+
+.plugin-grant-state {
+  font-size: 10px;
+  color: var(--color-text-muted, #8b93a8);
+}
+
+.plugin-grant-state.is-granted {
+  color: #15803d;
+}
+
+.plugin-grant-state.is-pending {
+  color: #b45309;
+}
+
+.plugin-review-hint {
+  margin-top: 8px;
+  font-size: 11px;
+  color: #b45309;
+}
+
+.plugin-dep-state.is-ok {
+  color: #15803d;
+  font-size: 11px;
+}
+
+.plugin-dep-state.is-bad {
+  color: #b91c1c;
+  font-size: 11px;
+}
+
+.plugin-config-editor {
+  width: 100%;
+  resize: vertical;
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.plugin-config-actions {
+  display: flex;
+  gap: 6px;
+  margin: 8px 0;
+}
+
+.plugin-path {
+  font-family: var(--font-mono, ui-monospace, SFMono-Regular, monospace);
+  font-size: 10px;
+  color: var(--color-text-muted, #8b93a8);
+  word-break: break-all;
+  margin: 10px 0 6px;
+}
+
+.plugin-delete-data {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  color: var(--color-text-muted, #8b93a8);
+  margin-bottom: 6px;
+}
+
+.plugin-diagnostic {
+  display: flex;
+  gap: 8px;
+  font-size: 11px;
+  padding: 6px 0;
+  border-bottom: 1px solid var(--color-border, rgba(0, 0, 0, 0.06));
+}
+
+.plugin-diagnostic.is-error {
+  color: #b91c1c;
+}
+
+.plugin-diagnostic.is-warning {
+  color: #b45309;
+}
+
+.plugin-diagnostic-id {
+  font-family: var(--font-mono, ui-monospace, SFMono-Regular, monospace);
+  flex-shrink: 0;
+  opacity: 0.8;
+}
+
+.plugins-empty {
+  text-align: center;
+}
