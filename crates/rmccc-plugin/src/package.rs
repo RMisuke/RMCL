@@ -311,11 +311,10 @@ fn validate_package_file(path: &str) -> Result<()> {
         return Ok(());
     }
 
+    // `logic/`：Phase 5 起允许，但只接受 `.wasm`（ADR-007）。原生库与脚本仍然拒绝。
     if top == "logic" {
-        return Err(plugin_error(
-            PluginErrorCode::PackageInvalid,
-            format!("Phase 5 之前不接受 logic/ 目录（逻辑运行时未开放）：{path}"),
-        ));
+        crate::logic::validate_logic_file(path)?;
+        return Ok(());
     }
 
     let top_allowed = ROOT_FILES.contains(&top) || ROOT_DIRS.contains(&top);
@@ -646,8 +645,9 @@ mod tests {
     }
 
     #[test]
-    fn allows_ui_assets_but_rejects_logic_and_scripts() {
-        // `ui/` 内的 html/js 在 Phase 4 合法（ADR-006）；`logic/` 与包内脚本仍然拒绝。
+    fn allows_ui_and_wasm_assets_but_rejects_scripts() {
+        // `ui/` 的 html/js（Phase 4）与 `logic/` 的 .wasm（Phase 5）合法；
+        // 包内脚本、原生库仍然拒绝。
         let manifest_json = serde_json::to_string(&manifest()).unwrap();
         let bytes = zip_with(&[
             ("manifest.json", manifest_json.as_bytes(), 0o644),
@@ -655,15 +655,17 @@ mod tests {
             ("ui/index.html", b"<!DOCTYPE html>", 0o644),
             ("ui/app.js", b"export {}", 0o644),
             ("ui/style.css", b"body{}", 0o644),
+            ("logic/plugin.wasm", b"\0asm", 0o644),
         ]);
         inspect_package_bytes(&bytes, &ctx()).expect("ui assets should be accepted");
 
         for bad in [
-            "logic/plugin.wasm",
             "assets/app.js",
             "assets/run.sh",
             "ui/run.sh",
             "ui/app.wasm",
+            "logic/plugin.dylib",
+            "logic/run.sh",
         ] {
             let manifest = serde_json::to_string(&manifest()).unwrap();
             let bytes = zip_with(&[

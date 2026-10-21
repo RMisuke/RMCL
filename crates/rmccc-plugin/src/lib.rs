@@ -25,6 +25,7 @@
 pub mod capability;
 pub mod config;
 pub mod installer;
+pub mod logic;
 pub mod manager;
 pub mod manifest;
 pub mod package;
@@ -38,6 +39,7 @@ pub mod version;
 
 pub use capability::{Capability, CapabilityRisk, CAPABILITIES};
 pub use config::PluginConfig;
+pub use logic::{validate_logic_entry, LOGIC_ROOT_DIR, MAX_LOGIC_BYTES};
 pub use manager::{
     capability_catalog, CapabilityInfo, DashboardCardView, DependencyStatus, InstallReport,
     PluginContributions, PluginDetail, PluginDiagnostic, PluginManager, PluginSummary,

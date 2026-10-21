@@ -101,6 +101,8 @@ fn finish_staging(
 
     // 隔离 UI（ADR-006）：入口声明与 `ui/` 内容必须互相印证。
     verify_ui_content(&content_dir, &manifest)?;
+    // 逻辑插件（ADR-007）：同一个规则用在 `logic/` 上。
+    verify_logic_content(&content_dir, &manifest)?;
 
     Ok(StagedPackage {
         root,
@@ -188,4 +190,45 @@ fn dir_contains_file(dir: &Path) -> Result<bool> {
         }
     }
     Ok(false)
+}
+
+/// `entry.logic` 与包内 `logic/` 目录必须互相声明（ADR-007）。
+fn verify_logic_content(
+    content_dir: &Path,
+    manifest: &crate::manifest::PluginManifest,
+) -> Result<()> {
+    let logic_dir = content_dir.join(crate::logic::LOGIC_ROOT_DIR);
+    let has_logic = dir_contains_file(&logic_dir)?;
+
+    match (&manifest.entry.logic, has_logic) {
+        (None, false) => Ok(()),
+        (Some(entry), true) => {
+            let entry_path = content_dir.join(entry);
+            if !entry_path.is_file() {
+                return Err(plugin_error(
+                    PluginErrorCode::PackageInvalid,
+                    format!("entry.logic 指向的文件不存在：{entry}"),
+                ));
+            }
+            let size = std::fs::metadata(&entry_path)?.len();
+            if size > crate::logic::MAX_LOGIC_BYTES {
+                return Err(plugin_error(
+                    PluginErrorCode::PackageInvalid,
+                    format!(
+                        "entry.logic 超过 {} 字节上限（实际 {size}）",
+                        crate::logic::MAX_LOGIC_BYTES
+                    ),
+                ));
+            }
+            Ok(())
+        }
+        (Some(entry), false) => Err(plugin_error(
+            PluginErrorCode::PackageInvalid,
+            format!("Manifest 声明了 entry.logic（{entry}），但包内没有 logic/ 目录"),
+        )),
+        (None, true) => Err(plugin_error(
+            PluginErrorCode::PackageInvalid,
+            "包内包含 logic/ 资源但 Manifest 未声明 entry.logic".to_string(),
+        )),
+    }
 }

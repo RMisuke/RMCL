@@ -697,3 +697,96 @@ fn upgrade_requiring_a_new_low_risk_capability_is_reviewed_not_silently_granted(
     mgr.authorize("dev.rmccc.low", "instance.read", None, None)
         .expect("granted capability must authorize");
 }
+
+// ────────────────────────── 逻辑插件（Phase 5，ADR-007）──────────────────────────
+
+fn logic_manifest(id: &str) -> serde_json::Value {
+    let mut m = manifest(id, "1.0.0");
+    m["entry"] = json!({ "logic": "logic/plugin.wasm" });
+    m["permissions"] = json!([{ "capability": "logic.invoke" }]);
+    m
+}
+
+#[test]
+fn logic_plugin_installs_but_waits_for_the_logic_capability() {
+    let dir = temp_dir("logic-install");
+    let mut mgr = manager(&dir);
+    let bytes = pack(
+        &logic_manifest("dev.rmccc.logic"),
+        &[("logic/plugin.wasm", "\0asm\x01\0\0\0")],
+    );
+    let report = mgr
+        .install_from_bytes(&bytes, "logic.rmcpkg", false)
+        .expect("logic plugin installs");
+
+    // Executing code is a medium-risk capability: it must be reviewed.
+    assert_eq!(report.pending_permissions, vec!["logic.invoke"]);
+    assert!(report.requires_review);
+    assert_eq!(mgr.contributions().dashboard_cards.len(), 0);
+
+    mgr.grant("dev.rmccc.logic", "logic.invoke").unwrap();
+    mgr.enable("dev.rmccc.logic").unwrap();
+    let entry = mgr
+        .manifest("dev.rmccc.logic")
+        .and_then(|m| m.entry.logic.clone())
+        .expect("manifest exposes entry.logic");
+    assert_eq!(entry, "logic/plugin.wasm");
+    let wasm = mgr
+        .installed_dir("dev.rmccc.logic")
+        .expect("installed dir")
+        .join(entry);
+    assert!(wasm.is_file(), "{}", wasm.display());
+}
+
+#[test]
+fn logic_assets_without_an_entry_are_rejected_at_install() {
+    let dir = temp_dir("logic-orphan");
+    let mut mgr = manager(&dir);
+    let m = manifest("dev.rmccc.orphan-logic", "1.0.0");
+    let bytes = pack(&m, &[("logic/plugin.wasm", "\0asm\x01\0\0\0")]);
+    let err = mgr
+        .install_from_bytes(&bytes, "orphan.rmcpkg", false)
+        .unwrap_err()
+        .to_string();
+    assert!(err.contains("entry.logic"), "{err}");
+}
+
+#[test]
+fn a_logic_entry_pointing_at_a_missing_module_is_rejected() {
+    let dir = temp_dir("logic-missing");
+    let mut mgr = manager(&dir);
+    let bytes = pack(
+        &logic_manifest("dev.rmccc.missing-logic"),
+        &[("logic/other.wasm", "\0asm\x01\0\0\0")],
+    );
+    let err = mgr
+        .install_from_bytes(&bytes, "missing.rmcpkg", false)
+        .unwrap_err()
+        .to_string();
+    assert!(err.contains("entry.logic"), "{err}");
+}
+
+#[test]
+fn revoking_logic_invoke_blocks_the_next_call() {
+    let dir = temp_dir("logic-revoke");
+    let mut mgr = manager(&dir);
+    let bytes = pack(&logic_manifest("dev.rmccc.revoke-logic"), &[(
+        "logic/plugin.wasm",
+        "\0asm\x01\0\0\0",
+    )]);
+    mgr.install_from_bytes(&bytes, "revoke.rmcpkg", false)
+        .unwrap();
+    mgr.grant("dev.rmccc.revoke-logic", "logic.invoke").unwrap();
+    mgr.enable("dev.rmccc.revoke-logic").unwrap();
+    mgr.authorize("dev.rmccc.revoke-logic", "logic.invoke", None, None)
+        .expect("granted");
+
+    mgr.revoke("dev.rmccc.revoke-logic", "logic.invoke").unwrap();
+    let error = mgr
+        .authorize("dev.rmccc.revoke-logic", "logic.invoke", None, None)
+        .expect_err("revoked capability must be denied");
+    assert!(
+        error.to_string().contains("未获得能力"),
+        "unexpected error: {error}"
+    );
+}

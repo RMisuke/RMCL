@@ -291,7 +291,7 @@ pub fn validate_manifest(manifest: &PluginManifest, ctx: &ManifestContext) -> Re
         }
     }
 
-    // entry.ui：Phase 4 起允许（隔离容器，ADR-006）；entry.logic 仍然拒绝（Phase 5）。
+    // entry.ui：Phase 4 起允许（隔离容器，ADR-006）。
     if let Some(ui) = &manifest.entry.ui {
         crate::ui::validate_ui_entry(ui)?;
         // 没有 UI 贡献项的入口是死文件：拒绝，避免包内藏无人加载的页面。
@@ -303,12 +303,9 @@ pub fn validate_manifest(manifest: &PluginManifest, ctx: &ManifestContext) -> Re
             ));
         }
     }
+    // entry.logic：Phase 5 起允许，但只能是 `logic/` 下的 `.wasm`（ADR-007）。
     if let Some(logic) = &manifest.entry.logic {
-        validate_relative_path(logic)?;
-        return Err(plugin_error(
-            PluginErrorCode::ManifestInvalid,
-            "Phase 2 不支持 entry.logic（逻辑运行时在 Phase 5 提供）".to_string(),
-        ));
+        crate::logic::validate_logic_entry(logic)?;
     }
 
     // 权限。
@@ -649,14 +646,36 @@ mod tests {
     }
 
     #[test]
-    fn rejects_logic_entries_until_phase_5() {
+    fn accepts_a_logic_entry_under_logic() {
         let json = MINIMAL.replace(
             "\"compatibility\": { \"pluginApi\": \"1.x\", \"core\": \">=0.1.0 <0.2.0\" }",
             "\"compatibility\": { \"pluginApi\": \"1.x\", \"core\": \">=0.1.0 <0.2.0\" }, \
              \"entry\": { \"logic\": \"logic/plugin.wasm\" }",
         );
         let m = PluginManifest::parse(&json).unwrap();
-        let err = validate_manifest(&m, &ctx()).unwrap_err().to_string();
-        assert!(err.contains("Phase 5"), "{err}");
+        validate_manifest(&m, &ctx()).expect("logic entry should validate");
+    }
+
+    #[test]
+    fn rejects_logic_entries_outside_logic_or_not_wasm() {
+        for entry in [
+            "plugin.wasm",
+            "logic/plugin.dylib",
+            "logic/run.sh",
+            "logic/../x.wasm",
+        ] {
+            let json = MINIMAL.replace(
+                "\"compatibility\": { \"pluginApi\": \"1.x\", \"core\": \">=0.1.0 <0.2.0\" }",
+                &format!(
+                    "\"compatibility\": {{ \"pluginApi\": \"1.x\", \"core\": \">=0.1.0 <0.2.0\" }}, \
+                     \"entry\": {{ \"logic\": \"{entry}\" }}"
+                ),
+            );
+            let m = PluginManifest::parse(&json).unwrap();
+            assert!(
+                validate_manifest(&m, &ctx()).is_err(),
+                "expected reject: {entry}"
+            );
+        }
     }
 }

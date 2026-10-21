@@ -128,6 +128,14 @@ pub const CAPABILITIES: &[CapabilitySpec] = &[
         executable: false,
     },
     CapabilitySpec {
+        name: "logic.invoke",
+        description: "运行插件的只读逻辑扩展（独立 helper 进程内的 WASM，ADR-007）",
+        risk: CapabilityRisk::Medium,
+        requires_hosts: false,
+        instance_scoped: false,
+        executable: true,
+    },
+    CapabilitySpec {
         name: "downloads.submit",
         description: "创建受控下载任务",
         risk: CapabilityRisk::Medium,

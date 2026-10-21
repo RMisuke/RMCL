@@ -9,8 +9,10 @@
 
 pub mod abi;
 pub mod protocol;
+pub mod runner;
 pub mod supervisor;
 
 pub use abi::{LogicLimits, LOGIC_API_VERSION};
 pub use protocol::{LogicError, LogicErrorCode, Request, RequestParams, Response};
+pub use runner::LogicRunner;
 pub use supervisor::LogicHost;

@@ -3609,6 +3609,7 @@ dependencies = [
  "rmccc-download",
  "rmccc-error",
  "rmccc-launch",
+ "rmccc-logic",
  "rmccc-modloader",
  "rmccc-mods",
  "rmccc-profile",
@@ -3627,6 +3628,7 @@ dependencies = [
  "tracing",
  "ts-rs",
  "uuid",
+ "wat",
 ]
 
 [[package]]

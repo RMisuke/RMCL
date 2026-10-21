@@ -293,6 +293,11 @@ impl PluginManager {
         &self.diagnostics
     }
 
+    /// 已安装插件的 Manifest（只读；逻辑插件解析 `entry.logic` 用）。
+    pub fn manifest(&self, id: &str) -> Option<&PluginManifest> {
+        self.plugins.get(id).map(|p| &p.manifest)
+    }
+
     /// 已安装插件的版本目录（读取主题/静态资源用）。
     pub fn installed_dir(&self, id: &str) -> Option<PathBuf> {
         self.plugins.get(id).map(|p| p.dir.clone())
