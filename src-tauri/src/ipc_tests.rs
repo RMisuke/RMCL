@@ -4,7 +4,7 @@
 //!
 //! `tauri::test` 的 mock 运行时会把整条命令链泛型化到 `MockRuntime`，而
 //! `AppState` 持有 `tauri::AppHandle`（默认 Wry 运行时）——要用它的前提是把
-//! **73 个命令**全部改成 `fn<R: Runtime>(state: State<'_, AppState<R>>, app: AppHandle<R>, ..)`。
+//! **74 个命令**全部改成 `fn<R: Runtime>(state: State<'_, AppState<R>>, app: AppHandle<R>, ..)`。
 //! 那是比本切片大得多的改动，收益却不比下面这层高多少。
 //!
 //! 因此这里测的是**契约本身**，也就是命令体真正依赖的三件事：
@@ -133,7 +133,7 @@ fn ipc_registry_is_covered_by_the_frontend_api() {
 #[test]
 fn ipc_command_count_is_stable() {
     // 新增命令时这条会失败——提醒同时更新 bindings.rs / api.ts / 本文件。
-    assert_eq!(crate::handlers::IPC_COMMANDS.len(), 73);
+    assert_eq!(crate::handlers::IPC_COMMANDS.len(), 74);
 }
 
 // ────────────────────────── 2. 错误码契约 ──────────────────────────
@@ -747,6 +747,42 @@ fn mod_toggle_on_unknown_file_reports_an_error() {
     let mods_dir = rmccc_launch::instance_mods_dir(&core.config, &profile);
     assert!(!mods_dir.join("missing.jar").exists());
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+// ────────────────────────── 9. 正向契约：WebView 日志 ──────────────────────────
+
+#[test]
+fn frontend_log_accepts_every_tracing_level() {
+    // 引导守卫（index.html）用它把 release 构建里"看不见的"前端崩溃写进日志。
+    for level in ["trace", "debug", "info", "warn", "error"] {
+        crate::commands::ui::frontend_log(level.to_string(), "boot guard test".to_string())
+            .unwrap_or_else(|e| panic!("level {level} rejected: {:?}", e.message));
+    }
+}
+
+#[test]
+fn frontend_log_rejects_unknown_level() {
+    let err = expect_code(
+        crate::commands::ui::frontend_log("verbose".into(), "x".into()),
+        ErrorCode::ValidationError,
+    );
+    assert!(
+        err.message.contains("verbose"),
+        "message should name the level"
+    );
+}
+
+#[test]
+fn frontend_log_rejects_oversized_payloads() {
+    // 上限 8 KiB：防止前端 error handler 死循环时刷爆日志 appender。
+    let ok = "a".repeat(8 * 1024);
+    assert!(crate::commands::ui::frontend_log("error".into(), ok).is_ok());
+
+    let too_long = "a".repeat(8 * 1024 + 1);
+    expect_code(
+        crate::commands::ui::frontend_log("error".into(), too_long),
+        ErrorCode::ValidationError,
+    );
 }
 
 // ────────────────────────── 测试辅助 ──────────────────────────

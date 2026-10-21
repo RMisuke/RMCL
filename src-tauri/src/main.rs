@@ -1,4 +1,5 @@
 mod bindings;
+mod bundle;
 mod commands;
 mod events;
 mod handlers;
@@ -11,6 +12,81 @@ use rmccc_config::paths;
 use state::AppState;
 use tauri::Manager;
 use tauri_plugin_window_state::StateFlags;
+
+/// WebView self-check used to diagnose "window opens but stays blank" reports.
+///
+/// The release build has no Web Inspector and WKWebView's console is invisible
+/// from the outside, so a blank window is indistinguishable from a WebView that
+/// never loaded the bundle. Running the binary with `RMCCC_WEBVIEW_PROBE=1`
+/// logs the URL the WebView actually loaded plus what the bundle mounted, and
+/// paints the same verdict into the page so a screenshot is enough.
+///
+/// Gated by an environment variable: a normal launch does nothing.
+fn spawn_webview_probe(window: tauri::WebviewWindow) {
+    use std::time::Duration;
+
+    tauri::async_runtime::spawn(async move {
+        tokio::time::sleep(Duration::from_secs(4)).await;
+
+        // Runs after the bundle had every chance to mount. Reports the loaded
+        // document, not the configured one: a failed asset protocol shows up as
+        // an empty/again-loaded page with no `#root` children.
+        let js = r##"
+            (function () {
+              function info() {
+                var root = document.getElementById("root");
+                return [
+                  "href=" + location.href,
+                  "readyState=" + document.readyState,
+                  "rootChildren=" + (root ? root.childElementCount : "no-root"),
+                  "appRoot=" + !!document.querySelector(".app-root"),
+                  "scripts=" + [].map.call(document.scripts, function (s) {
+                    return s.src || "inline";
+                  }).join(" , "),
+                  "sheets=" + document.styleSheets.length
+                ].join("\n");
+              }
+              var pre = document.createElement("pre");
+              pre.textContent = "WEBVIEW PROBE\n" + info();
+              pre.style.cssText =
+                "position:fixed;inset:0;z-index:2147483647;margin:0;padding:12px;" +
+                "background:#fff;color:#000;font:12px/1.4 ui-monospace,Menlo,monospace;" +
+                "white-space:pre-wrap;overflow:auto;";
+              (document.body || document.documentElement).appendChild(pre);
+              document.title = "PROBE " + pre.textContent.replace(/\n/g, " | ");
+            })();
+        "##;
+
+        if let Err(e) = window.eval(js) {
+            tracing::warn!(error = %e, "WebView probe: eval failed (webview not alive)");
+            return;
+        }
+
+        tokio::time::sleep(Duration::from_millis(1200)).await;
+        tracing::info!(
+            url = %window.url().map(|u| u.to_string()).unwrap_or_default(),
+            title = %window.title().unwrap_or_default(),
+            "WebView probe"
+        );
+    });
+}
+
+/// Show a bundle-failure page instead of leaving a transparent window behind.
+///
+/// Navigates to a self-contained `data:` URL: `eval` is not an option here,
+/// because when `index.html` itself was never embedded the WebView has no
+/// script context to evaluate in.
+fn report_broken_bundle(window: tauri::WebviewWindow, report: &bundle::BundleReport) {
+    let url = bundle::error_page_url(report);
+    match tauri::Url::parse(&url) {
+        Ok(url) => {
+            if let Err(e) = window.navigate(url) {
+                tracing::error!(error = %e, "Could not show the broken-bundle page");
+            }
+        }
+        Err(e) => tracing::error!(error = %e, "Could not encode the broken-bundle page"),
+    }
+}
 
 fn main() {
     // Ensure data directories exist
@@ -66,6 +142,25 @@ fn main() {
             if let Some(window) = app.get_webview_window("main") {
                 window.show().ok();
                 window.set_focus().ok();
+
+                // A bundle embedded from a stale `dist/` renders nothing at all,
+                // so say so instead of leaving a transparent window behind.
+                if let Some(report) = bundle::inspect(app) {
+                    if report.is_ok() {
+                        tracing::debug!("{}", report.describe());
+                    } else {
+                        tracing::error!(
+                            missing = ?report.missing,
+                            index_present = report.index_present,
+                            "Embedded frontend bundle is incomplete; rebuilding the app is required"
+                        );
+                        report_broken_bundle(window.clone(), &report);
+                    }
+                }
+
+                if std::env::var("RMCCC_WEBVIEW_PROBE").is_ok() {
+                    spawn_webview_probe(window);
+                }
             }
 
             Ok(())

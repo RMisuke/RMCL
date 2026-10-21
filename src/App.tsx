@@ -23,6 +23,7 @@ import TitleBar from "./components/TitleBar";
 import { ToastContainer } from "./components/Toast";
 import { initI18n } from "./i18n";
 import { initTheme } from "./theme";
+import { reportFrontendMessage } from "./ipc/api";
 
 type AppWindow = Awaited<ReturnType<typeof getCurrentWindow>>;
 
@@ -72,6 +73,10 @@ const App: ParentComponent = (props) => {
       await ensureReachable(win);
     } catch (e) {
       console.warn("App: window API unavailable", e);
+      // The release WebView has no console, so mirror it into the log file.
+      void reportFrontendMessage(
+        `window shell failed to reveal: ${String(e)}`
+      );
     }
   });
 

@@ -12,4 +12,5 @@ pub mod mods;
 pub mod plugin;
 pub mod profile;
 pub mod settings;
+pub mod ui;
 pub mod version;

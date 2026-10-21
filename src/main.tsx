@@ -36,3 +36,10 @@ render(
   ),
   document.getElementById("root")!
 );
+
+// Tell the inline boot guard in `index.html` that the shell rendered, so it
+// drops its failure panel and stops reporting a boot timeout. The guard is
+// registered before this module loads (it is an inline classic script), so the
+// event cannot race the listener.
+window.dispatchEvent(new Event("rmccc:shell-mounted"));
+

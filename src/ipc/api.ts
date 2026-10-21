@@ -283,3 +283,17 @@ export const dashboard = {
   getThemeJson: (key: string) =>
     safeInvoke<unknown>("dashboard_get_theme_json", { key }),
 };
+
+// ── WebView diagnostics ──
+
+/**
+ * Forward a frontend-side message to the backend log.
+ *
+ * Release builds have no Web Inspector, so a caught error would otherwise leave
+ * no trace. `index.html`'s boot guard reports through the same command without
+ * importing this module (it must work when the bundle fails to load).
+ */
+export const reportFrontendMessage = (
+  message: string,
+  level: "trace" | "debug" | "info" | "warn" | "error" = "error"
+) => safeInvoke<null>("frontend_log", { level, message });

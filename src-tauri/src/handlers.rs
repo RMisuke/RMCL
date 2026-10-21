@@ -29,6 +29,7 @@ pub const IPC_COMMANDS: &[&str] = &[
     "launch_status",
     "log_get",
     "log_clear",
+    "frontend_log",
     "modloader_list",
     "modloader_install",
     "mod_search",
@@ -118,6 +119,8 @@ pub fn invoke_handlers() -> impl Fn(tauri::ipc::Invoke<tauri::Wry>) -> bool + Se
         // ── logs ──
         commands::logs::log_get,
         commands::logs::log_clear,
+        // ── webview ──
+        commands::ui::frontend_log,
         // ── modloader ──
         commands::modloader::modloader_list,
         commands::modloader::modloader_install,
