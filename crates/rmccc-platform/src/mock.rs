@@ -14,6 +14,7 @@ use std::sync::{Arc, Mutex};
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum MockCall {
     RestrictOwnerOnly(String),
+    RestrictOwnerOnlyDir(String),
     MakeExecutable(String),
     Symlink(String, String),
     RemoveSymlink(String),
@@ -108,6 +109,10 @@ impl MockPlatform {
 impl PlatformFs for MockPlatform {
     fn restrict_owner_only(&self, path: &Path) -> Result<()> {
         self.record(MockCall::RestrictOwnerOnly(path.display().to_string()))
+    }
+
+    fn restrict_owner_only_dir(&self, path: &Path) -> Result<()> {
+        self.record(MockCall::RestrictOwnerOnlyDir(path.display().to_string()))
     }
 
     fn make_executable(&self, path: &Path) -> Result<()> {

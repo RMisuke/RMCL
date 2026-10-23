@@ -16,6 +16,12 @@ pub trait PlatformFs: Send + Sync {
     /// 用于 `.key`、argfile 等含密钥或令牌的敏感文件。
     fn restrict_owner_only(&self, path: &Path) -> Result<()>;
 
+    /// 把**目录**权限收紧到"仅属主可进入"（Unix `0700` / Windows 收紧 ACL）。
+    ///
+    /// 用于 `agent/`、`private/` 等敏感目录：目录需要执行位才能遍历，
+    /// 不能复用文件的 `0600`。
+    fn restrict_owner_only_dir(&self, path: &Path) -> Result<()>;
+
     /// 让文件可执行（Unix `0755`；Windows 概念上无操作）。
     fn make_executable(&self, path: &Path) -> Result<()>;
 

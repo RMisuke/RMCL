@@ -28,6 +28,10 @@ impl PlatformFs for UnsupportedFs {
         Err(unsupported("文件权限收紧"))
     }
 
+    fn restrict_owner_only_dir(&self, _path: &Path) -> Result<()> {
+        Err(unsupported("目录权限收紧"))
+    }
+
     fn make_executable(&self, _path: &Path) -> Result<()> {
         // TODO(windows): 无对应概念，应返回 Ok(())。
         Err(unsupported("设置可执行位"))

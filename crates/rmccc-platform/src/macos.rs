@@ -22,6 +22,13 @@ impl PlatformFs for MacosFs {
         Ok(())
     }
 
+    fn restrict_owner_only_dir(&self, path: &Path) -> Result<()> {
+        use std::os::unix::fs::PermissionsExt;
+        // 目录需要执行位才能遍历：0700 而非文件的 0600。
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700))?;
+        Ok(())
+    }
+
     fn make_executable(&self, path: &Path) -> Result<()> {
         use std::os::unix::fs::PermissionsExt;
         std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755))?;
