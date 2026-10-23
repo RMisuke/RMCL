@@ -9,6 +9,22 @@
 
 ## 0. 更新记录
 
+**2026-10-24（Phase 6.5 第二批轮）**：首个写工具 + 上下文范围（6.7）。
+
+- **写工具链**：`AgentTool` 新增两阶段协议（`approval_payload` 产出审阅载荷）；
+  `ToolRegistry::invoke_approved` 是写工具唯一执行通道——校验批准快照（状态 = approved、
+  kind 指向同一工具、会话一致），防重放（执行后任务推进 applied/failed）、防误用（拿 A 的批准执行 B）。
+  `never` 确认策略的写工具在执行循环里直接拒绝（写操作必须经用户）。
+- **`mods.apply_plan`**（指南 §10.6 旗舰场景）：模型零参数触发；工具自产 dry-run 审阅载荷 →
+  批准 → 执行时重新扫描实例（Core 再校验），把仍缺失的依赖交给 `PlanApplier`。
+  `src-tauri` 实现 `ModrinthPlanApplier`（搜索 → 版本匹配游戏版本+加载器 → SHA1 校验安装）；
+  约束字符串为 best-effort（不求解 semver，载荷里人工确认）。
+- **6.7 上下文**：`run_turn_with_context`——宿主只提供所选 profile 元数据（决策 5），
+  进提示词前脱敏；`TurnOutput::context_sent` + `/agent` 页"发送给模型的上下文"面板。
+- **门禁**：`cargo test --workspace` **647 passed / 0 failed**（Agent 77 项）；
+  fmt / 两条 clippy / typecheck / build 全绿（JS 182.00 kB）。体积 **8.18 MiB**（ADR-011 ✅）。
+- **待人工验证**：`ModrinthPlanApplier` 的真实网络解析（需要真实凭据 + 网络联调）。
+
 **2026-10-24（Phase 6.5 第一批轮）**：Agent 执行循环 + 审批链 + IPC/UI 接线（里程碑 M7 达成）。
 
 - **接线前审计债清偿**：P2-17（home 路径脱敏从死代码接上生产调用点；`agent/`/`private/` 目录经

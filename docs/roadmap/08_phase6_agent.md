@@ -11,6 +11,15 @@
 ## 2. 与当前状态的对应
 
 - **6.1 / 6.2 / 6.3 / 6.6 已落地**（`crates/rmccc-agent`，63 项测试）；`ModDependency` 现在有真实解析器与消费方（审计 P3-2 销账）。
+- **6.5 第二批完成（2026-10-24）**：首个写工具 `mods.apply_plan`（指南 §10.6 旗舰场景
+  "检查实例模组兼容性并修复缺失前置"）——`PlanApplier` trait 由宿主注入（`src-tauri` 实现
+  Modrinth 解析 + 版本匹配 + SHA1 校验下载）；两阶段协议：工具自产 dry-run 审阅载荷 → 用户批准 →
+  `ToolRegistry::invoke_approved`（校验批准快照：状态/kind/会话，防重放防误用）→ 执行后任务推进
+  applied/failed。执行时**重新扫描**实例（"用户确认 + Core 再校验"），模型不提供任何路径参数。
+  5 项新端到端测试（批准执行 / 拒绝不落盘 / 上下文注入 / 防重放矩阵）。
+- **6.7 上下文范围完成**：`run_turn_with_context`——宿主只提供所选 profile 元数据
+  （id/名称/游戏版本/加载器/隔离/内存，ADR-010 决策 5），进提示词前脱敏（home → `~`），
+  `TurnOutput::context_sent` + UI "发送给模型的上下文" 折叠面板让发送范围对用户可见。
 - **6.5 第一批完成（2026-10-24）**：`rmccc-agent::runtime`——`AgentService` 执行循环
   （脚本化假 provider 的 8 项端到端测试：直接调用回灌 / 审批批准与拒绝 / 取消 / 迭代上限）
   + `ApprovalBroker`（`proposed→approved/rejected` 快照推进 + `approval_resolved` 事件留痕）；
@@ -18,7 +27,8 @@
   仍是**只读工具**：写操作即使审批通过也被注册表拒绝，写工具在后续切片注册。
 - **接线前审计债已清（2026-10-24）**：P2-17（home 脱敏接线、目录 0700、内置工具改为注入固定根目录，
   模型不再提供路径）、P2-28（unparsed jar 不再计入 installed）、P2-29（审计 fail-closed、JSONL 互斥、clear_all 记审计）。
-- **6.4 / 6.7 残留**：注册表持久化随 Phase 7；隐私的"按需上下文范围 UI"随下一批切片。
+- **6.4 残留**：注册表持久化随 Phase 7。6.7 上下文范围已落地（见上）；
+  写工具版本约束为 best-effort（semver 求解待后续切片，计划载荷里人工确认）。
 
 ### 已完成切片（2026-10-22）
 
@@ -29,7 +39,7 @@
 | 6.3 Session Store | ✅ | `rmccc-agent::session`：`SessionStore` 写 `agent/sessions/<id>.jsonl`（9 种白名单事件，提示词/输出只存 `sha256` + 字符数）、`agent/tasks/<id>.json`（原子写 + 脱敏 `TaskSnapshot`）、`list` / `read` / `read_task` / `list_tasks`、`purge_expired`（默认 30 天）与 `clear_all`（保留审计）；id 只允许 `[A-Za-z0-9_-]{1,64}`（路径安全唯一保证点）；`rmccc-config::paths` 补 `agent_*` 路径 |
 | 6.6 只读工具 + 首个消费方 | ✅ | `rmccc-agent::mods`：扫描 `mods/*.jar` 的 `fabric.mod.json`（`depends`/`suggests`/`breaks`）→ `DependencyReport` + dry-run `ModInstallPlan`；`ToolRegistry` 校验 JSON Schema、拒绝非 `read_only`、未知字段与相对路径；内置 `versions.installed` / `mods.installed` / `mods.dependency_scan` |
 | 6.4 Tool Registry 持久化 | 🟡 部分 | 描述符/四级风险/确认策略/重复 id 拒绝已在 6.6 完成；**跨进程的工具注册持久化未做**（插件工具来源属于 Phase 7） |
-| 6.5 Loop + Approval | ✅ 第一批 | `AgentService` 执行循环 + `ApprovalBroker` + IPC `agent_*` 9 条 + `/agent` 页面；只读工具 + 计划预览 + 审批可审计（M7）；Agent 已接入主程序（主可执行 8.16 MiB，ADR-011 ✅） |
+| 6.5 Loop + Approval | ✅ 两批 | `AgentService` 执行循环 + `ApprovalBroker` + IPC `agent_*` 9 条 + `/agent` 页面；只读工具 + 计划预览 + 审批可审计（M7）；Agent 已接入主程序（主可执行 8.16 MiB，ADR-011 ✅） |
 
 > **偏离说明**：`mods.toml`（Forge/NeoForge）未解析——这类 jar 进入 `unparsed` 并在计划里显式声明，
 > **且不再计入已安装集合**（P2-28 修复）。
