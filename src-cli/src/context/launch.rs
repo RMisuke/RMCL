@@ -202,6 +202,7 @@ impl CliContext {
         Ok(json!({
             "profile_id": profile_id,
             "java": java_install.path.display().to_string(),
+            "process_prefix": command.prefix,
             "main_class": command.main_class,
             "jvm_args": command.jvm_args,
             "game_args": command.game_args,

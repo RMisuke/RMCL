@@ -72,22 +72,62 @@ fn java_argfile_escape(s: &str) -> String {
     }
 }
 
+/// Assemble the final spawn argv from the process-level prefix and the JVM
+/// response file.
+///
+/// The result is `[prefix…, java, @file]`: the priority prefix (`nice -n N`)
+/// and wrapper command wrap the JVM at the OS process layer, and the `@file`
+/// must be read by java itself — the JVM parses its own `@argfile`, so the
+/// response file path must directly follow the java executable.
+///
+/// Returns `(program, leading args before `@file`)`. With an empty prefix the
+/// java executable is the program; otherwise `prefix[0]` is the program and the
+/// java path becomes its first argument (`nice -n 5 java @file`).
+pub(crate) fn spawn_argv(
+    java_path: &Path,
+    process_prefix: &[String],
+    response_file: &Path,
+) -> (String, Vec<String>) {
+    let argfile = format!("@{}", response_file.display());
+    match process_prefix.split_first() {
+        Some((first, rest)) if !first.is_empty() => {
+            let mut args = rest.to_vec();
+            args.push(java_path.display().to_string());
+            args.push(argfile);
+            (first.clone(), args)
+        }
+        _ => (java_path.display().to_string(), vec![argfile]),
+    }
+}
+
 /// Spawn the Minecraft game process.
 ///
 /// Uses a response file (`@file`) to pass arguments securely.
+/// `process_prefix` carries the priority prefix and wrapper command
+/// (`Command::prefix`); the final argv is `[prefix…, java, @file]`.
 /// Captures stdout and stderr for display in the launcher UI.
 pub async fn spawn_game(
     java_path: &Path,
+    process_prefix: &[String],
     response_file: &Path,
     game_dir: &Path,
     extra_env: Option<HashMap<String, String>>,
     platform: &Platform,
 ) -> Result<tokio::process::Child> {
-    let mut cmd = tokio::process::Command::new(java_path);
-    cmd.arg(format!("@{}", response_file.display()))
-        .current_dir(game_dir)
+    let (program, lead_args) = spawn_argv(java_path, process_prefix, response_file);
+    let mut cmd = tokio::process::Command::new(&program);
+    for arg in &lead_args {
+        cmd.arg(arg);
+    }
+    cmd.current_dir(game_dir)
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped());
+
+    tracing::info!(
+        program = %program,
+        prefix = ?process_prefix,
+        "Spawning game process"
+    );
 
     // P2-17：让游戏进程自成进程组，退出时按进程组整体终止（Unix `setpgid`，
     // Windows 后端为 no-op 待 Job Object）。经平台后端，无裸 cfg。
@@ -633,6 +673,40 @@ pub fn build_game_env(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_spawn_argv_empty_prefix_java_is_program() {
+        let java = Path::new("/usr/bin/java");
+        let rf = Path::new("/game/.launch-args-1");
+        let (program, args) = spawn_argv(java, &[], rf);
+        assert_eq!(program, "/usr/bin/java");
+        assert_eq!(args, vec!["@/game/.launch-args-1"]);
+    }
+
+    #[test]
+    fn test_spawn_argv_prefix_wraps_java_then_argfile() {
+        let java = Path::new("/opt/jdk/bin/java");
+        let rf = Path::new("/run dir/.launch-args-2");
+        let prefix = vec!["nice".to_string(), "-n".to_string(), "5".to_string()];
+        let (program, args) = spawn_argv(java, &prefix, rf);
+        // P1-7 regression: nice is the program, java is its argument and the
+        // argfile directly follows java so the JVM parses it.
+        assert_eq!(program, "nice");
+        assert_eq!(
+            args,
+            vec!["-n", "5", "/opt/jdk/bin/java", "@/run dir/.launch-args-2"]
+        );
+    }
+
+    #[test]
+    fn test_spawn_argv_wrapper_tokens_preserved() {
+        let java = Path::new("/usr/bin/java");
+        let rf = Path::new("/game/.launch-args-3");
+        let prefix = vec!["flatpak".to_string(), "run".to_string()];
+        let (program, args) = spawn_argv(java, &prefix, rf);
+        assert_eq!(program, "flatpak");
+        assert_eq!(args, vec!["run", "/usr/bin/java", "@/game/.launch-args-3"]);
+    }
 
     #[test]
     fn test_command_builder_add_default() {

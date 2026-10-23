@@ -344,24 +344,22 @@ impl DefaultLauncher {
         let jv = java.major_version;
         let is_64bit = java.is_64bit;
 
-        // 1. Process priority — 前缀由平台后端给出（Unix `nice -n N`，其余为空）。
-        let priority_prefix = self
+        // 1. Process-level prefix: priority (Unix `nice -n N`, empty elsewhere)
+        //    followed by the wrapper command. Both wrap the JVM at the OS
+        //    process layer and must NOT become JVM arguments — with the
+        //    `@argfile` spawn model, `jvm_args` land in the response file where
+        //    a leading non-`-` token is parsed as the main class
+        //    ("could not find or load main class nice").
+        let mut prefix = self
             .options
             .platform
             .process
             .priority_command_prefix(self.options.process_priority);
-        if !priority_prefix.is_empty() {
-            cmd.add_all(&priority_prefix);
-        }
-
-        // 2. Wrapper command.
         if let Some(wrapper) = &self.options.wrapper {
-            for token in wrapper.split_whitespace() {
-                cmd.add(token);
-            }
+            prefix.extend(wrapper.split_whitespace().map(str::to_string));
         }
 
-        // 3. Java executable.
+        // 2. Java executable.
         //
         // Deliberately NOT added to the argument list: `Command::jvm_args` holds
         // only JVM *arguments*. The executable is supplied by the two consumers
@@ -602,6 +600,7 @@ impl DefaultLauncher {
         }
 
         Ok(Command {
+            prefix,
             jvm_args: cmd.build(),
             game_args,
             main_class,
@@ -676,6 +675,7 @@ impl DefaultLauncher {
 
         let child = spawn_game(
             &self.options.java.path,
+            &command.prefix,
             &response_file,
             &self.run_dir,
             Some(env),
@@ -851,9 +851,18 @@ fn make_launch_script_impl(launcher: &DefaultLauncher, path: &Path) -> LaunchRes
         std::fs::create_dir_all(parent)?;
     }
 
-    // The script must start with the Java executable, which `Command::jvm_args`
-    // intentionally does not carry (see `generate_command_line`).
-    let full_args: Vec<String> = std::iter::once(launcher.options.java.path.display().to_string())
+    // The script must start with the process-level prefix (priority / wrapper)
+    // followed by the Java executable — neither is carried by
+    // `Command::jvm_args` (see `generate_command_line`). The order matters:
+    // `nice -n 5 wrapper… java …`, i.e. the JVM arguments must not precede the
+    // java executable.
+    let full_args: Vec<String> = command
+        .prefix
+        .iter()
+        .cloned()
+        .chain(std::iter::once(
+            launcher.options.java.path.display().to_string(),
+        ))
         .chain(command.jvm_args.iter().cloned())
         .chain(std::iter::once(command.main_class.clone()))
         .chain(command.game_args.iter().cloned())
@@ -1186,6 +1195,7 @@ fn pwsh_quote(s: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rmccc_platform::ProcessPriority;
 
     fn test_launcher() -> DefaultLauncher {
         let mut gv = GameVersion {
@@ -1271,6 +1281,14 @@ mod tests {
 
     /// Build a launcher backed by a temp game dir with a fake client JAR.
     fn test_launcher_on_disk() -> (DefaultLauncher, PathBuf) {
+        test_launcher_on_disk_opts(ProcessPriority::Normal, None)
+    }
+
+    /// Same as [`test_launcher_on_disk`] with process priority / wrapper set.
+    fn test_launcher_on_disk_opts(
+        process_priority: ProcessPriority,
+        wrapper: Option<&str>,
+    ) -> (DefaultLauncher, PathBuf) {
         let dir = std::env::temp_dir().join(format!("rmcl-launch-{}", uuid::Uuid::new_v4()));
         let game_dir = dir.join("game");
         let jar_dir = game_dir.join("versions/1.20.4");
@@ -1288,6 +1306,8 @@ mod tests {
         let mut options = LaunchOptions {
             max_memory: 2048,
             game_dir: game_dir.clone(),
+            process_priority,
+            wrapper: wrapper.map(str::to_string),
             ..Default::default()
         };
         options.java.major_version = 17;
@@ -1355,6 +1375,121 @@ mod tests {
         assert!(content.contains("$Env:INST_NAME"));
         assert!(content.contains("net.minecraft.client.main.Main"));
 
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // ── P1-7 regression: priority / wrapper are process-level prefixes ──
+
+    #[test]
+    fn test_priority_and_wrapper_become_process_prefix() {
+        let (l, dir) = test_launcher_on_disk_opts(ProcessPriority::Low, Some("mywrap -c"));
+        let command = l.generate_command_line().unwrap();
+
+        let expected_priority = l
+            .options
+            .platform
+            .process
+            .priority_command_prefix(ProcessPriority::Low);
+        assert_eq!(
+            command.prefix,
+            [expected_priority, vec!["mywrap".into(), "-c".into()]].concat()
+        );
+        // The prefix must not leak into the JVM argument domain: with the
+        // `@argfile` spawn model the JVM parses a leading non-`-` token as the
+        // main class and dies with "could not find or load main class nice".
+        assert!(!command.jvm_args.iter().any(|a| a == "nice"));
+        assert!(!command.jvm_args.iter().any(|a| a == "mywrap"));
+        assert!(!command.jvm_args.iter().any(|a| a == "-c"));
+        // JVM args still start with a real option.
+        assert!(command.jvm_args.first().is_some_and(|a| a.starts_with('-')));
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_normal_priority_has_empty_prefix() {
+        let (l, dir) = test_launcher_on_disk();
+        let command = l.generate_command_line().unwrap();
+        assert!(command.prefix.is_empty());
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_launch_script_prefix_precedes_java() {
+        let (l, dir) = test_launcher_on_disk_opts(ProcessPriority::Low, Some("mywrap -c"));
+        let script = l.game_dir.join("start-priority.sh");
+        l.make_launch_script(&script).unwrap();
+        let content = std::fs::read_to_string(&script).unwrap();
+        let command_line = content
+            .lines()
+            .find(|l| l.contains("net.minecraft.client.main.Main"))
+            .expect("script contains the command line");
+
+        // Order must be `nice … mywrap -c java … main …` — the java executable
+        // sits between the prefix and the JVM arguments.
+        let java_pos = command_line
+            .find(&l.options.java.path.display().to_string())
+            .expect("script contains java path");
+        assert!(command_line.contains("nice"));
+        assert!(command_line.find("mywrap").is_some_and(|p| p < java_pos));
+        let xmx_pos = command_line.find("-Xmx").expect("script contains -Xmx");
+        assert!(java_pos < xmx_pos);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// End-to-end spawn check: a fake `java` records the argv it received.
+    /// With `Low` priority the launch path must run `nice -n 1 java @file`,
+    /// so the fake java sees exactly the `@argfile` — proving the priority
+    /// prefix wrapped the JVM at process level and never entered the argfile.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn test_launch_spawns_prefix_then_java_argfile() {
+        let (l, dir) = test_launcher_on_disk_opts(ProcessPriority::Low, None);
+
+        // Fake java: shell script recording its argv, then exiting cleanly.
+        let fake_java = dir.join("fake-java.sh");
+        let argv_out = dir.join("fake-java-argv.txt");
+        std::fs::write(
+            &fake_java,
+            format!(
+                "#!/bin/sh\nprintf '%s\\n' \"$@\" > {}\n",
+                argv_out.display()
+            ),
+        )
+        .unwrap();
+        std::fs::set_permissions(
+            &fake_java,
+            std::os::unix::fs::PermissionsExt::from_mode(0o755),
+        )
+        .unwrap();
+        let mut l = l;
+        l.options.java.path = fake_java.clone();
+
+        let managed = l.launch().await.expect("launch spawns the fake java");
+
+        // Wait for the child to record its argv and exit (it exits immediately).
+        for _ in 0..100 {
+            if argv_out.exists() {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        }
+        let argv = std::fs::read_to_string(&argv_out).expect("fake java recorded its argv");
+        let argv: Vec<String> = argv.lines().map(str::to_string).collect();
+
+        // Exactly one argument: the response file path (with `@`).
+        assert_eq!(argv.len(), 1, "fake java argv: {argv:?}");
+        assert!(argv[0].starts_with('@'), "fake java argv: {argv:?}");
+        // The response file existed when java read it and holds the JVM args,
+        // the main class and the game args — not the priority prefix.
+        let argfile_path = argv[0].trim_start_matches('@').to_string();
+        let content = std::fs::read_to_string(&argfile_path).unwrap();
+        assert!(content.contains("net.minecraft.client.main.Main"));
+        assert!(!content.lines().any(|l| l == "nice"));
+
+        let _ = managed.wait_exit().await;
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

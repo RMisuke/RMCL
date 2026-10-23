@@ -257,8 +257,10 @@ pub async fn spawn_managed(
     max_lines: usize,
     platform: &rmccc_platform::Platform,
 ) -> Result<Arc<ManagedProcess>> {
+    // Convenience path carries no process-level prefix (`Command::prefix`);
+    // the orchestrated launch path goes through `DefaultLauncher::launch`.
     let child =
-        crate::process::spawn_game(java_path, response_file, game_dir, None, platform).await?;
+        crate::process::spawn_game(java_path, &[], response_file, game_dir, None, platform).await?;
     let managed = Arc::new(ManagedProcess::new(profile_id, child, max_lines));
     let _monitor_handle = managed.clone().start_monitors();
     Ok(managed)
