@@ -28,6 +28,7 @@ use std::time::Duration;
 struct ScriptedProvider {
     id: String,
     responses: std::sync::Mutex<Vec<String>>,
+    seen_requests: std::sync::Mutex<Vec<ChatRequest>>,
 }
 
 impl LlmProvider for ScriptedProvider {
@@ -41,9 +42,13 @@ impl LlmProvider for ScriptedProvider {
 
     fn stream_chat(
         &self,
-        _request: ChatRequest,
+        request: ChatRequest,
         _cancel: CancelToken,
     ) -> Result<LlmStream, rmccc_agent::llm::LlmError> {
+        self.seen_requests
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .push(request);
         let text = self
             .responses
             .lock()
@@ -182,12 +187,13 @@ async fn direct_tool_call_feeds_result_back_and_completes() {
     // 第一次响应：调用工具；第二次：最终答复。
     let provider = Arc::new(ScriptedProvider {
         id: "scripted".into(),
+        seen_requests: std::sync::Mutex::new(Vec::new()),
         responses: std::sync::Mutex::new(vec![
             "All done, nothing missing.".to_string(),
             "```rmccc-tool\n{\"tool\":\"versions.installed\",\"input\":{}}\n```".to_string(),
         ]),
     });
-    let svc = service(store.clone(), registry, provider);
+    let svc = service(store.clone(), registry, provider.clone());
     let out = svc
         .run_turn("what versions are installed?", None, CancelToken::new())
         .await
@@ -241,6 +247,7 @@ async fn confirmation_tool_waits_for_broker_decision() {
         .expect("register");
     let provider = Arc::new(ScriptedProvider {
         id: "scripted".into(),
+        seen_requests: std::sync::Mutex::new(Vec::new()),
         responses: std::sync::Mutex::new(vec![
             "approved path done".to_string(),
             "```rmccc-tool\n{\"tool\":\"demo.confirm\",\"input\":{}}\n```".to_string(),
@@ -281,8 +288,9 @@ async fn confirmation_tool_waits_for_broker_decision() {
     assert_eq!(out.tool_calls, 1);
     assert_eq!(out.replies, vec!["approved path done"]);
 
+    // 执行完成后任务推进到 applied（单次执行，不可重放）。
     let task = store.read_task(&task_id).expect("read").expect("present");
-    assert_eq!(task.status, TaskStatus::Approved);
+    assert_eq!(task.status, TaskStatus::Applied);
 
     // 事件流里有 approval_requested 与 approval_resolved。
     let events = store.read(&out.session_id).expect("events");
@@ -308,6 +316,7 @@ async fn rejected_confirmation_blocks_execution() {
         .expect("register");
     let provider = Arc::new(ScriptedProvider {
         id: "scripted".into(),
+        seen_requests: std::sync::Mutex::new(Vec::new()),
         responses: std::sync::Mutex::new(vec![
             "understood, stopped".to_string(),
             "```rmccc-tool\n{\"tool\":\"demo.confirm\",\"input\":{}}\n```".to_string(),
@@ -367,6 +376,7 @@ async fn max_iterations_stops_the_loop() {
     // 模型永远只发工具调用，不给最终答复。
     let provider = Arc::new(ScriptedProvider {
         id: "scripted".into(),
+        seen_requests: std::sync::Mutex::new(Vec::new()),
         responses: std::sync::Mutex::new(
             (0..16)
                 .map(|_| "```rmccc-tool\n{\"tool\":\"demo.confirm\",\"input\":{}}\n```".to_string())
@@ -406,6 +416,7 @@ async fn cancel_stops_the_turn() {
         .expect("register");
     let provider = Arc::new(ScriptedProvider {
         id: "scripted".into(),
+        seen_requests: std::sync::Mutex::new(Vec::new()),
         responses: std::sync::Mutex::new(vec![
             "never reached".to_string(),
             "```rmccc-tool\n{\"tool\":\"demo.confirm\",\"input\":{}}\n```".to_string(),
@@ -476,6 +487,347 @@ async fn resolve_is_idempotent_guarded_and_auditable() {
         .await
         .expect("resolution");
     assert_eq!(resolution, Resolution::Approved);
+
+    let _ = std::fs::remove_dir_all(store.data_dir());
+}
+
+// ── 6.5 第二批：写工具与上下文 ──
+
+/// 记录调用的假 applier。
+struct FakeApplier {
+    calls: std::sync::Mutex<Vec<Vec<String>>>,
+}
+
+impl rmccc_agent::PlanApplier for FakeApplier {
+    fn apply(
+        &self,
+        _mods_dir: &std::path::Path,
+        dependencies: &[rmccc_agent::PlannedDependency],
+    ) -> rmccc_error::Result<rmccc_agent::AppliedPlanReport> {
+        let ids: Vec<String> = dependencies.iter().map(|d| d.mod_id.clone()).collect();
+        self.calls
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .push(ids.clone());
+        Ok(rmccc_agent::AppliedPlanReport {
+            installed: ids
+                .iter()
+                .map(|id| rmccc_agent::AppliedMod {
+                    mod_id: id.clone(),
+                    file: format!("{id}.jar"),
+                    version: Some("1.0".into()),
+                })
+                .collect(),
+            failed: vec![],
+            attempted: ids,
+        })
+    }
+}
+
+fn apply_tool_call() -> String {
+    "```rmccc-tool\n{\"tool\":\"mods.apply_plan\",\"input\":{}}\n```".to_string()
+}
+
+fn write_sodium_jar(dir: &std::path::Path) {
+    let jar = dir.join("sodium.jar");
+    let file = std::fs::File::create(jar).expect("jar");
+    let mut writer = zip::ZipWriter::new(file);
+    let options =
+        zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored);
+    writer
+        .start_file("fabric.mod.json", options)
+        .expect("entry");
+    std::io::Write::write_all(
+        &mut writer,
+        br#"{"id":"sodium","version":"0.5","depends":{"missing-lib":">=1"}}"#,
+    )
+    .expect("write");
+    writer.finish().expect("finish");
+}
+
+#[tokio::test]
+async fn apply_plan_requires_approval_then_applies() {
+    let store = temp_store("apply-ok");
+    let applier = Arc::new(FakeApplier {
+        calls: std::sync::Mutex::new(Vec::new()),
+    });
+    let roots = AgentRoots {
+        versions_dir: std::env::temp_dir().join("rmccc-agent-apply-versions"),
+        mods_dir: store.data_dir().join("mods"),
+    };
+    std::fs::create_dir_all(&roots.mods_dir).expect("mods dir");
+    write_sodium_jar(&roots.mods_dir);
+
+    let applier_dyn: Arc<dyn rmccc_agent::PlanApplier> = applier.clone();
+    let registry = rmccc_agent::full_registry(&roots, applier_dyn).expect("registry");
+    let provider = Arc::new(ScriptedProvider {
+        id: "scripted".into(),
+        seen_requests: std::sync::Mutex::new(Vec::new()),
+        responses: std::sync::Mutex::new(vec![
+            "installed missing deps".to_string(),
+            apply_tool_call(),
+        ]),
+    });
+    let svc = Arc::new(service(store.clone(), registry, provider));
+
+    let store_for_user = store.clone();
+    let user = tokio::spawn(async move {
+        for _ in 0..200 {
+            let broker = ApprovalBroker::new(store_for_user.clone());
+            if let Ok(pending) = broker.pending() {
+                if !pending.is_empty() {
+                    return pending[0].clone();
+                }
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        panic!("no pending task");
+    });
+
+    let svc_for_run = svc.clone();
+    let run = tokio::spawn(async move {
+        svc_for_run
+            .run_turn("fix my dependencies", None, CancelToken::new())
+            .await
+    });
+
+    // 审批载荷里是 dry-run 计划（含缺失项），不含模型提供的参数。
+    let task = user.await.expect("task");
+    assert_eq!(task.status, TaskStatus::Proposed);
+    let plan = task.payload["plan"].clone();
+    assert_eq!(plan["dry_run"], true);
+    assert_eq!(plan["dependencies"][0]["mod_id"], "missing-lib");
+
+    svc.broker()
+        .resolve(&task.task_id, true, None)
+        .expect("approve");
+    let out = run.await.expect("join").expect("turn");
+    assert_eq!(out.status, TurnStatus::Completed);
+    assert_eq!(out.replies, vec!["installed missing deps"]);
+
+    // applier 恰被调用一次，任务推进到 applied（单次执行，不可重放）。
+    assert_eq!(
+        applier
+            .calls
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .len(),
+        1
+    );
+    let stored = store
+        .read_task(&task.task_id)
+        .expect("read")
+        .expect("present");
+    assert_eq!(stored.status, TaskStatus::Applied);
+
+    let _ = std::fs::remove_dir_all(store.data_dir());
+}
+
+#[tokio::test]
+async fn rejected_apply_plan_never_touches_the_filesystem() {
+    let store = temp_store("apply-no");
+    let applier = Arc::new(FakeApplier {
+        calls: std::sync::Mutex::new(Vec::new()),
+    });
+    let roots = AgentRoots {
+        versions_dir: std::env::temp_dir().join("rmccc-agent-apply-no-versions"),
+        mods_dir: store.data_dir().join("mods"),
+    };
+    std::fs::create_dir_all(&roots.mods_dir).expect("mods dir");
+    write_sodium_jar(&roots.mods_dir);
+
+    let applier_dyn: Arc<dyn rmccc_agent::PlanApplier> = applier.clone();
+    let registry = rmccc_agent::full_registry(&roots, applier_dyn).expect("registry");
+    let provider = Arc::new(ScriptedProvider {
+        id: "scripted".into(),
+        seen_requests: std::sync::Mutex::new(Vec::new()),
+        responses: std::sync::Mutex::new(vec!["ok, not installing".to_string(), apply_tool_call()]),
+    });
+    let svc = Arc::new(service(store.clone(), registry, provider));
+
+    let store_for_user = store.clone();
+    let user = tokio::spawn(async move {
+        for _ in 0..200 {
+            let broker = ApprovalBroker::new(store_for_user.clone());
+            if let Ok(pending) = broker.pending() {
+                if !pending.is_empty() {
+                    return pending[0].task_id.clone();
+                }
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        panic!("no pending task");
+    });
+
+    let svc_for_run = svc.clone();
+    let run = tokio::spawn(async move {
+        svc_for_run
+            .run_turn("install stuff", None, CancelToken::new())
+            .await
+    });
+
+    let task_id = user.await.expect("task");
+    svc.broker()
+        .resolve(&task_id, false, Some("no"))
+        .expect("reject");
+    let out = run.await.expect("join").expect("turn");
+
+    assert_eq!(out.status, TurnStatus::Completed);
+    assert!(
+        applier
+            .calls
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .is_empty(),
+        "applier must not run for a rejected plan"
+    );
+    // 任务停在 rejected；事件流里没有 tool_result（工具从未执行）。
+    let stored = store.read_task(&task_id).expect("read").expect("present");
+    assert_eq!(stored.status, TaskStatus::Rejected);
+    let events = store.read(&out.session_id).expect("events");
+    assert!(events
+        .iter()
+        .all(|event| !matches!(event.event, SessionEventKind::ToolResult { .. })));
+
+    let _ = std::fs::remove_dir_all(store.data_dir());
+}
+
+#[tokio::test]
+async fn instance_context_reaches_prompt_and_output() {
+    let store = temp_store("context");
+    let registry = ToolRegistry::new();
+    let provider = Arc::new(ScriptedProvider {
+        id: "scripted".into(),
+        seen_requests: std::sync::Mutex::new(Vec::new()),
+        responses: std::sync::Mutex::new(vec!["final answer".to_string()]),
+    });
+    let svc = service(store.clone(), registry, provider.clone());
+
+    // 用真实 home 构造路径，脱敏后应变为 ~ 前缀（与机器无关的断言）。
+    let real_home = std::env::home_dir().expect("home dir");
+    let instance_dir = real_home.join("instances");
+    let context = serde_json::json!({
+        "profile": { "name": "测试", "game_version": "26.3" },
+        "home": instance_dir.display().to_string(),
+    });
+    let out = svc
+        .run_turn_with_context("hi", None, Some(context), CancelToken::new())
+        .await
+        .expect("turn");
+
+    // context_sent 已脱敏（home → ~）并回传给调用方。
+    let sent = out.context_sent.expect("context sent");
+    assert_eq!(sent["home"], "~/instances");
+    assert_eq!(sent["profile"]["game_version"], "26.3");
+
+    // system 提示词包含脱敏后的上下文，且不含原文路径。
+    let seen = provider
+        .seen_requests
+        .lock()
+        .unwrap_or_else(|p| p.into_inner());
+    assert!(!seen.is_empty());
+    assert_eq!(seen[0].messages[0].role, rmccc_agent::llm::ChatRole::System);
+    assert!(seen[0].messages[0].content.contains("~/instances"));
+    assert!(
+        !seen[0].messages[0]
+            .content
+            .contains(&instance_dir.display().to_string()),
+        "raw home path must not reach the prompt"
+    );
+
+    let _ = std::fs::remove_dir_all(store.data_dir());
+}
+
+/// 写工具替身（ReversibleWrite）。
+struct WriteProbe(AgentToolDescriptor);
+
+impl AgentTool for WriteProbe {
+    fn descriptor(&self) -> &AgentToolDescriptor {
+        &self.0
+    }
+    fn execute(&self, _input: &Value) -> rmccc_error::Result<Value> {
+        Ok(json!({ "wrote": true }))
+    }
+}
+
+#[tokio::test]
+async fn invoke_approved_rejects_mismatched_tasks() {
+    let store = temp_store("invoke-approved");
+    let mut registry = ToolRegistry::new();
+    registry
+        .register(Arc::new(WriteProbe(AgentToolDescriptor {
+            id: "demo.write".into(),
+            plugin_id: None,
+            name: "write probe".into(),
+            description: "write probe".into(),
+            input_schema: json!({
+                "type": "object", "properties": {}, "additionalProperties": false
+            }),
+            output_schema: json!({ "type": "object" }),
+            required_capabilities: vec![],
+            risk_level: RiskLevel::ReversibleWrite,
+            timeout_ms: 1_000,
+            confirmation_policy: ConfirmationPolicy::Always,
+        })))
+        .expect("register");
+    let broker = ApprovalBroker::new(store.clone());
+    let input = json!({});
+
+    let task = broker
+        .propose(
+            "session-1",
+            "demo.write",
+            RiskLevel::ReversibleWrite,
+            "summary",
+            &json!({}),
+        )
+        .expect("propose");
+
+    // 未批准 → 拒绝。
+    assert!(registry
+        .invoke_approved("session-1", &task, "demo.write", &input)
+        .is_err());
+
+    // 批准后可执行一次。
+    broker.resolve(&task.task_id, true, None).expect("approve");
+    let approved = store
+        .read_task(&task.task_id)
+        .expect("read")
+        .expect("present");
+    assert!(registry
+        .invoke_approved("session-1", &approved, "demo.write", &input)
+        .is_ok());
+
+    // 重放（快照还是 Approved，但业务上已执行）——协议层不阻止，由任务推进防重放；
+    // 这里验证把任务推进到 Applied 后再调用会被拒。
+    let applied = approved.clone().with_status(TaskStatus::Applied);
+    assert!(registry
+        .invoke_approved("session-1", &applied, "demo.write", &input)
+        .is_err());
+
+    // kind 不匹配（拿别的工具的批准执行本工具）→ 拒绝。
+    let other = broker
+        .propose(
+            "session-1",
+            "demo.other",
+            RiskLevel::ReversibleWrite,
+            "summary",
+            &json!({}),
+        )
+        .expect("propose");
+    broker.resolve(&other.task_id, true, None).expect("approve");
+    let other_approved = store
+        .read_task(&other.task_id)
+        .expect("read")
+        .expect("present");
+    assert!(registry
+        .invoke_approved("session-1", &other_approved, "demo.write", &input)
+        .is_err());
+
+    // 跨会话 → 拒绝。
+    assert!(registry
+        .invoke_approved("session-2", &approved, "demo.write", &input)
+        .is_err());
 
     let _ = std::fs::remove_dir_all(store.data_dir());
 }

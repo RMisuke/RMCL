@@ -39,8 +39,9 @@ pub use llm::{
     LlmProvider, LlmStream, ModelCapabilities, OpenAiCompatibleProvider, RetryPolicy,
 };
 pub use mods::{
-    read_only_registry, scan_instance_mods, AgentRoots, DependencyReport, InstalledMod,
-    MetadataSource, ModConflict, ModInstallPlan, PlannedDependency,
+    full_registry, read_only_registry, scan_instance_mods, AgentRoots, AppliedMod,
+    AppliedPlanReport, DependencyReport, FailedMod, InstalledMod, MetadataSource, ModConflict,
+    ModInstallPlan, PlanApplier, PlannedDependency,
 };
 pub use runtime::{
     AgentService, AgentServiceConfig, ApprovalBroker, Resolution, ToolCallRequest, TurnOutput,

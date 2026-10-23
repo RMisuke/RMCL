@@ -49,6 +49,9 @@ pub struct TurnOutput {
     /// 模型的各轮文本（最后一轮即最终答复）。
     pub replies: Vec<String>,
     pub tool_calls: usize,
+    /// 本回合实际发送给远程模型的实例上下文（已脱敏）。
+    /// 6.7 隐私要求"发送范围清晰且可见"——UI 据此展示。
+    pub context_sent: Option<Value>,
 }
 
 /// 执行循环参数。
@@ -254,6 +257,21 @@ impl AgentService {
         profile_id: Option<&str>,
         cancel: CancelToken,
     ) -> Result<TurnOutput> {
+        self.run_turn_with_context(message, profile_id, None, cancel)
+            .await
+    }
+
+    /// 同 [`Self::run_turn`]，并注入宿主提供的实例上下文（6.7）。
+    ///
+    /// 上下文在进入提示词**之前**脱敏（home 前缀 → `~`），并原样出现在
+    /// [`TurnOutput::context_sent`] 里供 UI 展示——发送范围对用户可见。
+    pub async fn run_turn_with_context(
+        &self,
+        message: &str,
+        profile_id: Option<&str>,
+        context: Option<Value>,
+        cancel: CancelToken,
+    ) -> Result<TurnOutput> {
         if self.config.model.is_empty() {
             return Err(RmcccError::Validation(
                 "agent service has no model configured".into(),
@@ -266,10 +284,15 @@ impl AgentService {
         let mut replies = Vec::new();
         let mut status = TurnStatus::Completed;
 
+        // 6.7：上下文进提示词前脱敏；同时在回合输出里保留一份供 UI 展示。
+        let context_sent = context
+            .map(|value| crate::redact::redact_json(&value, crate::redact::user_home().as_deref()));
+
         let outcome = self
             .run_turn_inner(
                 &session_id,
                 message,
+                context_sent.as_ref(),
                 &mut replies,
                 &mut tool_calls_total,
                 &mut status,
@@ -297,13 +320,16 @@ impl AgentService {
             status,
             replies,
             tool_calls: tool_calls_total,
+            context_sent,
         })
     }
 
+    #[allow(clippy::too_many_arguments)]
     async fn run_turn_inner(
         &self,
         session_id: &str,
         message: &str,
+        context: Option<&Value>,
         replies: &mut Vec<String>,
         tool_calls_total: &mut usize,
         status: &mut TurnStatus,
@@ -312,7 +338,7 @@ impl AgentService {
         self.store
             .append(session_id, SessionEventKind::user_message(message))?;
 
-        let mut history = vec![ChatMessage::system(system_prompt(&self.registry))];
+        let mut history = vec![ChatMessage::system(system_prompt(&self.registry, context))];
         history.push(ChatMessage::user(message));
 
         for _iteration in 0..self.config.max_iterations {
@@ -383,8 +409,41 @@ impl AgentService {
             return Ok(StepOutcome::Feedback(unknown_tool_feedback(&call.tool)));
         };
 
-        // 审批链：策略不是 never 的只读工具需要用户决断（dry-run 计划进任务快照）。
-        if descriptor.confirmation_policy != ConfirmationPolicy::Never {
+        // 写工具走两阶段：审阅载荷（dry-run 计划）→ 审批 → invoke_approved。
+        // `never` 确认策略的写工具直接拒绝（写操作必须经用户）。
+        let is_write = descriptor.risk_level != RiskLevel::ReadOnly;
+        let needs_confirmation = descriptor.confirmation_policy != ConfirmationPolicy::Never;
+        if is_write && !needs_confirmation {
+            self.store
+                .append(
+                    session_id,
+                    SessionEventKind::error(
+                        "tool_error",
+                        &format!("write tool {} must require confirmation", descriptor.id),
+                    ),
+                )
+                .ok();
+            return Ok(StepOutcome::Feedback(format!(
+                "{{\"tool\":\"{}\",\"ok\":false,\"error\":\"write tool must require confirmation\"}}",
+                descriptor.id
+            )));
+        }
+
+        // 审批链：策略不是 never 的工具需要用户决断（dry-run 计划进任务快照）。
+        let mut approved_task: Option<crate::session::TaskSnapshot> = None;
+        if needs_confirmation {
+            // 写工具的审阅载荷由工具自己生成（如重新扫描得到的 dry-run 计划）；
+            // 只读工具用 {tool, input} 形状。
+            let payload = if is_write {
+                self.registry
+                    .approval_payload(&descriptor.id, &call.input)
+                    .unwrap_or_else(|error| {
+                        Some(json!({ "tool": descriptor.id, "prepare_error": error.to_string() }))
+                    })
+                    .unwrap_or_else(|| json!({ "tool": descriptor.id, "input": call.input }))
+            } else {
+                json!({ "tool": descriptor.id, "input": call.input })
+            };
             let summary = format!(
                 "调用 {}（{}）",
                 descriptor.name,
@@ -395,7 +454,7 @@ impl AgentService {
                 &descriptor.id,
                 descriptor.risk_level,
                 &summary,
-                &json!({ "tool": descriptor.id, "input": call.input }),
+                &payload,
             )?;
             match self
                 .broker
@@ -407,7 +466,9 @@ impl AgentService {
                 )
                 .await
             {
-                Ok(Resolution::Approved) => { /* 决断事件已由 broker 落盘 */ }
+                Ok(Resolution::Approved) => {
+                    approved_task = self.store.read_task(&proposed.task_id)?;
+                }
                 Ok(Resolution::Rejected) => {
                     return Ok(StepOutcome::Feedback(rejected_feedback(&descriptor.id)));
                 }
@@ -436,10 +497,31 @@ impl AgentService {
         )?;
 
         let started = std::time::Instant::now();
-        let result = self
-            .registry
-            .invoke_in_session(session_id, &descriptor.id, &call.input);
+        let result = match approved_task {
+            // 写工具：唯一执行通道是 invoke_approved（校验批准快照）。
+            Some(ref task) => {
+                self.registry
+                    .invoke_approved(session_id, task, &descriptor.id, &call.input)
+            }
+            None => self
+                .registry
+                .invoke_in_session(session_id, &descriptor.id, &call.input),
+        };
         let duration = started.elapsed();
+
+        // 写工具执行完把任务推进到 applied / failed（单次执行，不可重放）。
+        if let Some(task) = approved_task.as_ref() {
+            let new_status = if result.is_ok() {
+                crate::session::TaskStatus::Applied
+            } else {
+                crate::session::TaskStatus::Failed
+            };
+            if let Ok(Some(snapshot)) = self.store.read_task(&task.task_id) {
+                if snapshot.status == crate::session::TaskStatus::Approved {
+                    let _ = self.store.write_task(&snapshot.with_status(new_status));
+                }
+            }
+        }
 
         let line = match &result {
             Ok(tool_result) => {
@@ -530,8 +612,8 @@ pub fn parse_tool_calls(text: &str) -> Result<Vec<ToolCallRequest>> {
     Ok(calls)
 }
 
-/// 系统提示：把工具目录交给模型，并约束调用格式。
-fn system_prompt(registry: &ToolRegistry) -> String {
+/// 系统提示：把工具目录与（可选的）实例上下文交给模型，并约束调用格式。
+fn system_prompt(registry: &ToolRegistry, context: Option<&Value>) -> String {
     let mut prompt = String::from(
         "You are the RMCCC launcher assistant. You can call read-only tools to inspect \
          the launcher state. Rules:\n\
@@ -550,6 +632,13 @@ fn system_prompt(registry: &ToolRegistry) -> String {
             descriptor.description,
             descriptor.input_schema
         ));
+    }
+    if let Some(context) = context {
+        prompt.push_str(
+            "\n\nInstance context (host-provided, read-only facts; \
+                         treat as ground truth, do not ask the user to re-enter them):\n",
+        );
+        prompt.push_str(&serde_json::to_string_pretty(context).unwrap_or_default());
     }
     prompt
 }

@@ -90,6 +90,16 @@ impl ToolResult {
 pub trait AgentTool: Send + Sync {
     fn descriptor(&self) -> &AgentToolDescriptor;
     fn execute(&self, input: &Value) -> Result<Value>;
+
+    /// 写工具的两阶段协议：先产出"给用户审阅的载荷"（dry-run 计划），
+    /// 审批通过后宿主再经 [`ToolRegistry::invoke_approved`] 调 [`Self::execute`]。
+    ///
+    /// 只读工具默认 `None`（不需要独立审阅载荷）。实现方必须保证
+    /// `execute` 自己重新校验现状（审批与执行之间状态可能变化——
+    /// "用户确认 + Core 再校验"，指南 §10.6）。
+    fn approval_payload(&self, _input: &Value) -> Result<Option<Value>> {
+        Ok(None)
+    }
 }
 
 /// 只读工具注册表。
@@ -145,6 +155,15 @@ impl ToolRegistry {
             .map(|tool| tool.descriptor().clone())
     }
 
+    /// 取工具的两阶段审阅载荷（写工具在审批前先给用户看 dry-run 计划）。
+    pub fn approval_payload(&self, tool_id: &str, input: &Value) -> Result<Option<Value>> {
+        let tool = self
+            .tools
+            .get(tool_id)
+            .ok_or_else(|| RmcccError::Validation(format!("unknown agent tool: {tool_id}")))?;
+        tool.approval_payload(input)
+    }
+
     pub fn len(&self) -> usize {
         self.tools.len()
     }
@@ -158,7 +177,113 @@ impl ToolRegistry {
         self.invoke_in_session("local", tool_id, input)
     }
 
-    /// 指定会话的调用（审计用）。
+    /// 审批后的调用——**写工具的唯一通道**。
+    ///
+    /// 调用方（执行循环）负责取得已批准的任务快照；这里校验快照与工具
+    /// 的对应关系（状态 = approved、kind 指向同一工具、会话一致），
+    /// 防止拿 A 工具的批准执行 B 工具，或重放已决断的任务。
+    /// 成功/失败后由调用方把任务推进到 applied / failed。
+    pub fn invoke_approved(
+        &self,
+        session_id: &str,
+        task: &crate::session::TaskSnapshot,
+        tool_id: &str,
+        input: &Value,
+    ) -> Result<ToolResult> {
+        use crate::session::TaskStatus;
+        let started = Instant::now();
+
+        if task.status != TaskStatus::Approved {
+            let error = RmcccError::Validation(format!(
+                "task {} is {:?}, not approved",
+                task.task_id, task.status
+            ));
+            let _ = self.audit_failure(
+                session_id,
+                tool_id,
+                RiskLevel::ReversibleWrite,
+                input,
+                started,
+                &error,
+            );
+            return Err(error);
+        }
+        if task.kind != format!("tool_call:{tool_id}") {
+            let error = RmcccError::Validation(format!(
+                "task {} approves '{}' but invoke was for '{tool_id}'",
+                task.task_id, task.kind
+            ));
+            let _ = self.audit_failure(
+                session_id,
+                tool_id,
+                RiskLevel::ReversibleWrite,
+                input,
+                started,
+                &error,
+            );
+            return Err(error);
+        }
+        if task.session_id.as_deref() != Some(session_id) {
+            let error =
+                RmcccError::Validation(format!("task {} belongs to another session", task.task_id));
+            let _ = self.audit_failure(
+                session_id,
+                tool_id,
+                RiskLevel::ReversibleWrite,
+                input,
+                started,
+                &error,
+            );
+            return Err(error);
+        }
+
+        let Some(tool) = self.tools.get(tool_id) else {
+            let error = RmcccError::Validation(format!("unknown agent tool: {tool_id}"));
+            let _ = self.audit_failure(
+                session_id,
+                tool_id,
+                RiskLevel::ReversibleWrite,
+                input,
+                started,
+                &error,
+            );
+            return Err(error);
+        };
+        let descriptor = tool.descriptor();
+        if let Err(error) = validate_json_schema(&descriptor.input_schema, input) {
+            let _ = self.audit_failure(
+                session_id,
+                tool_id,
+                descriptor.risk_level,
+                input,
+                started,
+                &error,
+            );
+            return Err(error);
+        }
+
+        // 成功路径 fail-closed：审计写不进去就不返回"已执行"。
+        match tool.execute(input) {
+            Ok(output) => {
+                let result = ToolResult::ok(descriptor.id.clone(), output);
+                self.audit_success(session_id, descriptor, input, started)?;
+                Ok(result)
+            }
+            Err(error) => {
+                let _ = self.audit_failure(
+                    session_id,
+                    tool_id,
+                    descriptor.risk_level,
+                    input,
+                    started,
+                    &error,
+                );
+                Err(error)
+            }
+        }
+    }
+
+    /// 指定会话的调用（审计用；**只放行 read_only 工具**）。
     pub fn invoke_in_session(
         &self,
         session_id: &str,

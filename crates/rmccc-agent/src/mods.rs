@@ -22,6 +22,7 @@ use serde_json::{json, Value};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs::File;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use zip::ZipArchive;
 
 use crate::tools::{
@@ -260,6 +261,71 @@ pub fn plan_from_report(report: &DependencyReport, mods_dir: &Path) -> ModInstal
     }
 }
 
+/// `mods.apply_plan` —— 第一个写工具（指南 §10.6 旗舰场景）。
+///
+/// 模型**不提供任何参数**：工具自己重新扫描 mods 目录、重算缺失依赖，
+/// 生成 dry-run 计划作为审批载荷；审批通过后 `execute` 再次扫描
+/// （"用户确认 + Core 再校验"）并把**仍然缺失**的依赖交给
+/// [`PlanApplier`] 落地。文件写入只发生在批准后的这一次调用里。
+struct ApplyPlanTool {
+    mods_dir: PathBuf,
+    applier: Arc<dyn PlanApplier>,
+}
+
+impl AgentTool for ApplyPlanTool {
+    fn descriptor(&self) -> &AgentToolDescriptor {
+        use std::sync::OnceLock;
+        static DESCRIPTOR: OnceLock<AgentToolDescriptor> = OnceLock::new();
+        DESCRIPTOR.get_or_init(|| AgentToolDescriptor {
+            id: "mods.apply_plan".into(),
+            plugin_id: None,
+            name: "安装缺失依赖".into(),
+            description: "重新扫描实例 mods 目录，把仍缺失的 Fabric 必需前置解析并下载安装；                          需要用户批准，执行前会再次校验。"
+                .into(),
+            input_schema: empty_input_schema(),
+            output_schema: json!({ "type": "object" }),
+            required_capabilities: vec![],
+            risk_level: RiskLevel::ReversibleWrite,
+            timeout_ms: 60_000,
+            confirmation_policy: ConfirmationPolicy::Always,
+        })
+    }
+
+    fn approval_payload(&self, _input: &Value) -> Result<Option<Value>> {
+        ensure_dir(&self.mods_dir)?;
+        let report = scan_instance_mods(&self.mods_dir)?;
+        let plan = plan_from_report(&report, &self.mods_dir);
+        Ok(Some(json!({ "plan": plan })))
+    }
+
+    fn execute(&self, _input: &Value) -> Result<Value> {
+        ensure_dir(&self.mods_dir)?;
+        // Core 再校验：审批期间实例状态可能变化，以此刻扫描为准。
+        let report = scan_instance_mods(&self.mods_dir)?;
+        if report.missing_required.is_empty() {
+            return Ok(json!({
+                "installed": [],
+                "failed": [],
+                "attempted": [],
+                "message": "依赖在批准后已全部满足，无需安装",
+            }));
+        }
+        let attempted: Vec<String> = report
+            .missing_required
+            .iter()
+            .map(|d| d.mod_id.clone())
+            .collect();
+        let applied = self
+            .applier
+            .apply(&self.mods_dir, &report.missing_required)?;
+        Ok(json!({
+            "installed": applied.installed,
+            "failed": applied.failed,
+            "attempted": attempted,
+        }))
+    }
+}
+
 /// 默认只读工具集（Phase 6.6）：已装 Mod、依赖扫描、已装版本。
 ///
 /// 工具的目录在构造时固定为 [`AgentRoots`]，输入 schema 为空对象——
@@ -274,6 +340,16 @@ pub fn read_only_registry(roots: &AgentRoots) -> Result<ToolRegistry> {
     }))?;
     registry.register(std::sync::Arc::new(InstalledVersionsTool {
         versions_dir: roots.versions_dir.clone(),
+    }))?;
+    Ok(registry)
+}
+
+/// 完整工具集 = 只读工具 + `mods.apply_plan` 写工具（审批链路，指南 §10.6）。
+pub fn full_registry(roots: &AgentRoots, applier: Arc<dyn PlanApplier>) -> Result<ToolRegistry> {
+    let mut registry = read_only_registry(roots)?;
+    registry.register(std::sync::Arc::new(ApplyPlanTool {
+        mods_dir: roots.mods_dir.clone(),
+        applier,
     }))?;
     Ok(registry)
 }
@@ -394,6 +470,46 @@ fn is_platform_dependency(mod_id: &str) -> bool {
             | "quilt-loader"
             | "liteloader"
     )
+}
+
+/// 指南 §10.6 的首个写场景执行器：把"缺失依赖 → 已安装"落地。
+///
+/// Agent 侧不持有 `CoreContext`（架构约束），真正的解析（Modrinth slug /
+/// 版本匹配加载器与游戏版本）与下载写入由宿主注入实现。
+/// 实现方必须对每个 jar 做 SHA1 校验，并只写入传入的 `mods_dir`。
+///
+/// 同步约束：`AgentTool::execute` 是同步的；宿主实现内部用
+/// `tokio::task::block_in_place` + `Handle::block_on` 桥接异步下载。
+pub trait PlanApplier: Send + Sync {
+    fn apply(
+        &self,
+        mods_dir: &Path,
+        dependencies: &[PlannedDependency],
+    ) -> Result<AppliedPlanReport>;
+}
+
+/// 单个依赖的安装结果。
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+pub struct AppliedMod {
+    pub mod_id: String,
+    pub file: String,
+    pub version: Option<String>,
+}
+
+/// 单个依赖的失败原因。
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+pub struct FailedMod {
+    pub mod_id: String,
+    pub reason: String,
+}
+
+/// `mods.apply_plan` 的执行结果。
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+pub struct AppliedPlanReport {
+    pub installed: Vec<AppliedMod>,
+    pub failed: Vec<FailedMod>,
+    /// 执行前的重新扫描发现的仍缺失项（= installed ∪ failed 的 id 集合）。
+    pub attempted: Vec<String>,
 }
 
 /// 内置只读工具的固定根目录。
