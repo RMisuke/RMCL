@@ -95,7 +95,13 @@ pub async fn install_loader(
     // `ClassNotFoundException: net.fabricmc.loader.impl.launch.knot.KnotClient`。
     // 启动前的 `ensure_launch_ready` 也能补，但那次失败体验很差（错误信息在
     // 游戏 stdout 里，而不是安装步骤里）。
-    let repaired = crate::pipeline::repair_instance(core, &version_id, None).await?;
+    let repaired = crate::pipeline::repair_instance(
+        core,
+        &version_id,
+        None,
+        rmccc_version::completion::CompletionVerify::Hash,
+    )
+    .await?;
     if !repaired.is_complete() {
         tracing::warn!(
             version_id = %version_id,

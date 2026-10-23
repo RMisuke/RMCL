@@ -73,25 +73,28 @@ pub async fn resolve_asset_items(
 
     let content: AssetIndexContent = serde_json::from_slice(&body)?;
 
+    // Malformed hashes (shorter than the two-char bucket prefix) are skipped
+    // with a warning instead of slicing into a panic — the index is
+    // downloaded data (P2-21).
     let items: Vec<DownloadItem> = content
         .objects
         .values()
-        .map(|obj| {
-            let hash_prefix = &obj.hash[..2];
+        .filter_map(|obj| {
+            let hash_prefix = obj.hash.get(..2)?;
             let url = format!(
                 "https://resources.download.minecraft.net/{}/{}",
                 hash_prefix, obj.hash
             );
             let dest = assets_dir.join("objects").join(hash_prefix).join(&obj.hash);
 
-            DownloadItem {
+            Some(DownloadItem {
                 url,
                 dest,
                 expected_sha1: Some(obj.hash.clone()),
                 size: Some(obj.size),
                 use_cache: true,
                 candidates: Vec::new(),
-            }
+            })
         })
         .collect();
 

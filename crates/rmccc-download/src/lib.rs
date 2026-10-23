@@ -18,7 +18,7 @@ use rmccc_error::{Result, RmcccError};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
-use tokio::io::AsyncWriteExt;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio_util::sync::CancellationToken;
 
 // ── Public types ──
@@ -500,6 +500,19 @@ fn all_urls(item: &DownloadItem) -> Vec<&str> {
     urls
 }
 
+/// Staging path for a download: `{file_name}.part` next to the destination.
+///
+/// `dest` is only ever published by renaming a verified part file, so a
+/// crashed, interrupted, or corrupted download can never land at the final
+/// location and poison every later resume (P1-8).
+pub fn part_path(dest: &Path) -> PathBuf {
+    let name = dest
+        .file_name()
+        .map(|n| n.to_string_lossy().to_string())
+        .unwrap_or_else(|| "download".to_string());
+    dest.with_file_name(format!("{name}.part"))
+}
+
 /// Download a single item with retry and multi-URL fallback.
 ///
 /// Features:
@@ -507,23 +520,67 @@ fn all_urls(item: &DownloadItem) -> Vec<&str> {
 /// - Multi-URL fallback: tries candidates on failure
 /// - x-bmclapi-hash: BMCLAPI provides additional SHA1 in header
 /// - SHA1 verify + cache store on success
+/// - Stage-then-publish: content is written to [`part_path`] and renamed onto
+///   `dest` only after the expected SHA1 (when provided) verified
 async fn download_with_retry(
     client: &reqwest::Client,
     item: &DownloadItem,
     max_retries: u32,
     cache: Option<&CacheRepository>,
 ) -> Result<u64> {
+    // ── Already-complete fast path ──
+    // A complete, hash-verified `dest` skips the network entirely. Anything
+    // else at `dest` (a leftover poisoned file from before the `.part`
+    // staging, or manual corruption) is removed so the download below replaces
+    // it instead of failing forever.
+    if let Some(expected) = &item.expected_sha1 {
+        if item.dest.exists() {
+            match sha1_file(&item.dest).await {
+                Ok(actual) if actual.eq_ignore_ascii_case(expected) => {
+                    tracing::debug!("Already complete: {} ({expected})", item.dest.display());
+                    let size = tokio::fs::metadata(&item.dest)
+                        .await
+                        .map(|m| m.len())
+                        .unwrap_or(0);
+                    return Ok(size);
+                }
+                Ok(actual) => {
+                    tracing::warn!(
+                        "Corrupt file at {} (expected sha1 {expected}, got {actual}); re-downloading",
+                        item.dest.display()
+                    );
+                }
+                Err(e) => {
+                    tracing::warn!("Cannot hash {}: {e}; re-downloading", item.dest.display());
+                }
+            }
+            let _ = tokio::fs::remove_file(&item.dest).await;
+        }
+    }
+
     // ── Cache check before download ──
     if item.use_cache {
         if let Some(ref sha1) = item.expected_sha1 {
             if let Some(cache_path) = cache.and_then(|c| c.check_by_sha1(sha1)) {
-                if let Some(parent) = item.dest.parent() {
+                let part = part_path(&item.dest);
+                if let Some(parent) = part.parent() {
                     tokio::fs::create_dir_all(parent).await?;
                 }
-                tokio::fs::copy(&cache_path, &item.dest).await?;
-                let meta = tokio::fs::metadata(&item.dest).await?;
-                tracing::debug!("Cache HIT for {} ({} bytes)", item.url, meta.len());
-                return Ok(meta.len());
+                tokio::fs::copy(&cache_path, &part).await?;
+                // Verify the cached copy too: the cache is keyed by SHA1 but
+                // its contents are never re-validated on read (P1-8).
+                let actual = sha1_file(&part).await?;
+                if actual.eq_ignore_ascii_case(sha1) {
+                    tokio::fs::rename(&part, &item.dest).await?;
+                    let meta = tokio::fs::metadata(&item.dest).await?;
+                    tracing::debug!("Cache HIT for {} ({} bytes)", item.url, meta.len());
+                    return Ok(meta.len());
+                }
+                tracing::warn!(
+                    "Cache entry {} is corrupt (expected {sha1}, got {actual}); downloading from network",
+                    cache_path.display()
+                );
+                let _ = tokio::fs::remove_file(&part).await;
             }
         }
     }
@@ -542,24 +599,37 @@ async fn download_with_retry(
 
             match download_single(client, item, url, cache).await {
                 Ok(bytes) => {
+                    // Stage-verify-publish: hash the `.part` file and rename it
+                    // onto `dest` only when it matches. A mismatch deletes the
+                    // part and falls through to the next attempt / candidate
+                    // URL — returning early here left the corrupt file at
+                    // `dest` where every later resume appended to it (P1-8).
+                    let part = part_path(&item.dest);
                     if let Some(expected) = &item.expected_sha1 {
-                        let actual = sha1_file(&item.dest).await?;
-                        if actual.to_lowercase() != expected.to_lowercase() {
-                            return Err(RmcccError::HashMismatch {
+                        let actual = sha1_file(&part).await?;
+                        if !actual.eq_ignore_ascii_case(expected) {
+                            let _ = tokio::fs::remove_file(&part).await;
+                            tracing::warn!(
+                                "SHA1 mismatch for {} from {url}: expected {expected}, got {actual}",
+                                item.dest.display()
+                            );
+                            last_error = Some(RmcccError::HashMismatch {
                                 path: item.dest.display().to_string(),
                                 expected: expected.clone(),
                                 actual,
                             });
+                            continue;
                         }
-                        // Store in cache after successful download
+                        // Store in cache after successful verification.
                         if item.use_cache {
                             if let Some(cache) = cache {
-                                if let Err(e) = cache.store(&item.dest, expected) {
+                                if let Err(e) = cache.store(&part, expected) {
                                     tracing::warn!("Failed to cache {}: {e}", url);
                                 }
                             }
                         }
                     }
+                    tokio::fs::rename(&part, &item.dest).await?;
                     return Ok(bytes);
                 }
                 Err(e) => {
@@ -580,12 +650,12 @@ async fn download_with_retry(
     }))
 }
 
-/// Download a single file from a given URL.
+/// Download a single file from a given URL into the staged [`part_path`] file.
 ///
 /// Supports:
-/// - HTTP Range resume
+/// - HTTP Range resume (from the `.part` file, never from `dest`)
 /// - x-bmclapi-hash header (BMCLAPI additional SHA1)
-/// - SHA1 verification of the downloaded content
+/// - Caller-side SHA1 verification of the staged content before publishing
 async fn download_single(
     client: &reqwest::Client,
     item: &DownloadItem,
@@ -595,10 +665,14 @@ async fn download_single(
     if let Some(parent) = item.dest.parent() {
         tokio::fs::create_dir_all(parent).await?;
     }
+    let part = part_path(&item.dest);
 
-    // Check for partial file to resume
-    let existing_size = if item.dest.exists() {
-        tokio::fs::metadata(&item.dest)
+    // Resume from the staged `.part` file. `dest` only ever receives a
+    // verified rename, so it is never appended to (P1-8): resuming onto it
+    // both corrupted verified content and made hash-mismatch recovery
+    // impossible.
+    let existing_size = if part.exists() {
+        tokio::fs::metadata(&part)
             .await
             .map(|m| m.len())
             .unwrap_or(0)
@@ -624,7 +698,7 @@ async fn download_single(
     // We can use this for cache lookup to avoid re-downloading files
     // that the mirror has already verified.
     if let Some(bmclapi_hash) = response.headers().get("x-bmclapi-hash") {
-        if let Ok(hash_str) = bmclapi_hash.to_str() {
+        if let Ok(hash_str) = to_str_header(bmclapi_hash) {
             if hash_str.len() == 40 && hash_str.chars().all(|c| c.is_ascii_hexdigit()) {
                 tracing::debug!("x-bmclapi-hash present for {url}: {hash_str}");
                 // If we have a cache repo, try to find this file by the BMCLAPI hash
@@ -632,11 +706,20 @@ async fn download_single(
                 if item.expected_sha1.is_none() {
                     if let Some(cache) = _cache {
                         if let Some(cached_path) = cache.check_by_sha1(hash_str) {
-                            // Copy from cache instead of downloading
-                            tokio::fs::copy(&cached_path, &item.dest).await?;
-                            let meta = tokio::fs::metadata(&item.dest).await?;
-                            tracing::debug!("x-bmclapi-hash cache HIT for {url}");
-                            return Ok(meta.len());
+                            // Copy from cache into the staging file and verify
+                            // against the header hash before publishing.
+                            tokio::fs::copy(&cached_path, &part).await?;
+                            let actual = sha1_file(&part).await?;
+                            if actual.eq_ignore_ascii_case(hash_str) {
+                                let meta = tokio::fs::metadata(&part).await?;
+                                tracing::debug!("x-bmclapi-hash cache HIT for {url}");
+                                return Ok(meta.len());
+                            }
+                            tracing::warn!(
+                                "x-bmclapi-hash cache entry {} corrupt (expected {hash_str}, got {actual}); downloading",
+                                cached_path.display()
+                            );
+                            let _ = tokio::fs::remove_file(&part).await;
                         }
                     }
                 }
@@ -644,10 +727,10 @@ async fn download_single(
         }
     }
 
-    // HTTP 416: server rejected Range — delete partial file and retry fresh.
+    // HTTP 416: server rejected Range — delete the partial file and retry fresh.
     if status.as_u16() == 416 && use_range {
         tracing::debug!("Range not supported for {url}, retrying full download");
-        let _ = tokio::fs::remove_file(&item.dest).await;
+        let _ = tokio::fs::remove_file(&part).await;
         let mut response = client
             .get(url)
             .send()
@@ -661,7 +744,7 @@ async fn download_single(
             });
         }
         // P2-18：流式写入，避免整块读入内存
-        let mut file = tokio::fs::File::create(&item.dest).await?;
+        let mut file = tokio::fs::File::create(&part).await?;
         let mut downloaded: u64 = 0;
         loop {
             match response.chunk().await {
@@ -687,10 +770,10 @@ async fn download_single(
     let mut file = if is_resume {
         tokio::fs::OpenOptions::new()
             .append(true)
-            .open(&item.dest)
+            .open(&part)
             .await?
     } else {
-        tokio::fs::File::create(&item.dest).await?
+        tokio::fs::File::create(&part).await?
     };
 
     // P2-18：流式写入（chunk），避免 assets 数百 MB 整块读入内存。
@@ -714,11 +797,24 @@ async fn download_single(
     })
 }
 
+fn to_str_header(v: &reqwest::header::HeaderValue) -> std::result::Result<&str, ()> {
+    v.to_str().map_err(|_| ())
+}
+
+/// Streaming SHA1 of a file (64 KiB chunks) — a full read into memory spiked
+/// on large jars such as Forge installers (~180 MB).
 async fn sha1_file(path: &Path) -> Result<String> {
     use sha1::{Digest, Sha1};
-    let data = tokio::fs::read(path).await?;
+    let mut file = tokio::fs::File::open(path).await?;
     let mut hasher = Sha1::new();
-    hasher.update(&data);
+    let mut buf = vec![0u8; 64 * 1024];
+    loop {
+        let n = file.read(&mut buf).await?;
+        if n == 0 {
+            break;
+        }
+        hasher.update(&buf[..n]);
+    }
     Ok(format!("{:x}", hasher.finalize()))
 }
 
@@ -776,5 +872,206 @@ mod tests {
         let urls = all_urls(&item);
         assert_eq!(urls.len(), 3);
         assert_eq!(urls[1], "https://mirror1.example.com/file.jar");
+    }
+
+    // ── P1-8 regression: hash failures must never poison the destination ──
+
+    type MockHandler = Arc<dyn Fn(usize, &str, Option<&str>) -> (u16, Vec<u8>) + Send + Sync>;
+
+    /// Minimal HTTP/1.1 mock: one std thread serving until the process exits.
+    /// The handler receives (request_index, path, Range header) and returns
+    /// (status, body). Returns the base URL and the request counter.
+    fn spawn_mock(handler: MockHandler) -> (String, Arc<AtomicU64>) {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let counter = Arc::new(AtomicU64::new(0));
+        let counter_thread = counter.clone();
+        std::thread::spawn(move || {
+            use std::io::{Read, Write};
+            for stream in listener.incoming() {
+                let Ok(mut stream) = stream else { break };
+                let mut buf = [0u8; 8192];
+                let n = stream.read(&mut buf).unwrap_or(0);
+                let req = String::from_utf8_lossy(&buf[..n]);
+                let first = req.lines().next().unwrap_or("");
+                let path = first.split_whitespace().nth(1).unwrap_or("/").to_string();
+                let range = req.lines().find_map(|l| {
+                    // hyper writes header names in lowercase.
+                    l.strip_prefix("range: ").map(str::to_string)
+                });
+                let idx = counter_thread.fetch_add(1, Ordering::SeqCst) as usize;
+                let (status, body) = handler(idx, &path, range.as_deref());
+                let reason = match status {
+                    200 => "OK",
+                    206 => "Partial Content",
+                    _ => "Error",
+                };
+                let resp = format!(
+                    "HTTP/1.1 {status} {reason}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                    body.len()
+                );
+                stream.write_all(resp.as_bytes()).ok();
+                stream.write_all(&body).ok();
+            }
+        });
+        (format!("http://{addr}/f.bin"), counter)
+    }
+
+    fn sha1_hex(data: &[u8]) -> String {
+        use sha1::{Digest, Sha1};
+        let mut h = Sha1::new();
+        h.update(data);
+        format!("{:x}", h.finalize())
+    }
+
+    fn temp_dir() -> PathBuf {
+        std::env::temp_dir().join(format!("rmcl-dl-{}", uuid::Uuid::new_v4()))
+    }
+
+    fn item_at(url: String, dest: PathBuf, sha1: Option<String>) -> DownloadItem {
+        let mut item = DownloadItem::new(&url, &dest);
+        item.expected_sha1 = sha1;
+        item
+    }
+
+    #[tokio::test]
+    async fn test_hash_mismatch_falls_through_to_candidate() {
+        let dir = temp_dir();
+        let good = b"good-content".to_vec();
+        let (good_url, _) = spawn_mock(Arc::new(|_, _, _| (200, b"good-content".to_vec())));
+        let (bad_url, _) = spawn_mock(Arc::new(|_, _, _| (200, b"poison".to_vec())));
+
+        let dest = dir.join("out.bin");
+        let mut item = item_at(bad_url, dest.clone(), Some(sha1_hex(&good)));
+        item.candidates = vec![good_url];
+
+        let got = download_with_retry(&reqwest::Client::new(), &item, 1, None)
+            .await
+            .expect("candidate URL serves correct content");
+        assert_eq!(std::fs::read(&dest).unwrap(), good);
+        assert!(!part_path(&dest).exists(), "no staging file left behind");
+        assert_eq!(got, good.len() as u64);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn test_hash_mismatch_retries_same_url_and_recovers() {
+        let dir = temp_dir();
+        let good = b"eventually-good".to_vec();
+        let served = good.clone();
+        // Attempt 0 serves poison; attempt 1 serves the real content.
+        let (url, counter) = spawn_mock(Arc::new(move |idx, _, _| {
+            if idx == 0 {
+                (200, b"poison".to_vec())
+            } else {
+                (200, served.clone())
+            }
+        }));
+
+        let dest = dir.join("out.bin");
+        let item = item_at(url, dest.clone(), Some(sha1_hex(&good)));
+        let got = download_with_retry(&reqwest::Client::new(), &item, 2, None)
+            .await
+            .expect("second attempt succeeds");
+        assert_eq!(std::fs::read(&dest).unwrap(), good);
+        assert_eq!(counter.load(Ordering::SeqCst), 2);
+        assert_eq!(got, good.len() as u64);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn test_resume_uses_part_file_with_range() {
+        let dir = temp_dir();
+        let content = b"0123456789abcdef".to_vec();
+        let served = content.clone();
+        // Server honours Range: serves the remainder as 206.
+        let (url, counter) = spawn_mock(Arc::new(move |_, _, range| {
+            let offset: usize = range
+                .and_then(|r| r.strip_prefix("bytes="))
+                .and_then(|r| r.split('-').next())
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(0);
+            (206, served[offset..].to_vec())
+        }));
+
+        let dest = dir.join("out.bin");
+        std::fs::create_dir_all(&dir).unwrap();
+        // Simulate a previous interrupted download: first 4 bytes staged.
+        std::fs::write(part_path(&dest), &content[..4]).unwrap();
+
+        let item = item_at(url, dest.clone(), Some(sha1_hex(&content)));
+        let got = download_with_retry(&reqwest::Client::new(), &item, 0, None)
+            .await
+            .expect("resumed download completes");
+        assert_eq!(counter.load(Ordering::SeqCst), 1);
+        assert_eq!(got, content.len() as u64);
+        assert_eq!(std::fs::read(&dest).unwrap(), content);
+        assert!(!part_path(&dest).exists(), "staging file published");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn test_complete_dest_skips_network() {
+        let dir = temp_dir();
+        let good = b"already-here".to_vec();
+        let (url, counter) = spawn_mock(Arc::new(|_, _, _| (200, b"nope".to_vec())));
+
+        let dest = dir.join("out.bin");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(&dest, &good).unwrap();
+
+        let item = item_at(url, dest.clone(), Some(sha1_hex(&good)));
+        download_with_retry(&reqwest::Client::new(), &item, 2, None)
+            .await
+            .expect("complete dest short-circuits");
+        assert_eq!(
+            counter.load(Ordering::SeqCst),
+            0,
+            "no network request for a verified-complete file"
+        );
+        assert_eq!(std::fs::read(&dest).unwrap(), good);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn test_corrupt_dest_is_replaced() {
+        let dir = temp_dir();
+        let good = b"verified-content".to_vec();
+        let served = good.clone();
+        let (url, _) = spawn_mock(Arc::new(move |_, _, _| (200, served.clone())));
+
+        let dest = dir.join("out.bin");
+        std::fs::create_dir_all(&dir).unwrap();
+        // Poisoned legacy file (pre-.part download, appended Range data).
+        std::fs::write(&dest, b"poisoned-appended-data").unwrap();
+
+        let item = item_at(url, dest.clone(), Some(sha1_hex(&good)));
+        download_with_retry(&reqwest::Client::new(), &item, 0, None)
+            .await
+            .expect("corrupt dest is replaced by a verified download");
+        assert_eq!(std::fs::read(&dest).unwrap(), good);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn test_hash_mismatch_exhausts_urls_leaves_nothing_behind() {
+        let dir = temp_dir();
+        let (url1, _) = spawn_mock(Arc::new(|_, _, _| (200, b"bad-1".to_vec())));
+        let (url2, _) = spawn_mock(Arc::new(|_, _, _| (200, b"bad-2".to_vec())));
+
+        let dest = dir.join("out.bin");
+        let mut item = item_at(url1, dest.clone(), Some(sha1_hex(b"expected")));
+        item.candidates = vec![url2];
+
+        let err = download_with_retry(&reqwest::Client::new(), &item, 0, None)
+            .await
+            .expect_err("all candidates serve wrong content");
+        assert!(matches!(err, RmcccError::HashMismatch { .. }));
+        assert!(!dest.exists(), "dest is never written with unverified data");
+        assert!(
+            !part_path(&dest).exists(),
+            "staging file cleaned on failure"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

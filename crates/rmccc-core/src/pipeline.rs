@@ -443,10 +443,14 @@ fn extract_natives(
 /// 以**版本 id** 为入口（`GameRepository` 的实例视图），因此 Tauri 的
 /// `instance_repair` 与 CLI 的 `resource repair`（经 [`ensure_launch_ready`]
 /// 传入 profile 的版本）走的是同一份实现。
+///
+/// `verify` 决定"文件是否缺失"的校验强度：启动前路径传 `Size`（stat 级，
+/// 每次 launch 都跑），显式修复命令传 `Hash`（全量 SHA1 复核）。
 pub async fn repair_instance(
     core: &CoreContext,
     version_id: &str,
     progress: Option<&ProgressCb>,
+    verify: rmccc_version::completion::CompletionVerify,
 ) -> Result<SetupReport> {
     // 解析阶段持有 std RwLock 读锁，必须在 await 前释放。
     let (game_root, resolved) = {
@@ -462,6 +466,7 @@ pub async fn repair_instance(
         &game_root,
         &resolved,
         &core.platform.descriptor,
+        verify,
     )
     .await?;
     let total = items.len();
@@ -508,7 +513,16 @@ pub async fn ensure_launch_ready(
     profile: &rmccc_profile::Profile,
     progress: Option<&ProgressCb>,
 ) -> Result<SetupReport> {
-    repair_instance(core, &profile.game_version, progress).await
+    // 启动路径用 Size 级校验（每次 launch 都跑，只 stat 不读文件内容）；
+    // 哈希级复核属于显式"检查/修复"命令。下载引擎对替换文件独立复核哈希，
+    // 尺寸级修复也不会装上坏内容。
+    repair_instance(
+        core,
+        &profile.game_version,
+        progress,
+        rmccc_version::completion::CompletionVerify::Size,
+    )
+    .await
 }
 
 // ────────────────────────────── Launch ──────────────────────────────
@@ -826,9 +840,14 @@ mod tests {
         seed_version(&core, "1.20.4");
         refresh_repository(&core).expect("refresh");
 
-        let report = repair_instance(&core, "1.20.4", None)
-            .await
-            .expect("repair_instance");
+        let report = repair_instance(
+            &core,
+            "1.20.4",
+            None,
+            rmccc_version::completion::CompletionVerify::Hash,
+        )
+        .await
+        .expect("repair_instance");
 
         assert!(report.is_complete());
         assert!(report.is_noop());

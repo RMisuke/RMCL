@@ -44,10 +44,12 @@ impl CliContext {
                 .map_err(|e| RmcccError::Other(e.to_string()))?;
             (repo.game_dir().to_path_buf(), resolved)
         };
+        // 显式检查命令：全量 SHA1 复核（启动路径只用 Size 级）。
         let missing = rmccc_version::completion::check_completion(
             &game_root,
             &resolved,
             &core.platform.descriptor,
+            rmccc_version::completion::CompletionVerify::Hash,
         );
         let items: Vec<Value> = missing
             .iter()
@@ -77,7 +79,14 @@ impl CliContext {
     ) -> Result<bool> {
         let profile = self.get_profile(profile_id).await?;
         let core = self.core.read().await;
-        let report = pipeline::ensure_launch_ready(&core, &profile, progress).await?;
+        // 显式修复命令：全量 SHA1 复核（ensure_launch_ready 的启动路径只用 Size 级）。
+        let report = pipeline::repair_instance(
+            &core,
+            &profile.game_version,
+            progress,
+            rmccc_version::completion::CompletionVerify::Hash,
+        )
+        .await?;
         if !report.is_complete() {
             return Err(RmcccError::DownloadFailed {
                 url: profile.game_version.clone(),

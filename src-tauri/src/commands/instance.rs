@@ -98,6 +98,7 @@ pub async fn instance_list(
                     &game_root,
                     r,
                     &core.platform.descriptor,
+                    rmccc_version::completion::CompletionVerify::Size,
                 )
                 .len()
             })
@@ -141,6 +142,7 @@ pub async fn instance_refresh(
                         &game_root,
                         r,
                         &core.platform.descriptor,
+                        rmccc_version::completion::CompletionVerify::Size,
                     )
                     .len()
                 })
@@ -240,10 +242,12 @@ pub async fn instance_check_completion(
     let resolved = repo
         .get_resolved(&version_id)
         .map_err(|e| IpcError::from(rmccc_error::RmcccError::Other(e.to_string())))?;
+    // 显式检查命令：全量 SHA1 复核（启动路径只用 Size 级）。
     let missing = rmccc_version::completion::check_completion(
         &game_root,
         &resolved,
         &core.platform.descriptor,
+        rmccc_version::completion::CompletionVerify::Hash,
     );
     let info = missing
         .into_iter()
@@ -266,7 +270,13 @@ pub async fn instance_repair(
     // `resource repair`、启动前的 `ensure_launch_ready` 同一份实现）。
     let core = state.core.read().await;
     let version_id = resolve_version_id(&core, &id).await?;
-    let report = rmccc_core::pipeline::repair_instance(&core, &version_id, None).await?;
+    let report = rmccc_core::pipeline::repair_instance(
+        &core,
+        &version_id,
+        None,
+        rmccc_version::completion::CompletionVerify::Hash,
+    )
+    .await?;
 
     if !report.is_complete() {
         return Err(IpcError {
