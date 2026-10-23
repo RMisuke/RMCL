@@ -1,0 +1,23 @@
+[package]
+name = "rmccc-agent"
+version = "0.1.0"
+edition = "2021"
+description = "Agent platform primitives (Phase 6, ADR-009/010): credential store, LLM provider adapter, read-only tool registry."
+
+[dependencies]
+rmccc-error = { workspace = true }
+rmccc-platform = { workspace = true }
+rmccc-auth = { workspace = true }
+rmccc-mods = { workspace = true }
+
+serde = { workspace = true }
+serde_json = { workspace = true }
+tokio = { workspace = true }
+reqwest = { workspace = true }
+tracing = { workspace = true }
+chrono = { workspace = true }
+url = { workspace = true }
+zip = { workspace = true }
+thiserror = { workspace = true }
+sha2 = { workspace = true }
+uuid = { workspace = true }

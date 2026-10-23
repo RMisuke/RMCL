@@ -87,6 +87,29 @@ pub fn plugin_staging_dir(data_dir: &Path) -> PathBuf {
     plugin_state_dir(data_dir).join("staging")
 }
 
+/// Agent 数据目录（`{data_dir}/agent/`，ADR-010）。
+///
+/// 布局：`sessions/<id>.jsonl`、`tasks/<id>.json`、`audit.jsonl`。
+/// 写入与脱敏由 `rmccc-agent::session` 负责，这里只统一路径，避免 Tauri/CLI 各拼一份。
+pub fn agent_dir(data_dir: &Path) -> PathBuf {
+    data_dir.join("agent")
+}
+
+/// `agent/sessions/`。
+pub fn agent_sessions_dir(data_dir: &Path) -> PathBuf {
+    agent_dir(data_dir).join("sessions")
+}
+
+/// `agent/tasks/`。
+pub fn agent_tasks_dir(data_dir: &Path) -> PathBuf {
+    agent_dir(data_dir).join("tasks")
+}
+
+/// `agent/audit.jsonl`。
+pub fn agent_audit_path(data_dir: &Path) -> PathBuf {
+    agent_dir(data_dir).join("audit.jsonl")
+}
+
 /// Ensure all required directories exist.
 pub fn ensure_dirs() -> std::io::Result<()> {
     let dirs = [

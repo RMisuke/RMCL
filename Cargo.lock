@@ -3632,6 +3632,27 @@ dependencies = [
 ]
 
 [[package]]
+name = "rmccc-agent"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "reqwest 0.12.28",
+ "rmccc-auth",
+ "rmccc-error",
+ "rmccc-mods",
+ "rmccc-platform",
+ "serde",
+ "serde_json",
+ "sha2",
+ "thiserror 2.0.19",
+ "tokio",
+ "tracing",
+ "url",
+ "uuid",
+ "zip 2.4.2",
+]
+
+[[package]]
 name = "rmccc-auth"
 version = "0.1.0"
 dependencies = [
