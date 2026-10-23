@@ -2171,3 +2171,73 @@ select.settings-input option {
   font-size: 11px;
   color: var(--text-secondary);
 }
+
+/* ── Agent page (Phase 6.5) ── */
+.agent-page section {
+  margin-bottom: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.agent-page h2 {
+  margin-bottom: 4px;
+}
+.agent-page h3 {
+  margin: 0;
+  font-size: 1rem;
+}
+.agent-page input,
+.agent-page textarea {
+  background: var(--surface-input, rgba(255, 255, 255, 0.06));
+  border: 1px solid var(--surface-border, rgba(255, 255, 255, 0.12));
+  border-radius: 6px;
+  color: inherit;
+  padding: 6px 10px;
+  font: inherit;
+}
+.agent-page textarea {
+  resize: vertical;
+}
+.agent-actions {
+  display: flex;
+  gap: 8px;
+}
+.agent-page .muted {
+  opacity: 0.65;
+  margin: 0;
+  font-size: 0.9rem;
+}
+.agent-page code {
+  font-size: 0.85rem;
+}
+.agent-task {
+  border: 1px solid var(--surface-border, rgba(255, 255, 255, 0.12));
+  border-radius: 8px;
+  padding: 8px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.agent-task pre {
+  margin: 0;
+  max-height: 160px;
+  overflow: auto;
+  font-size: 0.8rem;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+.agent-reply {
+  background: var(--surface-input, rgba(255, 255, 255, 0.06));
+  border-radius: 8px;
+  padding: 8px 10px;
+  white-space: pre-wrap;
+}
+.agent-transcript {
+  list-style: none;
+  padding-left: 0;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 0.85rem;
+}

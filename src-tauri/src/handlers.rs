@@ -89,6 +89,16 @@ pub const IPC_COMMANDS: &[&str] = &[
     "dashboard_set_theme_preference",
     "dashboard_get_theme_preference",
     "dashboard_get_theme_json",
+    // ── agent（Phase 6.5，ADR-009/010）──
+    "agent_config_get",
+    "agent_config_set",
+    "agent_session_list",
+    "agent_session_read",
+    "agent_tasks_pending",
+    "agent_task_resolve",
+    "agent_run",
+    "agent_cancel",
+    "agent_clear_history",
 ];
 
 /// 全部 IPC 命令（顺序无关，但请与 `commands/` 的模块顺序保持可读）。
@@ -124,6 +134,16 @@ pub fn invoke_handlers() -> impl Fn(tauri::ipc::Invoke<tauri::Wry>) -> bool + Se
         commands::logs::log_clear,
         // ── webview ──
         commands::ui::frontend_log,
+        // ── agent（Phase 6.5）──
+        commands::agent::agent_config_get,
+        commands::agent::agent_config_set,
+        commands::agent::agent_session_list,
+        commands::agent::agent_session_read,
+        commands::agent::agent_tasks_pending,
+        commands::agent::agent_task_resolve,
+        commands::agent::agent_run,
+        commands::agent::agent_cancel,
+        commands::agent::agent_clear_history,
         // ── modloader ──
         commands::modloader::modloader_list,
         commands::modloader::modloader_install,

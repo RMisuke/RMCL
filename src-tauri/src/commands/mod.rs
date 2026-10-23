@@ -1,5 +1,6 @@
 //! IPC command handlers.
 
+pub mod agent;
 pub mod auth;
 pub mod dashboard;
 pub mod download;

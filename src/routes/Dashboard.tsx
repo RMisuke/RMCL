@@ -603,6 +603,9 @@ const Dashboard: Component = () => {
               <button class="account-btn" onClick={() => navigate("/plugins")}>
                 {t("plugins.title")}
               </button>
+              <button class="account-btn" onClick={() => navigate("/agent")}>
+                {t("agent.title")}
+              </button>
               <div style="flex:1" />
               <button
                 class="account-btn"

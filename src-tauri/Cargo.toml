@@ -19,6 +19,7 @@ rmccc-modloader = { workspace = true }
 rmccc-mods = { workspace = true }
 rmccc-profile = { workspace = true }
 rmccc-logic = { workspace = true }
+rmccc-agent = { workspace = true }
 
 # External
 serde = { workspace = true }

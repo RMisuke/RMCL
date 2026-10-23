@@ -312,6 +312,72 @@ export const logic = {
 
 // ── Isolated plugin UI（Phase 4，ADR-006）──
 
+// ── Agent 平台（Phase 6.5，ADR-009/010）──
+//
+// 类型在 rmccc-agent 侧定义（serde snake_case / tag = "kind"），
+// 这里手工镜像 —— 这些 DTO 未走 ts-rs 导出，字段变更由契约测试兜底命令名。
+
+export interface AgentConfigView {
+  configured: boolean;
+  baseUrl: string | null;
+  model: string | null;
+}
+
+export interface AgentRunOutput {
+  session_id: string;
+  status: string;
+  replies: string[];
+  tool_calls: number;
+}
+
+export interface AgentSessionSummary {
+  session_id: string;
+  started_at: string;
+  last_event_at: string;
+  event_count: number;
+  tool_calls: number;
+  ended: boolean;
+}
+
+export interface AgentTaskSnapshot {
+  task_id: string;
+  session_id: string | null;
+  kind: string;
+  created_at: string;
+  updated_at: string;
+  status: "proposed" | "approved" | "rejected" | "applied" | "failed";
+  payload: unknown;
+}
+
+export interface AgentSessionEvent {
+  ts: string;
+  session_id: string;
+  event: { kind: string } & Record<string, unknown>;
+}
+
+export interface AgentPurgeReport {
+  sessions_removed: number;
+  tasks_removed: number;
+  bytes_freed: number;
+}
+
+export const agent = {
+  getConfig: () => safeInvoke<AgentConfigView>("agent_config_get"),
+  setConfig: (baseUrl: string, model: string, apiKey: string) =>
+    safeInvoke<void>("agent_config_set", { baseUrl, model, apiKey }),
+  listSessions: () => safeInvoke<AgentSessionSummary[]>("agent_session_list"),
+  readSession: (sessionId: string) =>
+    safeInvoke<AgentSessionEvent[]>("agent_session_read", { sessionId }),
+  pendingTasks: () => safeInvoke<AgentTaskSnapshot[]>("agent_tasks_pending"),
+  resolveTask: (taskId: string, approved: boolean, reason?: string) =>
+    safeInvoke<AgentTaskSnapshot>("agent_task_resolve", { taskId, approved, reason }),
+  /** Blocking: resolves when the whole turn completes. Cancel via `cancelRun`. */
+  run: (message: string, profileId?: string) =>
+    safeInvoke<AgentRunOutput>("agent_run", { message, profileId }),
+  cancelRun: () => safeInvoke<boolean>("agent_cancel"),
+  clearHistory: () => safeInvoke<AgentPurgeReport>("agent_clear_history"),
+};
+
 export const pluginUi = {
   /**
    * 把 iframe 的**原始**消息转发给宿主桥。

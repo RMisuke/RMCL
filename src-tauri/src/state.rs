@@ -31,6 +31,9 @@ pub struct AppState {
     /// because they own child processes and pipes, and every call runs on a
     /// blocking thread.
     pub logic: Arc<std::sync::Mutex<rmccc_logic::LogicRunner>>,
+
+    /// 当前 Agent 回合的取消令牌（Phase 6.5）。同一时刻最多一个回合在跑。
+    pub agent_cancel: Arc<std::sync::Mutex<Option<rmccc_agent::CancelToken>>>,
 }
 
 impl AppState {
@@ -54,6 +57,7 @@ impl AppState {
             app_handle,
             running_games: Arc::new(dashmap::DashMap::new()),
             logic: Arc::new(std::sync::Mutex::new(rmccc_logic::LogicRunner::new())),
+            agent_cancel: Arc::new(std::sync::Mutex::new(None)),
         })
     }
 }

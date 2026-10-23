@@ -133,7 +133,7 @@ fn ipc_registry_is_covered_by_the_frontend_api() {
 #[test]
 fn ipc_command_count_is_stable() {
     // 新增命令时这条会失败——提醒同时更新 bindings.rs / api.ts / 本文件。
-    assert_eq!(crate::handlers::IPC_COMMANDS.len(), 77);
+    assert_eq!(crate::handlers::IPC_COMMANDS.len(), 86);
 }
 
 // ────────────────────────── 2. 错误码契约 ──────────────────────────
