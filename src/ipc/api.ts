@@ -328,6 +328,8 @@ export interface AgentRunOutput {
   status: string;
   replies: string[];
   tool_calls: number;
+  /** Context actually sent to the remote model (redacted, 6.7). */
+  contextSent: unknown | null;
 }
 
 export interface AgentSessionSummary {

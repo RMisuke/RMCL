@@ -303,6 +303,7 @@ export const zhCN: Messages = {
   "agent.chat.cancel": "取消",
   "agent.chat.done": "回合结束",
   "agent.chat.transcript": "会话记录",
+  "agent.chat.contextSent": "发送给模型的上下文（已脱敏）",
   "agent.tasks.title": "待确认操作",
   "agent.tasks.none": "没有等待确认的操作",
   "agent.tasks.approve": "批准",

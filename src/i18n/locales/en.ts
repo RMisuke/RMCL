@@ -310,6 +310,7 @@ export const en = {
   "agent.chat.cancel": "Cancel",
   "agent.chat.done": "Turn finished",
   "agent.chat.transcript": "Session transcript",
+  "agent.chat.contextSent": "Context sent to the model (redacted)",
   "agent.tasks.title": "Pending approvals",
   "agent.tasks.none": "Nothing waiting for confirmation",
   "agent.tasks.approve": "Approve",

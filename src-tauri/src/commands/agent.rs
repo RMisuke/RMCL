@@ -11,13 +11,16 @@
 //! 安全边界与 `rmccc-agent` 一致：模型输出不是指令；工具调用全部过
 //! `ToolRegistry`（Schema 校验 → 风险门禁 → 审计）；本批只放行只读工具。
 
+use crate::commands::mods::sanitize_filename;
 use crate::state::AppState;
 use rmccc_agent::{
     AgentRoots, AgentService, AgentServiceConfig, ApprovalBroker, CancelToken, CredentialStore,
-    FileCredentialStore, OpenAiCompatibleProvider, SessionStore, ToolRegistry,
+    FileCredentialStore, OpenAiCompatibleProvider, SessionStore,
 };
 use rmccc_error::{ErrorCode, IpcError};
+use rmccc_mods::ModSource as _;
 use serde::Serialize;
+use serde_json::{json, Value};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -39,6 +42,8 @@ pub struct AgentRunOutput {
     pub status: String,
     pub replies: Vec<String>,
     pub tool_calls: u32,
+    /// 本回合实际发给远程模型的上下文（已脱敏，6.7）。
+    pub context_sent: Option<Value>,
 }
 
 async fn credential_store(state: &AppState) -> rmccc_error::Result<FileCredentialStore> {
@@ -79,10 +84,142 @@ async fn session_store(state: &AppState) -> rmccc_error::Result<Arc<SessionStore
     SessionStore::open(&data_dir, fs).map(Arc::new)
 }
 
-/// 打开（或首次创建）Agent 审计日志并挂到注册表上。
-fn audited_registry(store: &SessionStore, roots: &AgentRoots) -> rmccc_error::Result<ToolRegistry> {
-    let audit = store.open_audit()?;
-    Ok(rmccc_agent::read_only_registry(roots)?.with_audit(Arc::new(audit)))
+/// 指南 §10.6 的计划执行器：Modrinth 解析 + 下载安装（SHA1 校验由
+/// `ModSource::install` 负责）。同步 trait 经 `block_in_place` 桥接。
+struct ModrinthPlanApplier {
+    source: rmccc_mods::modrinth::ModrinthSource,
+    game_version: String,
+    loader: Option<String>,
+}
+
+impl ModrinthPlanApplier {
+    async fn apply_async(
+        &self,
+        mods_dir: &std::path::Path,
+        dependencies: &[rmccc_agent::PlannedDependency],
+    ) -> rmccc_error::Result<rmccc_agent::AppliedPlanReport> {
+        let mut installed = Vec::new();
+        let mut failed = Vec::new();
+        let mut attempted = Vec::new();
+        for dep in dependencies {
+            attempted.push(dep.mod_id.clone());
+            match self.install_one(mods_dir, dep).await {
+                Ok(applied) => installed.push(applied),
+                Err(error) => failed.push(rmccc_agent::FailedMod {
+                    mod_id: dep.mod_id.clone(),
+                    reason: error.to_string(),
+                }),
+            }
+        }
+        Ok(rmccc_agent::AppliedPlanReport {
+            installed,
+            failed,
+            attempted,
+        })
+    }
+
+    async fn install_one(
+        &self,
+        mods_dir: &std::path::Path,
+        dep: &rmccc_agent::PlannedDependency,
+    ) -> rmccc_error::Result<rmccc_agent::AppliedMod> {
+        let search = self
+            .source
+            .search(&rmccc_mods::ModSearchQuery {
+                query: dep.mod_id.clone(),
+                game_version: (!self.game_version.is_empty()).then(|| self.game_version.clone()),
+                loader: self.loader.clone(),
+                page: 0,
+                limit: 10,
+            })
+            .await?;
+        let hit = search.hits.first().ok_or_else(|| {
+            rmccc_error::RmcccError::MissingDependency(format!(
+                "no Modrinth project matches '{}'",
+                dep.mod_id
+            ))
+        })?;
+        let versions = self.source.list_versions(&hit.id).await?;
+        // 优先"游戏版本 + 加载器"都匹配，其次只匹配游戏版本，最后取最新。
+        let version = versions
+            .iter()
+            .find(|v| {
+                v.game_versions.iter().any(|g| g == &self.game_version)
+                    && self
+                        .loader
+                        .as_ref()
+                        .is_some_and(|l| v.loaders.iter().any(|v_l| v_l == l))
+            })
+            .or_else(|| {
+                versions
+                    .iter()
+                    .find(|v| v.game_versions.iter().any(|g| g == &self.game_version))
+            })
+            .or_else(|| versions.first())
+            .ok_or_else(|| {
+                rmccc_error::RmcccError::MissingDependency(format!(
+                    "no downloadable version for '{}' ({})",
+                    dep.mod_id, hit.id
+                ))
+            })?
+            .clone();
+
+        // 约束字符串（如 ">=1.0"）以源元数据记录为准，由用户在审批载荷里
+        // 人工确认——本版本不做 semver 求解。
+        let raw_name = version
+            .filename
+            .clone()
+            .unwrap_or_else(|| format!("{}-{}.jar", dep.mod_id, version.version_number));
+        let filename = sanitize_filename(&raw_name);
+        let dest = mods_dir.join(filename);
+        self.source.install(&version, &dest).await?;
+        Ok(rmccc_agent::AppliedMod {
+            mod_id: dep.mod_id.clone(),
+            file: dest
+                .file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_default(),
+            version: Some(version.version_number.clone()),
+        })
+    }
+}
+
+impl rmccc_agent::PlanApplier for ModrinthPlanApplier {
+    fn apply(
+        &self,
+        mods_dir: &std::path::Path,
+        dependencies: &[rmccc_agent::PlannedDependency],
+    ) -> rmccc_error::Result<rmccc_agent::AppliedPlanReport> {
+        tokio::task::block_in_place(|| {
+            tokio::runtime::Handle::current().block_on(self.apply_async(mods_dir, dependencies))
+        })
+    }
+}
+
+/// 6.7 上下文构建：只取**所选 profile** 的元数据（ADR-010 决策 5），
+/// 不读日志 / 存档 / 账号数据；runtime 在进提示词前统一脱敏。
+fn agent_context(
+    core: &rmccc_core::CoreContext,
+    profile_id: Option<&str>,
+) -> rmccc_error::Result<Option<Value>> {
+    let Some(id) = profile_id else {
+        return Ok(None);
+    };
+    let profile = core
+        .profile_store
+        .get(id)?
+        .ok_or_else(|| rmccc_error::RmcccError::ProfileNotFound(id.to_string()))?;
+    Ok(Some(json!({
+        "profile_id": profile.id,
+        "profile_name": profile.name,
+        "game_version": profile.game_version,
+        "mod_loader": profile.mod_loader.as_ref().map(|loader| json!({
+            "type": format!("{:?}", loader.loader_type).to_lowercase(),
+            "version": loader.loader_version,
+        })),
+        "isolation": profile.isolation,
+        "memory_mb": profile.memory_mb,
+    })))
 }
 
 // ── 配置 ──
@@ -217,6 +354,7 @@ pub async fn agent_run(
         status: format!("{:?}", output.status).to_lowercase(),
         replies: output.replies,
         tool_calls: output.tool_calls as u32,
+        context_sent: output.context_sent,
     })
 }
 
@@ -235,16 +373,32 @@ async fn run_turn_locked(
             )
         })?;
 
-    let (store, registry, model_name) = {
+    let (store, registry, model_name, context) = {
         let core = state.core.read().await;
         let store = {
             let data_dir = core.config.resolved_data_dir();
             SessionStore::open(&data_dir, core.platform.fs.clone())?
         };
         let roots = agent_roots(&core, profile_id.as_deref())?;
-        let registry = audited_registry(&store, &roots)?;
+        // 完整工具集 = 只读工具 + mods.apply_plan（写工具，走审批链）。
+        let applier = ModrinthPlanApplier {
+            source: rmccc_mods::modrinth::ModrinthSource::new(core.http_client.clone()),
+            game_version: profile_id
+                .as_deref()
+                .and_then(|id| core.profile_store.get(id).ok().flatten())
+                .map(|p| p.game_version)
+                .unwrap_or_default(),
+            loader: profile_id
+                .as_deref()
+                .and_then(|id| core.profile_store.get(id).ok().flatten())
+                .and_then(|p| p.mod_loader)
+                .map(|loader| format!("{:?}", loader.loader_type).to_lowercase()),
+        };
+        let registry = rmccc_agent::full_registry(&roots, Arc::new(applier))?
+            .with_audit(Arc::new(store.open_audit()?));
+        let context = agent_context(&core, profile_id.as_deref())?;
         let model_name = credential.model.clone().unwrap_or_default();
-        (Arc::new(store), Arc::new(registry), model_name)
+        (Arc::new(store), Arc::new(registry), model_name, context)
     };
 
     let provider = OpenAiCompatibleProvider::new(
@@ -266,7 +420,7 @@ async fn run_turn_locked(
         },
     );
     service
-        .run_turn(&message, profile_id.as_deref(), cancel)
+        .run_turn_with_context(&message, profile_id.as_deref(), context, cancel)
         .await
 }
 

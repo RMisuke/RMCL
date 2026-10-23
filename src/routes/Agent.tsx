@@ -213,6 +213,12 @@ const Agent: Component = () => {
             </For>
           </div>
         </Show>
+        <Show when={lastRun()?.contextSent}>
+          <details>
+            <summary>{t("agent.chat.contextSent")}</summary>
+            <pre class="agent-context">{asText(lastRun()?.contextSent)}</pre>
+          </details>
+        </Show>
         <Show when={transcript().length > 0}>
           <details>
             <summary>

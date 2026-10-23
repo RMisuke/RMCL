@@ -2241,3 +2241,13 @@ select.settings-input option {
   gap: 4px;
   font-size: 0.85rem;
 }
+
+.agent-context {
+  margin: 4px 0 0;
+  max-height: 200px;
+  overflow: auto;
+  font-size: 0.78rem;
+  white-space: pre-wrap;
+  word-break: break-all;
+  opacity: 0.85;
+}
