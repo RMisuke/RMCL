@@ -60,10 +60,12 @@ impl AuditRecord {
             session_id: session_id.into(),
             tool_id: tool_id.into(),
             risk_level,
-            input: redact_json(input, None),
+            input: redact_json(input, crate::redact::user_home().as_deref()),
             outcome,
             duration_ms: duration.as_millis().min(u128::from(u64::MAX)) as u64,
-            error: error.map(|text| crate::redact::redact_text(text, None)),
+            error: error.map(|text| {
+                crate::redact::redact_text(text, crate::redact::user_home().as_deref())
+            }),
         }
     }
 }
@@ -72,20 +74,28 @@ impl AuditRecord {
 pub struct AuditLog {
     path: PathBuf,
     fs: Arc<dyn PlatformFs>,
+    /// 串行化追加（审计 P2-29）：交错写入会产生坏行，而读取端跳过坏行
+    /// 等于审计记录无声丢失。
+    write_lock: std::sync::Mutex<()>,
 }
 
 impl AuditLog {
-    /// 打开（必要时创建父目录），新文件权限收紧到属主可读写（ADR-010）。
+    /// 打开（必要时创建父目录），目录与文件权限都收紧到属主（ADR-010）。
     pub fn open(path: impl AsRef<Path>, fs: Arc<dyn PlatformFs>) -> Result<Self> {
         let path = path.as_ref().to_path_buf();
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)?;
+            fs.restrict_owner_only_dir(parent)?;
         }
         if !path.exists() {
             std::fs::write(&path, b"")?;
             fs.restrict_owner_only(&path)?;
         }
-        Ok(Self { path, fs })
+        Ok(Self {
+            path,
+            fs,
+            write_lock: std::sync::Mutex::new(()),
+        })
     }
 
     pub fn path(&self) -> &Path {
@@ -95,6 +105,10 @@ impl AuditLog {
     /// 追加一条记录（同步 I/O；只读工具路径可接受，写操作应走队列）。
     pub fn append(&self, record: &AuditRecord) -> Result<()> {
         use std::io::Write;
+        let _guard = self
+            .write_lock
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         let line = serde_json::to_string(record)?;
         if line.contains('\n') {
             return Err(RmcccError::Validation(

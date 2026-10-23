@@ -168,7 +168,8 @@ impl ToolRegistry {
         let started = Instant::now();
         let Some(tool) = self.tools.get(tool_id) else {
             let error = RmcccError::Validation(format!("unknown agent tool: {tool_id}"));
-            self.audit_failure(
+            // 拒绝路径：审计失败不改变"调用被拒绝"这一结果。
+            let _ = self.audit_failure(
                 session_id,
                 tool_id,
                 RiskLevel::ReadOnly,
@@ -186,7 +187,8 @@ impl ToolRegistry {
                 descriptor.id,
                 descriptor.risk_level.as_str()
             ));
-            self.audit_failure(
+            // 拒绝路径：审计失败不改变"调用被拒绝"这一结果。
+            let _ = self.audit_failure(
                 session_id,
                 tool_id,
                 descriptor.risk_level,
@@ -198,7 +200,8 @@ impl ToolRegistry {
         }
 
         if let Err(error) = validate_json_schema(&descriptor.input_schema, input) {
-            self.audit_failure(
+            // 拒绝路径：审计失败不改变"调用被拒绝"这一结果。
+            let _ = self.audit_failure(
                 session_id,
                 tool_id,
                 descriptor.risk_level,
@@ -212,18 +215,28 @@ impl ToolRegistry {
         match tool.execute(input) {
             Ok(output) => {
                 let result = ToolResult::ok(descriptor.id.clone(), output);
-                self.audit_success(session_id, descriptor, input, started);
+                // 审计失败不能让调用"看起来成功又查不到"（ADR-010 决策 3）：
+                // 成功路径 fail-closed，把审计错误返回给调用方。
+                self.audit_success(session_id, descriptor, input, started)?;
                 Ok(result)
             }
             Err(error) => {
-                self.audit_failure(
+                // 失败路径：调用本身已经失败，审计写失败时保留原始工具错误
+                //（日志里留审计错误），不让调用方看到更晦涩的第二层错误。
+                if let Err(audit_error) = self.audit_failure(
                     session_id,
                     tool_id,
                     descriptor.risk_level,
                     input,
                     started,
                     &error,
-                );
+                ) {
+                    tracing::error!(
+                        tool = %tool_id,
+                        error = %audit_error,
+                        "failed to write agent audit record for a failed tool call"
+                    );
+                }
                 Err(error)
             }
         }
@@ -235,22 +248,20 @@ impl ToolRegistry {
         descriptor: &AgentToolDescriptor,
         input: &Value,
         started: Instant,
-    ) {
-        if let Some(audit) = &self.audit {
-            let record = AuditRecord::new(
-                session_id,
-                descriptor.id.clone(),
-                descriptor.risk_level,
-                input,
-                AuditOutcome::Ok,
-                started.elapsed(),
-                None,
-            );
-            if let Err(error) = audit.append(&record) {
-                // 只读工具：审计失败不能让结果"看起来成功又查不到"，记日志并返回错误给调用方。
-                tracing::error!(tool = %descriptor.id, %error, "failed to write agent audit record");
-            }
-        }
+    ) -> Result<()> {
+        let Some(audit) = &self.audit else {
+            return Ok(());
+        };
+        let record = AuditRecord::new(
+            session_id,
+            descriptor.id.clone(),
+            descriptor.risk_level,
+            input,
+            AuditOutcome::Ok,
+            started.elapsed(),
+            None,
+        );
+        audit.append(&record)
     }
 
     fn audit_failure(
@@ -261,25 +272,24 @@ impl ToolRegistry {
         input: &Value,
         started: Instant,
         error: &RmcccError,
-    ) {
-        if let Some(audit) = &self.audit {
-            let record = AuditRecord::new(
-                session_id,
-                tool_id.to_string(),
-                risk_level,
-                input,
-                if matches!(error, RmcccError::Validation(_)) {
-                    AuditOutcome::Denied
-                } else {
-                    AuditOutcome::Error
-                },
-                started.elapsed(),
-                Some(&error.to_string()),
-            );
-            if let Err(write_error) = audit.append(&record) {
-                tracing::error!(tool = %tool_id, error = %write_error, "failed to write agent audit record");
-            }
-        }
+    ) -> Result<()> {
+        let Some(audit) = &self.audit else {
+            return Ok(());
+        };
+        let record = AuditRecord::new(
+            session_id,
+            tool_id.to_string(),
+            risk_level,
+            input,
+            if matches!(error, RmcccError::Validation(_)) {
+                AuditOutcome::Denied
+            } else {
+                AuditOutcome::Error
+            },
+            started.elapsed(),
+            Some(&error.to_string()),
+        );
+        audit.append(&record)
     }
 }
 

@@ -13,7 +13,15 @@
 //! 不做"猜测式"脱敏（例如任意长数字），避免把正常内容改坏。
 
 use serde_json::{Map, Value};
-use std::path::Path;
+use std::path::{Path, PathBuf};
+
+/// 当前用户的 home 目录（ADR-010 决策 4：落盘前把 home 前缀替换为 `~`）。
+///
+/// 取不到（环境变量缺失等）返回 `None`，此时调用方跳过该规则——
+/// 与 `redact_text(text, None)` 的既有语义一致。
+pub fn user_home() -> Option<PathBuf> {
+    std::env::home_dir().filter(|p| !p.as_os_str().is_empty())
+}
 
 /// 字段名命中即整体打码。
 const SENSITIVE_KEYS: &[&str] = &[

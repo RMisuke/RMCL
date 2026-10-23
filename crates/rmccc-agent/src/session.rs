@@ -139,7 +139,7 @@ impl SessionEventKind {
         Self::ToolCall {
             tool_id: tool_id.into(),
             risk_level,
-            input: redact_json(input, None),
+            input: redact_json(input, crate::redact::user_home().as_deref()),
         }
     }
 
@@ -169,7 +169,10 @@ impl SessionEventKind {
             task_id: task_id.into(),
             tool_id: tool_id.into(),
             risk_level,
-            summary: truncate_chars(&redact_text(summary, None), MAX_SUMMARY_CHARS),
+            summary: truncate_chars(
+                &redact_text(summary, crate::redact::user_home().as_deref()),
+                MAX_SUMMARY_CHARS,
+            ),
         }
     }
 
@@ -181,7 +184,12 @@ impl SessionEventKind {
         Self::ApprovalResolved {
             task_id: task_id.into(),
             approved,
-            reason: reason.map(|text| truncate_chars(&redact_text(text, None), MAX_ERROR_CHARS)),
+            reason: reason.map(|text| {
+                truncate_chars(
+                    &redact_text(text, crate::redact::user_home().as_deref()),
+                    MAX_ERROR_CHARS,
+                )
+            }),
         }
     }
 
@@ -189,7 +197,10 @@ impl SessionEventKind {
     pub fn error(category: impl Into<String>, message: &str) -> Self {
         Self::Error {
             category: category.into(),
-            message: truncate_chars(&redact_text(message, None), MAX_ERROR_CHARS),
+            message: truncate_chars(
+                &redact_text(message, crate::redact::user_home().as_deref()),
+                MAX_ERROR_CHARS,
+            ),
         }
     }
 
@@ -299,15 +310,27 @@ impl PurgeReport {
 pub struct SessionStore {
     data_dir: PathBuf,
     fs: Arc<dyn PlatformFs>,
+    /// 串行化 JSONL 追加：两个线程交错 write 会产生交错坏行，而读取端
+    /// 跳过坏行等于审计/会话记录无声丢失（审计 P2-29）。
+    append_lock: std::sync::Mutex<()>,
 }
 
 impl SessionStore {
     /// 打开（必要时创建）`<data_dir>/agent/{sessions,tasks}`。
+    ///
+    /// 目录创建后收紧为仅属主可进入（`0700`，ADR-010 决策 1）——
+    /// 此前只有文件是 0600，目录保持 0755 可被同机其他用户列目录名。
     pub fn open(data_dir: impl AsRef<Path>, fs: Arc<dyn PlatformFs>) -> Result<Self> {
         let data_dir = data_dir.as_ref().to_path_buf();
-        let store = Self { data_dir, fs };
-        std::fs::create_dir_all(store.sessions_dir())?;
-        std::fs::create_dir_all(store.tasks_dir())?;
+        let store = Self {
+            data_dir,
+            fs,
+            append_lock: std::sync::Mutex::new(()),
+        };
+        for dir in [store.agent_dir(), store.sessions_dir(), store.tasks_dir()] {
+            std::fs::create_dir_all(&dir)?;
+            store.fs.restrict_owner_only_dir(&dir)?;
+        }
         Ok(store)
     }
 
@@ -372,6 +395,10 @@ impl SessionStore {
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)?;
         }
+        let _guard = self
+            .append_lock
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         let mut file = std::fs::OpenOptions::new()
             .create(true)
             .append(true)
@@ -441,7 +468,7 @@ impl SessionStore {
         validate_id("task id", &snapshot.task_id)?;
         let path = self.task_path(&snapshot.task_id)?;
         let payload = TaskSnapshot {
-            payload: redact_json(&snapshot.payload, None),
+            payload: redact_json(&snapshot.payload, crate::redact::user_home().as_deref()),
             ..snapshot.clone()
         };
         let bytes = serde_json::to_vec_pretty(&payload)?;
@@ -505,7 +532,9 @@ impl SessionStore {
         Ok(report)
     }
 
-    /// "清除 Agent 历史"：删除会话与任务文件，**保留审计日志**（清除动作本身仍可审计）。
+    /// "清除 Agent 历史"：删除会话与任务文件，**保留审计日志**，并把清除动作
+    /// 本身写进审计（ADR-010 决策 6）。审计写不进去则整体失败——销毁性操作
+    /// 必须留下痕迹。
     pub fn clear_all(&self) -> Result<PurgeReport> {
         let mut report = PurgeReport::default();
         for (dir, extension, is_session) in [
@@ -524,6 +553,21 @@ impl SessionStore {
                 }
             }
         }
+        let audit = self.open_audit()?;
+        let record = crate::audit::AuditRecord::new(
+            "system",
+            "agent.clear_history",
+            crate::tools::RiskLevel::Destructive,
+            &serde_json::json!({
+                "sessions_removed": report.sessions_removed,
+                "tasks_removed": report.tasks_removed,
+                "bytes_freed": report.bytes_freed,
+            }),
+            crate::audit::AuditOutcome::Ok,
+            std::time::Duration::from_millis(0),
+            None,
+        );
+        audit.append(&record)?;
         Ok(report)
     }
 

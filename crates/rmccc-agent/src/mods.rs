@@ -172,7 +172,13 @@ pub fn scan_instance_mods(mods_dir: &Path) -> Result<DependencyReport> {
         }
     }
 
-    let installed: BTreeSet<String> = mods.iter().map(|m| m.mod_id.clone()).collect();
+    // 只有解析出元数据的 mod 才算"已安装"：无元数据的 jar（Forge/损坏文件）
+    // 以文件名 stem 进入集合会错误地满足同名依赖，漏报缺失前置（审计 P2-28）。
+    let installed: BTreeSet<String> = mods
+        .iter()
+        .filter(|m| m.metadata == MetadataSource::FabricJson)
+        .map(|m| m.mod_id.clone())
+        .collect();
     let mut missing: BTreeMap<String, PlannedDependency> = BTreeMap::new();
     let mut conflicts = Vec::new();
 
@@ -255,11 +261,20 @@ pub fn plan_from_report(report: &DependencyReport, mods_dir: &Path) -> ModInstal
 }
 
 /// 默认只读工具集（Phase 6.6）：已装 Mod、依赖扫描、已装版本。
-pub fn read_only_registry() -> Result<ToolRegistry> {
+///
+/// 工具的目录在构造时固定为 [`AgentRoots`]，输入 schema 为空对象——
+/// 模型传任何参数都会被拒绝。
+pub fn read_only_registry(roots: &AgentRoots) -> Result<ToolRegistry> {
     let mut registry = ToolRegistry::new();
-    registry.register(std::sync::Arc::new(InstalledModsTool))?;
-    registry.register(std::sync::Arc::new(DependencyScanTool))?;
-    registry.register(std::sync::Arc::new(InstalledVersionsTool))?;
+    registry.register(std::sync::Arc::new(InstalledModsTool {
+        mods_dir: roots.mods_dir.clone(),
+    }))?;
+    registry.register(std::sync::Arc::new(DependencyScanTool {
+        mods_dir: roots.mods_dir.clone(),
+    }))?;
+    registry.register(std::sync::Arc::new(InstalledVersionsTool {
+        versions_dir: roots.versions_dir.clone(),
+    }))?;
     Ok(registry)
 }
 
@@ -381,27 +396,31 @@ fn is_platform_dependency(mod_id: &str) -> bool {
     )
 }
 
-fn input_dir(input: &Value, key: &str) -> Result<PathBuf> {
-    let raw = input
-        .get(key)
-        .and_then(Value::as_str)
-        .ok_or_else(|| RmcccError::Validation(format!("missing '{key}' string")))?;
-    let path = PathBuf::from(raw);
-    if !path.is_absolute() {
-        return Err(RmcccError::Validation(format!(
-            "'{key}' must be an absolute path, got '{raw}'"
-        )));
-    }
-    if !path.is_dir() {
-        return Err(RmcccError::Validation(format!(
-            "'{key}' is not a directory: {raw}"
-        )));
-    }
-    Ok(path)
+/// 内置只读工具的固定根目录。
+///
+/// 路径在构造时由宿主注入（ADR-010 决策 5：不扫描磁盘，只看启动器自己的
+/// 数据目录），**模型永远不提供路径**——否则接上 LLM 后就是现成的
+/// prompt-injection 全盘探测面（审计 P2-17）。
+#[derive(Debug, Clone)]
+pub struct AgentRoots {
+    pub versions_dir: PathBuf,
+    pub mods_dir: PathBuf,
 }
 
-fn dir_input_schema(key: &str) -> Value {
-    object_schema(json!({ key: { "type": "string", "minLength": 1 } }), &[key])
+/// 无参数输入 Schema：`{"type":"object","additionalProperties":false}`。
+/// 模型夹带任何字段（包括曾经的 `mods_dir`）都会被 schema 拒绝。
+fn empty_input_schema() -> Value {
+    object_schema(json!({}), &[])
+}
+
+fn ensure_dir(path: &Path) -> Result<()> {
+    if !path.is_dir() {
+        return Err(RmcccError::Validation(format!(
+            "directory not found: {}",
+            path.display()
+        )));
+    }
+    Ok(())
 }
 
 fn descriptor(
@@ -426,7 +445,9 @@ fn descriptor(
 }
 
 /// `mods.installed` — 列出实例已装 Mod 的最小元数据。
-struct InstalledModsTool;
+struct InstalledModsTool {
+    mods_dir: PathBuf,
+}
 
 impl AgentTool for InstalledModsTool {
     fn descriptor(&self) -> &AgentToolDescriptor {
@@ -437,15 +458,15 @@ impl AgentTool for InstalledModsTool {
                 "mods.installed",
                 "列出已装 Mod",
                 "读取实例 mods/ 目录，返回每个 jar 的 mod id / 名称 / 版本；不修改文件。",
-                dir_input_schema("mods_dir"),
+                empty_input_schema(),
                 json!({ "type": "object" }),
             )
         })
     }
 
-    fn execute(&self, input: &Value) -> Result<Value> {
-        let dir = input_dir(input, "mods_dir")?;
-        let report = scan_instance_mods(&dir)?;
+    fn execute(&self, _input: &Value) -> Result<Value> {
+        ensure_dir(&self.mods_dir)?;
+        let report = scan_instance_mods(&self.mods_dir)?;
         Ok(json!({
             "mods": report.mods,
             "unparsed": report.unparsed,
@@ -454,7 +475,9 @@ impl AgentTool for InstalledModsTool {
 }
 
 /// `mods.dependency_scan` — 缺失前置/冲突 + dry-run 安装计划。
-struct DependencyScanTool;
+struct DependencyScanTool {
+    mods_dir: PathBuf,
+}
 
 impl AgentTool for DependencyScanTool {
     fn descriptor(&self) -> &AgentToolDescriptor {
@@ -465,22 +488,24 @@ impl AgentTool for DependencyScanTool {
                 "mods.dependency_scan",
                 "检查 Mod 依赖与冲突",
                 "解析实例内 Fabric 模组的依赖，返回缺失的必需前置、声明式不兼容与 dry-run 安装计划；不执行安装。",
-                dir_input_schema("mods_dir"),
+                empty_input_schema(),
                 json!({ "type": "object" }),
             )
         })
     }
 
-    fn execute(&self, input: &Value) -> Result<Value> {
-        let dir = input_dir(input, "mods_dir")?;
-        let report = scan_instance_mods(&dir)?;
-        let plan = plan_from_report(&report, &dir);
+    fn execute(&self, _input: &Value) -> Result<Value> {
+        ensure_dir(&self.mods_dir)?;
+        let report = scan_instance_mods(&self.mods_dir)?;
+        let plan = plan_from_report(&report, &self.mods_dir);
         Ok(json!({ "report": report, "plan": plan }))
     }
 }
 
 /// `versions.installed` — 列出 `versions/` 下的版本目录与关键文件是否存在。
-struct InstalledVersionsTool;
+struct InstalledVersionsTool {
+    versions_dir: PathBuf,
+}
 
 impl AgentTool for InstalledVersionsTool {
     fn descriptor(&self) -> &AgentToolDescriptor {
@@ -491,16 +516,17 @@ impl AgentTool for InstalledVersionsTool {
                 "versions.installed",
                 "列出已装版本",
                 "扫描 versions/ 目录，返回版本 id 以及 client jar / manifest 是否存在；不下载、不修改。",
-                dir_input_schema("versions_dir"),
+                empty_input_schema(),
                 json!({ "type": "object" }),
             )
         })
     }
 
-    fn execute(&self, input: &Value) -> Result<Value> {
-        let dir = input_dir(input, "versions_dir")?;
+    fn execute(&self, _input: &Value) -> Result<Value> {
+        let dir = &self.versions_dir;
+        ensure_dir(dir)?;
         let mut versions = Vec::new();
-        for entry in std::fs::read_dir(&dir)?.flatten() {
+        for entry in std::fs::read_dir(dir)?.flatten() {
             let path = entry.path();
             if !path.is_dir() {
                 continue;
@@ -650,9 +676,21 @@ mod tests {
         assert!(scan_instance_mods(&missing).is_err());
     }
 
+    fn rooted_registry(dir: &Path) -> ToolRegistry {
+        read_only_registry(&AgentRoots {
+            versions_dir: dir.join("versions"),
+            mods_dir: dir.to_path_buf(),
+        })
+        .expect("registry")
+    }
+
     #[test]
     fn registry_exposes_three_read_only_tools() {
-        let registry = read_only_registry().expect("registry");
+        let registry = read_only_registry(&AgentRoots {
+            versions_dir: PathBuf::from("/tmp/versions"),
+            mods_dir: PathBuf::from("/tmp/mods"),
+        })
+        .expect("registry");
         assert_eq!(registry.len(), 3);
         for descriptor in registry.descriptors() {
             assert_eq!(descriptor.risk_level, RiskLevel::ReadOnly);
@@ -673,12 +711,9 @@ mod tests {
             .flatten()
             .map(|e| e.file_name())
             .collect();
-        let registry = read_only_registry().expect("registry");
+        let registry = rooted_registry(&dir);
         let result = registry
-            .invoke(
-                "mods.dependency_scan",
-                &json!({ "mods_dir": dir.to_string_lossy() }),
-            )
+            .invoke("mods.dependency_scan", &json!({}))
             .expect("invoke");
         assert!(result.ok);
         assert_eq!(result.output["plan"]["dry_run"], true);
@@ -697,34 +732,83 @@ mod tests {
     }
 
     #[test]
-    fn tools_reject_relative_paths_and_unknown_fields() {
-        let registry = read_only_registry().expect("registry");
+    fn tools_accept_no_input_and_reject_any_path_from_the_model() {
+        let dir = temp_dir("roots");
+        // 指向不存在的目录：空对象输入可到达工具并得到目录错误。
+        let registry = read_only_registry(&AgentRoots {
+            versions_dir: dir.join("versions"),
+            mods_dir: dir.join("missing-mods"),
+        })
+        .expect("registry");
+        assert!(registry.invoke("mods.installed", &json!({})).is_err());
+        // 模型夹带的任何路径参数都被 schema 拒绝（P2-17）。
         assert!(registry
-            .invoke("mods.installed", &json!({ "mods_dir": "relative/mods" }))
+            .invoke("mods.installed", &json!({ "mods_dir": "/tmp" }))
             .is_err());
         assert!(registry
-            .invoke(
-                "mods.installed",
-                &json!({ "mods_dir": "/tmp", "extra": true })
-            )
+            .invoke("mods.installed", &json!({ "extra": true }))
             .is_err());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn tools_use_injected_roots_not_model_supplied_paths() {
+        let dir = temp_dir("injected");
+        write_jar(&dir, "a.jar", Some(r#"{"id":"a","version":"1"}"#));
+        std::fs::create_dir_all(dir.join("versions/1.20.4")).expect("versions");
+        let registry = rooted_registry(&dir);
+
+        let mods = registry
+            .invoke("mods.installed", &json!({}))
+            .expect("invoke");
+        assert_eq!(mods.output["mods"][0]["mod_id"], "a");
+
+        let versions = registry
+            .invoke("versions.installed", &json!({}))
+            .expect("invoke");
+        assert_eq!(versions.output["versions"][0]["id"], "1.20.4");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn unparsed_jar_does_not_satisfy_dependencies() {
+        // P2-28 回归：名为 indium.jar 的无元数据 jar（Forge mod 或损坏文件）
+        // 不得让 sodium 的 `depends: indium` 被视为已满足。
+        let dir = temp_dir("unparsed-dep");
+        write_jar(&dir, "indium.jar", None);
+        write_jar(
+            &dir,
+            "sodium.jar",
+            Some(r#"{"id":"sodium","version":"0.5","depends":{"indium":">=1.0"}}"#),
+        );
+        let registry = rooted_registry(&dir);
+        let result = registry
+            .invoke("mods.dependency_scan", &json!({}))
+            .expect("invoke");
+        assert_eq!(
+            result.output["report"]["missing_required"][0]["mod_id"], "indium",
+            "unparsed jar must not satisfy the dependency"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
     fn installed_versions_tool_reports_files() {
         let dir = temp_dir("versions");
-        let version_dir = dir.join("1.20.4");
+        let versions_root = dir.join("versions");
+        let version_dir = versions_root.join("1.20.4");
         std::fs::create_dir_all(&version_dir).expect("version dir");
         std::fs::write(version_dir.join("1.20.4.json"), b"{}").expect("json");
         std::fs::write(version_dir.join("1.20.4.jar"), b"jar").expect("jar");
-        std::fs::create_dir_all(dir.join("1.21")).expect("empty version dir");
+        std::fs::create_dir_all(versions_root.join("1.21")).expect("empty version dir");
 
-        let registry = read_only_registry().expect("registry");
+        let registry = read_only_registry(&AgentRoots {
+            versions_dir: versions_root,
+            mods_dir: dir.clone(),
+        })
+        .expect("registry");
         let result = registry
-            .invoke(
-                "versions.installed",
-                &json!({ "versions_dir": dir.to_string_lossy() }),
-            )
+            .invoke("versions.installed", &json!({}))
             .expect("invoke");
         let versions = result.output["versions"].as_array().expect("array");
         assert_eq!(versions.len(), 2);

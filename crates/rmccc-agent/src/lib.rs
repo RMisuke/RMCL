@@ -26,6 +26,7 @@ pub mod credentials;
 pub mod llm;
 pub mod mods;
 pub mod redact;
+pub mod runtime;
 pub mod session;
 pub mod tools;
 
@@ -38,8 +39,12 @@ pub use llm::{
     LlmProvider, LlmStream, ModelCapabilities, OpenAiCompatibleProvider, RetryPolicy,
 };
 pub use mods::{
-    scan_instance_mods, DependencyReport, InstalledMod, MetadataSource, ModConflict,
-    ModInstallPlan, PlannedDependency,
+    read_only_registry, scan_instance_mods, AgentRoots, DependencyReport, InstalledMod,
+    MetadataSource, ModConflict, ModInstallPlan, PlannedDependency,
+};
+pub use runtime::{
+    AgentService, AgentServiceConfig, ApprovalBroker, Resolution, ToolCallRequest, TurnOutput,
+    TurnStatus,
 };
 pub use session::{
     is_expired, validate_id, PurgeReport, SessionEvent, SessionEventKind, SessionStore,
