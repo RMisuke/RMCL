@@ -38,10 +38,10 @@ RMCL/
 │   ├── AUDIT_2026-10-20.md        # 横切全景 + 技术债台账
 │   ├── PROJECT_STATUS.md          # 轮次变更记录
 │   ├── RMCCC_PLUGIN_PLATFORM_ARCHITECTURE_GUIDE.md  # 插件平台目标架构（含 §1.4 当前 macOS-only 约束、§5.7 平台适配层）
-│   ├── adr/                       # 架构决策记录（ADR-002/003/004/005/006/011 accepted）
+│   ├── adr/                       # 架构决策记录（ADR-002–007、009–011 accepted；001/012 proposed）
 │   └── roadmap/                   # 细化执行计划（Phase 0–7 + 平台适配）
 ├── schemas/                # 公共协议 schema（manifest / dashboard-layout / plugin-ui-bridge）
-├── crates/                # Rust workspace crates（含 rmccc-platform / rmccc-plugin / rmccc-dashboard / rmccc-logic）
+├── crates/                # Rust workspace crates（含 rmccc-platform / rmccc-plugin / rmccc-dashboard / rmccc-logic / rmccc-agent）
 ├── examples/plugins/      # 插件样例（theme-midnight / server-dashboard：隔离 UI 卡片）
 ├── plugin-sdk/            # 第三方插件 SDK（plugin-api / plugin-ui / 模板 / 校验打包工具）
 ├── src-tauri/             # Tauri 应用层（IPC 命令）

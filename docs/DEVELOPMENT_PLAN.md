@@ -102,12 +102,14 @@
 
 ## Phase 3: Mod Loaders（Week 5–6）
 
-> **状态：✅ 后端完成，前端已接（未逐项实机点击）**
+> **状态：✅ 后端完成，前端已接；安装进度事件仍未订阅**
 > 后端支持 8 种 loader（Fabric / Forge / NeoForge / Quilt / LiteLoader / OptiFine / Cleanroom / LegacyFabric），
-> 其中 Cleanroom 仍是 stub。已有记录：Fabric / NeoForge 安装后可正常启动（`docs/test_log.md`）。
+> 其中 Cleanroom 仍是 stub（审计 P1-6：选中必然失败）。已有记录：Fabric / NeoForge 安装后可正常启动（`docs/test_log.md`）。
 > **已达成**：实例设置页 `/instances/:id` 的「加载器」分区已可选择 loader 类型、列出稳定/预览版本并安装
-> （`modloader_list` / `modloader_install` 已在 `InstanceSettings.tsx` 调用）。
-> **未达成**：安装进度事件 `modloader://progress` 尚未被页面订阅（目前只有 toast 结果）。
+> （`modloader_list` / `modloader_install` 已在 `InstanceSettings.tsx` 调用）；安装路由已统一为
+> `rmccc-core::modloader::install_loader`（Phase 1.4 单体系，Forge/NeoForge → installer JAR，其余 → patch）。
+> **未达成**：`modloader://progress` 在 `src-tauri/src/events.rs` 与 `src/ipc/events.ts` 两侧已定义、后端逐阶段 emit，
+> 但页面尚未订阅（目前只有 toast 结果）；Cleanroom 既未实现也未在 UI 禁用。
 
 **目标**：支持 Fabric / Forge / NeoForge 安装。
 
@@ -139,11 +141,13 @@
 
 ## Phase 4: Mod Management（Week 7–8）
 
-> **状态：⚠️ 后端完成，前端缺浏览器**
+> **状态：✅ 主体完成（CurseForge 源与依赖解析除外，2026-10-22 回填）**
 > Modrinth 搜索/版本/下载链接/安装/启停/移除与本地 mod 管理（`mods/disabled/`）已落地并注册 IPC。
-> **已达成**：实例设置页「模组」分区已有已装列表（启用 / 禁用 / 删除三态可见可操作）。
-> **未达成**：Mod 浏览器（搜索 + 详情 + 安装）、本地文件安装（缺 `tauri-plugin-dialog`）、
-> CurseForge 源、依赖提示（`ModDependency` 类型已定义但未接入解析）。
+> **已达成**：独立 `/mods` Mod 浏览器（实例下拉 + 搜索 + 20/页分页 + 展开版本 + 安装）；
+> 本地文件安装（`tauri-plugin-dialog` + `mod_pick_and_install` / `mod_install_local`）；
+> 实例设置页「模组」分区已装列表（启用 / 禁用 / 删除）。审计 P1-1 / P1-5 已销账，前端调用面 72/77（P2-6）。
+> **未达成**：CurseForge 源（`rmccc-mods` 仅有模块注释，无实现，需 API key 方案）、
+> 依赖提示（`ModDependency` 类型已定义但未接入解析，审计 P3-2）。
 
 **目标**：搜索、安装、管理 Mod。
 
@@ -178,17 +182,19 @@
 
 ## Phase 5: Polish & Ship（Week 9–10）
 
-> **状态：⚠️ 配置齐备，端到端未验证**
+> **状态：🟡 应用层收尾完成；分发侧缺口已移交 `roadmap` Phase 7（2026-10-22 回填）**
 > 已就绪：CI（fmt / clippy 含 panic+unwrap 硬门禁 / 三平台测试 / tauri-driver E2E job / cargo-audit /
 > ts-rs 绑定新鲜度校验）、`release.yml`（三平台打包 + macOS 公证 + updater 签名）、运维手册、
 > `tauri-plugin-updater` / `window-state` / `process` / `deep-link` 依赖与 capability。
 >
-> 已实测：`cargo fmt --check`、两条 clippy 门禁、284 项测试、`pnpm typecheck` 全绿；
-> CLI release 二进制 strip 后 **4.09MB**。
+> 已实测（2026-10-22）：`cargo fmt --check`、两条 clippy 门禁、**617 项测试 / 0 失败**、`pnpm typecheck` 全绿；
+> GUI 手动 strip 后 **7.96 MiB**、CLI 手动 strip 4.48 MiB、逻辑 helper 2.25 MiB
+> （ADR-011 口径：主可执行 stripped < 10 MiB ✅；`strip = true` 仍失效，审计 P2-7）。
 >
-> **未完成**：`cargo bloat` 正式审计、前端 bundle 分析、wiremock 集成测试补全、
-> E2E 实跑（本地需 `RMCCC_RUN_E2E=1`）、三平台产物实测、updater 真实 `endpoints` 与签名 Secret、
-> macOS 证书公证、无 P0/P1 bug 的最终确认（当前仍有结构性欠账，见 `PROJECT_STATUS.md` §6）。
+> **未完成（已移交 Phase 7）**：`cargo bloat` 正式审计、前端 bundle 分析、wiremock 集成测试补全、
+> E2E 实跑（本地需 `RMCCC_RUN_E2E=1`）、三平台产物实测、updater 真实 `endpoints`
+> （`tauri.conf.json` 仍是 `https://github.com/<owner>/<repo>/...` 占位）与签名 Secret、macOS 证书公证、
+> 前端组件测试（当前 0，审计 P2-3）。→ 见 [`roadmap/09_phase7_distribution.md`](roadmap/09_phase7_distribution.md)。
 
 **目标**：生产级质量，可发布。
 

@@ -1,6 +1,6 @@
 # RMCCC 总体执行路线（细化版）
 
-> **基准日期**：2026-10-20。**当前状态来源**：[`AUDIT_2026-10-20.md`](../AUDIT_2026-10-20.md)。
+> **基准日期**：2026-10-20，Phase 5 完成后回填至 2026-10-22。**当前状态来源**：[`AUDIT_2026-10-20.md`](../AUDIT_2026-10-20.md) + 本机实测（`cargo metadata` / `cargo test --workspace` / `IPC_COMMANDS` / strip 后产物）。
 > **目标架构来源**：[`RMCCC_PLUGIN_PLATFORM_ARCHITECTURE_GUIDE.md`](../RMCCC_PLUGIN_PLATFORM_ARCHITECTURE_GUIDE.md) Phase 0–7。
 > **执行约束**：本机 macOS Apple Silicon 单环境开发；不在本机跨平台编译或 Windows/Linux 实测（指南 §1.4）。
 
@@ -8,11 +8,14 @@
 
 ## 1. 当前起点一句话
 
-引擎层（安装→索引→启动）已贯通并实机验证；**525 项测试**（含 98 项插件测试 + 17 项 Dashboard 布局测试 + 6 项嵌入资源校验 + 4 项 SDK 契约测试）+
-CI 三门禁本地全绿。Phase 0/0.5/1 的结构债已清偿，Phase 2 的声明式插件系统
-（Manifest/权限/生命周期/`.rmcpkg` 安装事务/CLI/UI）已落地。
-**还没做的是 Dashboard 布局引擎、隔离 UI、逻辑运行时、Agent 与生产分发**——
-它们按 Phase 3–7 引入，不与现有启动主链路混在一起。
+引擎层（安装→索引→启动）已贯通并实机验证；**617 项 Rust 测试**（含插件 106 项 + Dashboard 17 项 +
+逻辑运行时 8 项单测与 9 项 helper spawn 集成测试 + Agent 63 项 + 6 项嵌入资源校验）
++ `pnpm sdk:test` **14 项**（含 5 项跨工件契约：schema ↔ Rust ↔ SDK），CI 三门禁本地全绿。
+**Phase 0–5 全部完成**：结构债清偿（0/0.5/1）、声明式插件系统（2）、Dashboard 布局与主题（3）、
+隔离 UI + SDK（4）、逻辑运行时 helper 进程 + `logic.invoke` 只读扩展（5）。
+**Phase 6 已开工**：ADR-009/010 落定，6.1 LLM adapter、6.2 凭据 vault、6.3 会话事件流/任务快照、
+6.6 只读工具（首个 `ModDependency` 消费方）完成；6.5（loop/审批）与 6.7（隐私 UI）待做。
+**Phase 7（插件目录/签名/生产分发）未开始**，需先落 ADR-008。
 
 ## 2. 阶段总览与依赖
 
@@ -60,24 +63,28 @@ Phase 7  插件目录 / 签名 / 生产分发（registry / 签名 / updater / �
 
 | 维度 | 当前事实 | 来源 |
 |------|---------|------|
-| Workspace | 14 成员（12 crates + `src-tauri` + `src-cli`），新增 `rmccc-plugin` | Cargo.toml |
-| 测试 | 525 passed（2026-10-21 全量复跑）；插件 98 项 + Dashboard 17 项 + bundle 6 项 + SDK 契约 4 项 | `cargo test --workspace` + `pnpm sdk:test` |
-| IPC | 64 定义 = 64 注册；前端 `api.ts` 全覆盖（除显式白名单） | `handlers.rs` / `ipc_tests` |
+| Workspace | **18 成员**（15 crates + `src-tauri` + `src-cli` + `src-logic-host`），新增 `rmccc-agent` | `Cargo.toml` / `cargo metadata --no-deps` |
+| 测试 | **617 passed / 0 failed**（2026-10-22 本机全量复跑）；插件 106 项 + Dashboard 17 项 + 逻辑运行时 8 单测 + 9 项 helper spawn 集成 + Agent 63 项 + bundle 6 项；另 `pnpm sdk:test` **14 项** | `cargo test --workspace` + `pnpm sdk:test` |
+| IPC | **77 定义 = 77 注册**；`IPC_COMMANDS` 与 `generate_handler!` 由 `ipc_tests` 交叉校验；前端 `api.ts` 全覆盖（除显式白名单） | `handlers.rs` / `ipc_tests` |
 | 结构债 | ✅ pipeline 收口（P1-3）；✅ 平台适配层 + 领域零 `cfg`（1.1）；✅ loader 单体系（P1-4）；✅ context.rs 93 行（P2-1）；✅ 修 P2-12 | 审计 §5.3、§15.1/§15.2 |
 | 插件系统 | ✅ Phase 2：Manifest v1 / `.rmcpkg` 事务 / 状态机 / 权限 / 配置 / CLI / UI | ADR-003、ADR-004 |
 | Dashboard | ✅ Phase 3.1–3.5：布局 Schema/归一化/网格/拖放/主题令牌 | ADR-005、`rmccc-dashboard` |
+| 隔离 UI | ✅ Phase 4.1–4.5：`rmcccplugin://` 独立源 iframe + 版本化 Host Bridge + TS SDK + 外部样例 | ADR-006、`plugin-sdk/` |
+| 逻辑运行时 | ✅ Phase 5.1–5.5：PoC 实测 → 独立 helper 进程 + wasmi、fuel/内存/超时 kill、`logic.invoke` 只读扩展；单版本 5.6 打包分发并入 Phase 7 | ADR-007、`rmccc-logic` / `src-logic-host` |
 | 安全缺口 | ✅ natives zip-slip（P1.5）；✅ 插件包 zip-slip/zip bomb/路径/类型限制（2.2） | 审计 §15.4 |
 | 平台执行散落 | ✅ 领域 crate 无平台 `#[cfg]`；插件原子替换经 `PlatformFs` | PLATFORM_ADAPTATION.md |
-| 环境回归 | Homebrew rustup 路径失效、`~/.cargo` 缺失、strip 失效（缺 libLLVM） | 审计 §15.5 |
-| 发布 | release.yml 齐备缺证书/Secret；无体积审计；E2E 未实跑 | 审计 §13.7 |
+| 环境回归 | Homebrew rustup 路径失效、`~/.cargo` 缺失、**`strip = true` 仍失效（缺 libLLVM）** | 审计 §15.5、P2-7 |
+| Agent | 🚧 Phase 6.1/6.2/6.3/6.6 完成（`crates/rmccc-agent`，60 测试）；6.5（loop/审批）与 6.7（隐私）未做，6.4 仅缺注册表持久化；ADR-009/010 accepted | `docs/roadmap/08_phase6_agent.md` |
+| 发布 | release.yml 齐备但缺证书/Secret，updater `endpoints` 仍是 `<owner>/<repo>` 占位；无 `cargo bloat` 审计；E2E 未实跑；插件目录（ADR-008）未定 | 审计 §13.7、`09_phase7_distribution.md` |
 
 ## 5. 并行与串行
 
 - **可并行**：Phase 0.5（前端缺口，纯既有后端接线）与 Phase 1 前半（pipeline 收敛）。建议先做 Phase 0.5 见效快，Phase 1 重构同步推进。
 - **进度**：Phase 0 ✅、Phase 0.5 ✅、Phase 1.1–1.8 ✅、Phase 2.1–2.6 ✅（+2.7 IPC/UI）、
-  Phase 3.1–3.5 ✅、**Phase 4.1–4.5 ✅**（ADR-006、`rmcccplugin://` 独立源 iframe、版本化
-  Host Bridge（逐条复核）、TS SDK + 模板/校验工具、server-dashboard 隔离 UI 样例）。
-  **Phase 1/2/3/4 主体完成**；下一步 Phase 5（逻辑运行时，需先做 ADR-007 PoC）。
+  Phase 3.1–3.5 ✅、Phase 4.1–4.5 ✅、**Phase 5.1–5.5 ✅**（ADR-007 选型为独立 helper 进程 +
+  内嵌 wasmi；fuel/内存/超时 kill；`logic.invoke` 只读扩展；5.6 打包分发并入 Phase 7）。
+  **Phase 0–5 全部完成**；**Phase 6 进行中**：6.1 LLM adapter、6.2 凭据 store（ADR-009）、
+  6.3 会话事件流/任务快照、6.6 只读工具与 dry-run 安装计划完成；6.5（loop/审批）与 Phase 7 待做。
 - **强串行**：Phase 2 依赖 Phase 1 的 Core Service 窄门面；Phase 3 依赖 Phase 2 注册表；Phase 4 依赖 Phase 2+3；Phase 5 依赖 Phase 1 适配层；Phase 6 依赖 Phase 1 Core + Phase 2/5 权限；Phase 7 依赖全链路 + 原生 CI。
 - **平台验证串行**：所有 Windows/Linux 原生验证推迟到原生 CI runner 触达后统一在 Phase 7 验收；在此之前各阶段只做 macOS 本机验收 + 适配层 trait 占位。
 
@@ -91,10 +98,10 @@ Phase 7  插件目录 / 签名 / 生产分发（registry / 签名 / updater / �
 | ADR-004 | Manifest Schema / ID / 版本兼容 | Phase 2 |
 | ADR-005 | Dashboard Layout Schema / 冲突算法 | Phase 3 |
 | ADR-006 | 隔离 UI 容器 + 消息桥 | **已 accepted（Phase 4）** |
-| ADR-007 | 逻辑运行时 WASM vs 进程（需 PoC） | Phase 5 前 |
+| ADR-007 | 逻辑运行时 WASM vs 进程（需 PoC） | **✅ accepted（Phase 5，独立 helper 进程 + wasmi）** |
 | ADR-008 | 插件目录 / 签名发布 | Phase 7 前 |
-| ADR-009 | 凭据存储 Keychain/Credential Manager + 回退 | Phase 6 前 |
-| ADR-010 | Agent 会话存储 / 工具审计 / 隐私 | Phase 6 |
+| ADR-009 | 凭据存储：文件 vault（AES-256-GCM）为首选，Keychain 可替换 | **✅ accepted（Phase 6）** |
+| ADR-010 | Agent 会话存储 / 工具审计 / 隐私 | **✅ accepted（Phase 6）** |
 | ADR-011 | <10MB 度量对象与门禁 | Phase 0 / 运行时 PoC 前 |
 | ADR-012 | macOS Intel runner/打包/最低系统 | Phase 0 |
 
@@ -111,12 +118,12 @@ Phase 7  插件目录 / 签名 / 生产分发（registry / 签名 / updater / �
 
 | 里程碑 | 完成标志 | 依赖阶段 |
 |--------|---------|---------|
-| M0 可信基线 | 5 门禁本机全绿复跑 + 体积基线表 + 差距清单 | Phase 0 |
-| M1 主线闭环补齐 | UI 可直达 ≥ 40/46 命令；Mod 浏览器可用 | Phase 0.5 |
-| M2 单一编排 | Tauri/CLI 同操作走同一 Core；context.rs < 600 行；适配层 trait 落地 | Phase 1 |
+| M0 可信基线 ✅ | 5 门禁本机全绿复跑 + 体积基线表 + 差距清单 | Phase 0 |
+| M1 主线闭环补齐 ✅ | UI 可直达 ≥ 40/46 命令；Mod 浏览器可用 | Phase 0.5 |
+| M2 单一编排 ✅ | Tauri/CLI 同操作走同一 Core；context.rs < 600 行；适配层 trait 落地 | Phase 1 |
 | M3 声明式插件 ✅ | 损坏插件不影响主应用；声明式插件可装/禁/卸 | Phase 2 |
 | M4 可定制 Dashboard ✅ | 卡片注册 + 布局持久化 + 主题令牌 | Phase 3 |
 | M5 第三方隔离 UI ✅ | 外部样例可独立构建/打包/安装；无法越权（独立源 + CSP + 逐条授权） | Phase 4 |
-| M6 逻辑运行时 | 运行时 PoC + ADR-007；插件崩溃不崩主程序 | Phase 5 |
-| M7 Agent 只读 | 只读工具 + 计划预览 + 审批可审计 | Phase 6（前半） |
+| M6 逻辑运行时 ✅ | 运行时 PoC + ADR-007；插件崩溃不崩主程序 | Phase 5 |
+| M7 Agent 只读 | 只读工具 + 计划预览 + 审批可审计（事件流已就位，就差 6.5 的审批链） | Phase 6（前半） |
 | M8 生产分发 | 三平台原生产物 + 签名/公证 + updater 真实 endpoint | Phase 7 |

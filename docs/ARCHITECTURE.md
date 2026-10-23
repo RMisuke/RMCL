@@ -1550,7 +1550,9 @@ strategy:
 ├── .key                             # AES-256 encryption key (600 / icacls)
 ├── accounts.json                    # Plaintext account metadata + selected
 ├── private/
-│   └── account-private-data.json    # AES-256-GCM encrypted private data
+│   ├── account-private-data.json    # AES-256-GCM encrypted private data
+│   ├── agent-credentials.json       # Phase 6: Agent 服务凭据（ADR-009，独立 key）
+│   └── agent.key                    # Agent 凭据加密 key（600；与账号 .key 隔离）
 ├── .api_keys/                       # API keys (separate from settings)
 │   └── curseforge                   # CurseForge API key
 ├── cache/                           # Offline caches
@@ -1563,6 +1565,10 @@ strategy:
 │   ├── versions/                    # Local instance index source
 │   ├── libraries/  assets/          # Shared across instances
 │   └── launcher_profiles.json       # Created on demand (Forge/LiteLoader need it)
+├── agent/                           # Phase 6: Agent 会话/审计（ADR-010）
+│   ├── sessions/{id}.jsonl          # 事件流（提示词默认只存哈希+长度）
+│   ├── tasks/{id}.json              # 待确认的 dry-run 计划
+│   └── audit.jsonl                  # 工具调用审计（写盘前脱敏）
 └── logs/                            # Launcher logs
     ├── rmccc-2026-07-29.log         # Daily rolling, 10 kept
     └── rmccc-2026-07-28.log
@@ -2068,3 +2074,66 @@ stdin/stdout，一行一个 JSON：
   启用状态 → 能力 → 调用白名单 → 入口/路径，撤销在下一次调用即生效。
 - helper 尚未打进 `.app`：通过 `RMCCC_LOGIC_HOST` 或与启动器同目录解析；
   打包/签名/公证与三平台 runner 一起留到 Phase 7。
+
+## 25. Agent 平台（Phase 6，进行中）
+
+> 决策以 [ADR-009](adr/ADR-009-credential-storage.md)（凭据）与
+> [ADR-010](adr/ADR-010-agent-session-audit-privacy.md)（会话/审计/隐私）为准。
+> 本节只记录已落地的形态；**Agent 执行循环（6.5）尚未实现**。
+
+### 25.1 边界
+
+- Agent 是**受控编排层**：模型输出不是指令。工具调用必须经过
+  `ToolRegistry::invoke`（参数 Schema 校验 → 风险门禁 → 审计）。
+- Phase 6.6 只注册 `read_only` 工具；`reversible_write` / `destructive` /
+  `external_side_effect` 在审批链路（6.5）落地前一律拒绝。
+- Agent 不持有 `CoreContext`、不直接读账号 vault；凭据由 `CredentialStore` 解密后仅交给 adapter。
+- 插件拿不到 API Key 明文；未来只能走 Host Broker 的"服务 + 能力"授权代发（ADR-009 决策 6）。
+
+### 25.2 组件
+
+| 模块 | 职责 |
+|------|------|
+| `rmccc-agent::credentials` | `CredentialStore` trait + `FileCredentialStore`（AES-256-GCM，`private/agent.key`，0600） |
+| `rmccc-agent::llm` | `LlmProvider` trait + `OpenAiCompatibleProvider`（SSE 流、超时、指数退避重试、最小间隔限流、`CancelToken`） |
+| `rmccc-agent::tools` | `AgentToolDescriptor` / `RiskLevel` / `ConfirmationPolicy` / `ToolRegistry` + 最小 JSON Schema 校验 |
+| `rmccc-agent::mods` | 只读扫描 `mods/*.jar` 的 `fabric.mod.json`（`depends`/`suggests`/`breaks`），生成 `DependencyReport` 与 dry-run `ModInstallPlan` |
+| `rmccc-agent::audit` | `agent/audit.jsonl` 追加写（字段白名单） |
+| `rmccc-agent::session` | 会话事件流（`agent/sessions/<id>.jsonl`）、任务快照（`agent/tasks/<id>.json`）、保留期裁剪 / 清除历史 |
+| `rmccc-agent::redact` | 写盘前脱敏（敏感键名 / `Bearer` / 凭据前缀 / URL 查询参数 / home 路径 / 邮箱） |
+
+### 25.3 内置只读工具
+
+| id | 输入 | 输出 |
+|----|------|------|
+| `versions.installed` | `versions_dir`（绝对路径） | `id` / `has_json` / `has_jar` |
+| `mods.installed` | `mods_dir`（绝对路径） | 已装 Mod 元数据 + 未解析 jar 列表 |
+| `mods.dependency_scan` | `mods_dir`（绝对路径） | `DependencyReport` + `ModInstallPlan`（`dry_run = true`，`requires_confirmation = true`） |
+
+输入路径必须是绝对路径且目录存在；未知字段被 `additionalProperties: false` 拒绝。
+依赖扫描 v1 只解析 Fabric 元数据；Forge/NeoForge 的 `mods.toml` 进入 `unparsed`，
+**不会被当成"兼容"**。
+
+### 25.4 数据与隐私
+
+- 会话事件、任务计划、工具审计分别落 `agent/sessions/`、`agent/tasks/`、`agent/audit.jsonl`
+  （见 §15.1）；文件权限经 `PlatformFs::restrict_owner_only`。
+- 事件是**白名单枚举**：`session_started` / `user_message` / `model_response` / `tool_call` /
+  `tool_result` / `approval_requested` / `approval_resolved` / `error` / `session_ended`。
+  提示词与模型输出只存 `sha256` + 字符数；`tool_result` 只存 `ok` / 耗时 / 输出哈希 / 字节数。
+- 任务快照走 `atomic_replace`（临时文件 → 原子替换），写入前脱敏；session/task id 只允许
+  `[A-Za-z0-9_-]{1,64}`，这是路径穿越的唯一拦截点（id 可能来自模型）。
+- 保留期默认 30 天，`purge_expired` 是纯 mtime 裁剪（不接定时器）；`clear_all` 删会话与任务，
+  **保留 `audit.jsonl`**（清除动作仍可审计）。
+- 审计输入写盘前脱敏，含 URL 查询参数（`?token=…`），因为 Mod 下载链接常带临时令牌。
+- 远程端点必须 HTTPS；本地模型仅允许 loopback HTTP（ADR-009 决策 5）。
+- 不默认读取日志/存档/账号数据；上下文范围在 6.5 由 UI 明示。
+
+### 25.5 平台与遗留
+
+- macOS ARM64：本机实现 + 63 项单元/本地 HTTP 测试；主可执行**不链接**该 crate
+  （尚无 IPC 调用方，`cargo tree -p rmccc` 中 0 处），体积与 ADR-011 不受影响。
+- Windows/Linux：加密/解析逻辑是纯 Rust，但 `restrict_owner_only` 为
+  `UnsupportedPlatform` → **deferred / release-blocked**。
+- 遗留：IPC/UI 入口、Planning/Execution Loop、Approval Broker、工具注册持久化、
+  `cargo bloat` 影响评估均随 Phase 6.4–6.5 落地。

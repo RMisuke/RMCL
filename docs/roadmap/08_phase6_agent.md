@@ -1,7 +1,7 @@
 # Phase 6 — Agent 平台
 
-> **对应指南**：§10，§17 Phase 6。**状态**：pending。
-> **前置**：Phase 1 Core Service + Phase 2/5 权限系统。**ADR-009**（凭据存储）+ **ADR-010**（Agent 会话/审计/隐私）须在实现前 accepted。
+> **对应指南**：§10，§17 Phase 6。**状态**：**in_progress**（2026-10-22 启动：6.1/6.2/6.3/6.6 完成，6.4/6.5/6.7 待做）。
+> **前置**：Phase 1 Core Service + Phase 2/5 权限系统。**ADR-009**（凭据存储）+ **ADR-010**（Agent 会话/审计/隐私）已于 2026-10-22 accepted。
 
 ## 1. 目标
 
@@ -9,7 +9,23 @@
 
 ## 2. 与当前状态的对应
 
-- 当前无 Agent 实现；`ModDependency` 已定义无解析器（P3-2），可作为 Agent 只读工具的早期消费方。
+- **6.1 / 6.2 / 6.3 / 6.6 已落地**（`crates/rmccc-agent`，63 项测试）；`ModDependency` 现在有真实解析器与消费方（审计 P3-2 销账）。
+- **6.4 部分、6.5 / 6.7 未做**：风险分级与工具描述符已在 6.6 就位（四级 + `confirmationPolicy` + 注册幂等校验），
+  但注册表持久化、Planning/Execution Loop、Approval Broker、隐私 UI 与 IPC 入口仍缺。
+
+### 已完成切片（2026-10-22）
+
+| 切片 | 状态 | 证据 |
+|------|------|------|
+| 6.1 LLM Provider Adapter | ✅ | `rmccc-agent::llm`：`LlmProvider` / `OpenAiCompatibleProvider`；SSE 增量解析、总超时、指数退避重试（429/5xx/网络）、最小间隔限流、`CancelToken` 逐 chunk 检查；本地 TCP 服务器覆盖流式/重试/取消/超时/429 路径 |
+| 6.2 凭据存储（ADR-009） | ✅ | `rmccc-agent::credentials`：`CredentialStore` trait + `FileCredentialStore`（AES-256-GCM，`private/agent.key` 0600，与账号 vault key 隔离）；公开视图无 `api_key`；端点策略（HTTPS / loopback HTTP）。Keychain/Credential Manager 记为 Phase 7+ 可替换后端 |
+| 6.3 Session Store | ✅ | `rmccc-agent::session`：`SessionStore` 写 `agent/sessions/<id>.jsonl`（9 种白名单事件，提示词/输出只存 `sha256` + 字符数）、`agent/tasks/<id>.json`（原子写 + 脱敏 `TaskSnapshot`）、`list` / `read` / `read_task` / `list_tasks`、`purge_expired`（默认 30 天）与 `clear_all`（保留审计）；id 只允许 `[A-Za-z0-9_-]{1,64}`（路径安全唯一保证点）；`rmccc-config::paths` 补 `agent_*` 路径 |
+| 6.6 只读工具 + 首个消费方 | ✅ | `rmccc-agent::mods`：扫描 `mods/*.jar` 的 `fabric.mod.json`（`depends`/`suggests`/`breaks`）→ `DependencyReport` + dry-run `ModInstallPlan`；`ToolRegistry` 校验 JSON Schema、拒绝非 `read_only`、未知字段与相对路径；内置 `versions.installed` / `mods.installed` / `mods.dependency_scan` |
+| 6.4 Tool Registry 持久化 | 🟡 部分 | 描述符/四级风险/确认策略/重复 id 拒绝已在 6.6 完成；**跨进程的工具注册持久化未做**（插件工具来源属于 Phase 7） |
+| 6.5 Loop + Approval | ⬜ pending | 审计/事件流已就位，仍缺模型循环、审批 UI 与 IPC 入口（`rmccc-agent` 未被 `src-tauri` 依赖） |
+
+> **偏离说明**：`mods.toml`（Forge/NeoForge）未解析——为避免为 TOML 引入新依赖，这类 jar 进入 `unparsed` 并在计划里显式声明，不当作“兼容”。
+> **未接线**：`rmccc-agent` 尚未被 `src-tauri` 依赖（无 IPC/UI 调用方），主可执行体积不变；接入属于 6.5。
 
 ## 3. 任务切片分解
 
@@ -22,9 +38,15 @@
 - 评估 macOS Keychain/Windows Credential Manager；当前文件 vault 作受控回退。
 - 插件不得读其他插件凭据；只请求某服务受控使用授权。
 
-### 6.3 Session Store + Audit Log
+### 6.3 Session Store + Audit Log ✅（2026-10-22）
 - `agent/sessions/<id>.jsonl` + `tasks/<id>.json`（指南 §12.1）。
 - 记录意图/计划/工具调用/审批/输出/最终状态；不记密钥/敏感 prompt。
+- **实现**：`SessionEventKind` = `session_started` / `user_message` / `model_response` / `tool_call` /
+  `tool_result` / `approval_requested` / `approval_resolved` / `error` / `session_ended`；
+  `tool_result` 只存 `ok` / `duration_ms` / `output_sha256` / `output_bytes`；错误与审批摘要截断后入库。
+- **保留期**：`purge_expired(retention, now)` 是纯 mtime 裁剪（不接定时器），`clear_all` 删会话与任务、保留 `audit.jsonl`。
+- **测试**（16 项单测 + 2 项端到端）：prompt 正文不上盘、工具输入脱敏、输出只存哈希、id 穿越拒绝（`../`/`/`/`..`/空串/超长）、
+  未知会话 `NotFound`、任务快照原子写、列表排序、保留期只删旧文件、`clear_all` 保留审计。
 
 ### 6.4 Tool Registry + 风险分级
 - `AgentToolDescriptor`（id/pluginId/name/inputSchema/outputSchema/requiredCapabilities/riskLevel/timeout/confirmationPolicy）。

@@ -14,6 +14,11 @@
 > | `DEVELOPMENT_PLAN.md` | Phase 1–5 路线图 | 本目录是其向后延伸（插件平台 + Agent + 发布） |
 | [`docs/adr/`](../adr/) | 架构决策记录（ADR） | 本目录 Phase 0 产出 ADR-001/011/012；Phase 2 产出 ADR-003/004 |
 
+## 当前阶段
+
+**Phase 0–5 已完成；Phase 6（Agent）进行中**：6.1 LLM adapter、6.2 凭据（ADR-009）、6.3 会话事件流/任务快照、6.6 只读工具（首个 `ModDependency` 消费方）已于 2026-10-22 落地；剩 6.5（loop/审批）与 6.7（隐私 UI）。
+Phase 7（插件目录/签名/分发）仍需先落 ADR-008。跨平台原生验证仍按 §1.4 记 deferred / release-blocked。
+
 ## 阅读顺序
 
 1. [`00_ROADMAP_OVERVIEW.md`](00_ROADMAP_OVERVIEW.md) — 总体分段、依赖、里程碑、当前状态锚点。
@@ -36,9 +41,9 @@
 | [03_phase1_core_convergence.md](03_phase1_core_convergence.md) ✅ | Phase 1 | P1-3 pipeline 绕过、P1-4 loader 双体系、P2-1 context.rs、P2-2 IPC 测试、P2-4 zip-slip、P2-8/P2-9/P2-10/P2-11、ADR-002 |
 | [04_phase2_plugin_protocol.md](04_phase2_plugin_protocol.md) ✅ | Phase 2 | ADR-003/004、Manifest/权限/生命周期契约 |
 | [05_phase3_dashboard.md](05_phase3_dashboard.md) ✅ | Phase 3 | ADR-005、Widget/布局/主题 |
-| [06_phase4_isolated_ui_sdk.md](06_phase4_isolated_ui_sdk.md) | Phase 4 | ADR-006、隔离 UI + SDK |
-| [07_phase5_logic_runtime.md](07_phase5_logic_runtime.md) | Phase 5 | ADR-007、运行时 PoC |
-| [08_phase6_agent.md](08_phase6_agent.md) | Phase 6 | ADR-009/010、Agent 工具管线 |
+| [06_phase4_isolated_ui_sdk.md](06_phase4_isolated_ui_sdk.md) ✅ | Phase 4 | ADR-006、隔离 UI + SDK |
+| [07_phase5_logic_runtime.md](07_phase5_logic_runtime.md) ✅ | Phase 5 | ADR-007、运行时 PoC |
+| [08_phase6_agent.md](08_phase6_agent.md) 🚧 | Phase 6 | ADR-009/010、Agent 工具管线（6.1/6.2/6.3/6.6 done） |
 | [09_phase7_distribution.md](09_phase7_distribution.md) | Phase 7 | ADR-008/011/012、签名/公证/发布 |
 | [PLATFORM_ADAPTATION.md](PLATFORM_ADAPTATION.md) | 跨阶段（指南 §5.7 细化） | 平台执行散落在领域 crate 的迁移 |
 

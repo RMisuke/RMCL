@@ -1,4 +1,4 @@
-# RMCCC 项目现状与继续开发交接（2026-10-21 更新）
+# RMCCC 项目现状与继续开发交接（2026-10-22 更新）
 
 > 本文档是**变更记录与交接入口**，按轮次记录"这轮改了什么"。
 > **完整架构说明 + 功能矩阵 + 技术债台账**见 [`AUDIT_2026-10-20.md`](AUDIT_2026-10-20.md)（横切全景，不按轮次组织）。
@@ -8,6 +8,49 @@
 ---
 
 ## 0. 更新记录
+
+**2026-10-22（Phase 6.3 轮）**：Agent 会话事件流与任务快照落地（ADR-010 决策 1/2/6）。
+
+- **6.3 Session Store**：`rmccc-agent::session`——`agent/sessions/<id>.jsonl` 的 9 种白名单事件
+  （`session_started` / `user_message` / `model_response` / `tool_call` / `tool_result` /
+  `approval_requested` / `approval_resolved` / `error` / `session_ended`），
+  提示词与模型输出**只存 `sha256` + 字符数**，工具结果只存 `ok`/耗时/输出哈希/字节数。
+- **任务快照**：`agent/tasks/<id>.json`——`TaskSnapshot`（`proposed/approved/rejected/applied/failed`），
+  `PlatformFs::atomic_replace` 原子写 + 写盘前脱敏；`read_task` 对损坏文件报错而非静默丢弃计划。
+- **路径安全**：`validate_id` 只允许 `[A-Za-z0-9_-]{1,64}`，`../`、`/`、`..`、空串、超长全部拒绝（session/task 同规则）。
+- **保留与清除**：`purge_expired`（纯 mtime 裁剪，默认 30 天，不接定时器）、`clear_all`（删会话/任务，保留 `audit.jsonl`）。
+- **脱敏补强**：URL 查询参数里的敏感名（`?token=…` / `&api_key=…`）整值打码——Mod 下载链接常带 token。
+- **路径统一**：`rmccc-config::paths` 新增 `agent_dir` / `agent_sessions_dir` / `agent_tasks_dir` / `agent_audit_path`。
+- **门禁**：`cargo test --workspace` **617 passed / 0 failed**（Agent 43 → **63**，新增 16 项 session 单测 + 2 项脱敏 + 2 项端到端）；
+  `fmt` / 两条 clippy / `pnpm typecheck` 全绿。`cargo tree -p rmccc` 中 **0 处** `rmccc-agent`，主可执行体积仍不受影响。
+- **未做**：6.4 注册表持久化（描述符/四级风险已在 6.6 就位）、6.5 Planning/Execution Loop + Approval Broker + IPC/UI、6.7 隐私 UI。
+
+**2026-10-22（Phase 6 启动轮）**：ADR-009/010 定稿，Agent 平台 6.1 / 6.2 / 6.6 落地，新增 `rmccc-agent`。
+
+- **ADR**：[ADR-009](adr/ADR-009-credential-storage.md)（AES-256-GCM 文件 vault；Keychain 为可替换后端）与
+  [ADR-010](adr/ADR-010-agent-session-audit-privacy.md)（分层事件日志 + 写盘前脱敏）accepted。
+- **6.1 LLM adapter**：`LlmProvider` trait + `OpenAiCompatibleProvider`——SSE 增量解析、总超时、指数退避重试
+  （仅 429/5xx/网络）、最小间隔限流、`CancelToken`；错误模型 `LlmError` 与 `RmcccError` 分离。
+- **6.2 凭据**：`CredentialStore` trait + `FileCredentialStore`；`private/agent.key`（0600，与账号 `.key` 隔离）
+  + `private/agent-credentials.json`；公开视图无 `api_key`；远程仅 HTTPS、本地仅 loopback HTTP。
+- **6.6 只读工具**：`ToolRegistry`（JSON Schema 校验 + 风险门禁 + 审计）、内置 `versions.installed` /
+  `mods.installed` / `mods.dependency_scan`；后者解析 `fabric.mod.json` 的 `depends`/`suggests`/`breaks`，
+  产出 `DependencyReport` + `dry_run` 的 `ModInstallPlan`（不写盘）。**审计 P3-2 销账**：`ModDependency` 首次有消费方。
+- **审计/脱敏**：`agent/audit.jsonl` 字段白名单；`redact` 覆盖敏感键名、`Bearer`/凭据前缀、home 路径、邮箱。
+- **门禁**：`cargo test --workspace` **597 passed / 0 failed**（新增 43 项 Agent 测试）；`fmt`/两条 clippy /
+  `pnpm typecheck` 全绿。`rmccc-agent` 尚未被 `src-tauri` 依赖，主可执行体积不变（仍为 stripped 7.96 MiB）。
+- **未做**：session store（6.3）、工具注册持久化（6.4）、Planning/Execution Loop + Approval Broker（6.5）、
+  IPC/UI 入口与 Forge `mods.toml` 解析。
+
+**2026-10-22（文档同步轮）**：把 `docs/roadmap/` 与审计台账回填到 **Phase 5 完成后的真实现状**，不涉业务代码。
+
+- 本机复测：`cargo test --workspace` **554 passed / 0 failed**；`pnpm typecheck` ✅；`cargo metadata` **17 个 workspace 包**；
+  `IPC_COMMANDS` **77 条**（前端引用 72 条）；GUI 手动 strip 后 **7.96 MiB**；`git status` 干净，HEAD `a7a4f57`。
+- `roadmap/00_ROADMAP_OVERVIEW.md`：起点描述、状态锚点（成员/测试/IPC）、进度段落、里程碑 M0/M1/M2/M6 全部改为 Phase 0–5 完成口径；
+  新增 Agent/发布两行欠账；`roadmap/README.md` 给 Phase 4/5 文档打 ✅ 并补"当前阶段"导语。
+- `AUDIT_2026-10-20.md` §15 台账：P2-5/P2-8/P2-9 销账，P2-6（72/77）与 P2-10（语义已定、入口仍缺）转部分修复，
+  P2-7/P2-3 标注 2026-10-22 复测仍开；§10.5 与 §11 加"46 命令快照"横幅，指向 `handlers.rs` 单一真源。
+- `DEVELOPMENT_PLAN.md`：Phase 3/4/5 状态块改为现状（loader 进度事件未订阅、CurseForge 与依赖解析仍缺、分发缺口移交 roadmap Phase 7）。
 
 **2026-10-20（第 8 轮）**：执行 **Phase 0 基线重建**（`docs/roadmap/01_phase0_baseline.md` 切片 0.1+0.2+0.3），
 产出可信基线，未做业务重构。
@@ -537,18 +580,18 @@ Game repository refreshed game_dir=.../instances instances=1        ← 修复 1
 | 编译 | `cargo check --workspace --all-targets` **通过**；clippy 无 warning |
 | 前端类型 | `pnpm typecheck` **通过** |
 | CI lint 三门禁 | `cargo fmt --check` / `clippy --all-targets -D warnings` / `clippy --lib --bins -D clippy::panic -D clippy::unwrap_used` **全部本地通过** |
-| 测试 | **554 passed / 0 failed**（2026-10-21 全量复跑；插件 106 项 + Dashboard 17 项 + SDK 契约 4 项 + 逻辑运行时 17 项） |
-| 版本控制 | HEAD = `80887ce`；Phase 1/2 变更**尚未提交**（80+ 路径，待用户决定提交粒度） |
-| 发布体积 | GUI 未剥离 ~11.6 MiB / 手动 strip **7.91 MiB**；CLI 手动 strip **4.48 MiB**；逻辑 helper（独立）**2.25 MiB**（ADR-011：主可执行 stripped < 10 MiB ✅；`strip = true` 仍失效） |
-| 代码规模 | Rust **187 文件 / 45,600+ 行**（含 `rmccc-logic` 与 `src-logic-host`）；前端 22 文件 / 7,105 行；SDK 19 文件 / 1,306 行（详见 [`AUDIT_2026-10-20.md`](AUDIT_2026-10-20.md)） |
-| 文档同步 | `ARCHITECTURE.md` / `AUDIT` / `roadmap` 已按 Phase 1/2 实现回填；ADR-002/003/004/011 accepted |
-| 阶段判断 | **Phase 0–4 完成；Phase 5.1–5.5 完成**（helper 进程 + wasmi + 限流 + `logic.invoke` + 只读扩展）；下一步 Phase 6（Agent）或 Phase 7（分发/签名） |
+| 测试 | **617 passed / 0 failed**（2026-10-22 全量复跑；插件 106 项 + Dashboard 17 项 + 逻辑运行时 8 单测与 9 项 helper spawn 集成 + Agent 63 项 + bundle 6 项）；`pnpm sdk:test` **14 项**全过 |
+| 版本控制 | HEAD = `a7a4f57`；工作树干净（Phase 0–5 均已按主题提交） |
+| 发布体积 | GUI 未剥离 12,139,832 B（11.58 MiB）/ 手动 strip **8,346,816 B（7.96 MiB）**；CLI 未剥离 6,523,016 B / 手动 strip 4,701,256 B（4.48 MiB）；逻辑 helper（独立）**2.25 MiB**（ADR-011：主可执行 stripped < 10 MiB ✅；`strip = true` 仍失效，P2-7） |
+| 代码规模 | Rust **200 文件 / 50,872 行**（含 `rmccc-logic`、`src-logic-host` 与 `rmccc-agent`）；前端 22 文件 / 7,171 行；SDK 19 文件 / 1,306 行（详见 [`AUDIT_2026-10-20.md`](AUDIT_2026-10-20.md)） |
+| 文档同步 | `ARCHITECTURE.md` 新增 §25（Agent 平台）；ADR-002–007/009/010/011 accepted，ADR-001/012 仍 proposed |
+| 阶段判断 | **Phase 0–5 完成；Phase 6 进行中**（6.1 LLM adapter / 6.2 凭据 / 6.3 会话事件流 / 6.6 只读工具完成；6.5 loop+审批 与 6.7 隐私待做）；Phase 7 未开始 |
 
 **最重要的三个判断**：
 
 1. **结构债已清偿**：pipeline 单一编排、平台适配层、loader 单体系、`context.rs` 93 行、IPC 契约测试、ADR-002 生效值单一来源——Phase 1 全部验收项完成。
 2. **插件平台第一阶段已交付**：Manifest v1 + `.rmcpkg` 事务 + 生命周期 + 权限/审计 + 配置 schema + CLI + `/plugins` 页面；损坏插件隔离、安装失败回滚、升级不扩张权限均有测试。
-3. **剩余缺口是"生态与分发"而非地基**：隔离 UI（Phase 4）、逻辑运行时（Phase 5）、Agent（Phase 6）、签名/目录/公证（Phase 7），以及前端组件测试（当前 0）。Dashboard 布局/主题（Phase 3）已交付。
+3. **剩余缺口是"生态与分发"而非地基**：Agent 平台（Phase 6）、签名/目录/公证（Phase 7），以及前端组件测试（当前 0）。Dashboard 布局/主题（Phase 3）、隔离 UI（Phase 4）、逻辑运行时（Phase 5）均已交付。
 
 ---
 
