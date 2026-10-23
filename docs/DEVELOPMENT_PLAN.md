@@ -185,7 +185,9 @@
 > **状态：🟡 应用层收尾完成；分发侧缺口已移交 `roadmap` Phase 7（2026-10-22 回填）**
 > 已就绪：CI（fmt / clippy 含 panic+unwrap 硬门禁 / 三平台测试 / tauri-driver E2E job / cargo-audit /
 > ts-rs 绑定新鲜度校验）、`release.yml`（三平台打包 + macOS 公证 + updater 签名）、运维手册、
-> `tauri-plugin-updater` / `window-state` / `process` / `deep-link` 依赖与 capability。
+> `tauri-plugin-updater` / `window-state` / `process` 依赖与 capability。
+> （2026-10-24 纠偏，审计 P2-32：此前列出的 `deep-link` 依赖与 capability **实际未接线**——
+> `src-tauri` 的 Cargo.toml / tauri.conf.json / capabilities / main.rs 四处均无痕迹，属声明超前于代码。）
 >
 > 已实测（2026-10-22）：`cargo fmt --check`、两条 clippy 门禁、**617 项测试 / 0 失败**、`pnpm typecheck` 全绿；
 > GUI 手动 strip 后 **7.96 MiB**、CLI 手动 strip 4.48 MiB、逻辑 helper 2.25 MiB
