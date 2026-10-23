@@ -1,6 +1,7 @@
 # Phase 6 — Agent 平台
 
-> **对应指南**：§10，§17 Phase 6。**状态**：**in_progress**（2026-10-22 启动：6.1/6.2/6.3/6.6 完成，6.4/6.5/6.7 待做）。
+> **对应指南**：§10，§17 Phase 6。**状态**：**M7 达成（2026-10-24）**：6.1/6.2/6.3/6.6 + 6.5 第一批
+>（执行循环 + 审批链 + IPC/UI）完成；接线前的审计债（P2-17/28/29）已清。6.4 注册表持久化随 Phase 7。
 > **前置**：Phase 1 Core Service + Phase 2/5 权限系统。**ADR-009**（凭据存储）+ **ADR-010**（Agent 会话/审计/隐私）已于 2026-10-22 accepted。
 
 ## 1. 目标
@@ -10,8 +11,14 @@
 ## 2. 与当前状态的对应
 
 - **6.1 / 6.2 / 6.3 / 6.6 已落地**（`crates/rmccc-agent`，63 项测试）；`ModDependency` 现在有真实解析器与消费方（审计 P3-2 销账）。
-- **6.4 部分、6.5 / 6.7 未做**：风险分级与工具描述符已在 6.6 就位（四级 + `confirmationPolicy` + 注册幂等校验），
-  但注册表持久化、Planning/Execution Loop、Approval Broker、隐私 UI 与 IPC 入口仍缺。
+- **6.5 第一批完成（2026-10-24）**：`rmccc-agent::runtime`——`AgentService` 执行循环
+  （脚本化假 provider 的 8 项端到端测试：直接调用回灌 / 审批批准与拒绝 / 取消 / 迭代上限）
+  + `ApprovalBroker`（`proposed→approved/rejected` 快照推进 + `approval_resolved` 事件留痕）；
+  IPC `agent_*` 9 条命令（注册表 77→86）+ `/agent` 页面（配置 / 对话 / 审批队列 / 历史）。
+  仍是**只读工具**：写操作即使审批通过也被注册表拒绝，写工具在后续切片注册。
+- **接线前审计债已清（2026-10-24）**：P2-17（home 脱敏接线、目录 0700、内置工具改为注入固定根目录，
+  模型不再提供路径）、P2-28（unparsed jar 不再计入 installed）、P2-29（审计 fail-closed、JSONL 互斥、clear_all 记审计）。
+- **6.4 / 6.7 残留**：注册表持久化随 Phase 7；隐私的"按需上下文范围 UI"随下一批切片。
 
 ### 已完成切片（2026-10-22）
 
@@ -22,10 +29,11 @@
 | 6.3 Session Store | ✅ | `rmccc-agent::session`：`SessionStore` 写 `agent/sessions/<id>.jsonl`（9 种白名单事件，提示词/输出只存 `sha256` + 字符数）、`agent/tasks/<id>.json`（原子写 + 脱敏 `TaskSnapshot`）、`list` / `read` / `read_task` / `list_tasks`、`purge_expired`（默认 30 天）与 `clear_all`（保留审计）；id 只允许 `[A-Za-z0-9_-]{1,64}`（路径安全唯一保证点）；`rmccc-config::paths` 补 `agent_*` 路径 |
 | 6.6 只读工具 + 首个消费方 | ✅ | `rmccc-agent::mods`：扫描 `mods/*.jar` 的 `fabric.mod.json`（`depends`/`suggests`/`breaks`）→ `DependencyReport` + dry-run `ModInstallPlan`；`ToolRegistry` 校验 JSON Schema、拒绝非 `read_only`、未知字段与相对路径；内置 `versions.installed` / `mods.installed` / `mods.dependency_scan` |
 | 6.4 Tool Registry 持久化 | 🟡 部分 | 描述符/四级风险/确认策略/重复 id 拒绝已在 6.6 完成；**跨进程的工具注册持久化未做**（插件工具来源属于 Phase 7） |
-| 6.5 Loop + Approval | ⬜ pending | 审计/事件流已就位，仍缺模型循环、审批 UI 与 IPC 入口（`rmccc-agent` 未被 `src-tauri` 依赖） |
+| 6.5 Loop + Approval | ✅ 第一批 | `AgentService` 执行循环 + `ApprovalBroker` + IPC `agent_*` 9 条 + `/agent` 页面；只读工具 + 计划预览 + 审批可审计（M7）；Agent 已接入主程序（主可执行 8.16 MiB，ADR-011 ✅） |
 
-> **偏离说明**：`mods.toml`（Forge/NeoForge）未解析——为避免为 TOML 引入新依赖，这类 jar 进入 `unparsed` 并在计划里显式声明，不当作“兼容”。
-> **未接线**：`rmccc-agent` 尚未被 `src-tauri` 依赖（无 IPC/UI 调用方），主可执行体积不变；接入属于 6.5。
+> **偏离说明**：`mods.toml`（Forge/NeoForge）未解析——这类 jar 进入 `unparsed` 并在计划里显式声明，
+> **且不再计入已安装集合**（P2-28 修复）。
+> **已接线（2026-10-24）**：`src-tauri` 依赖 `rmccc-agent`，IPC 9 条 + `/agent` 页面；主可执行 8.16 MiB（ADR-011 ✅）。
 
 ## 3. 任务切片分解
 

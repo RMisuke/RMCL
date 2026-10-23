@@ -13,8 +13,9 @@
 + `pnpm sdk:test` **14 项**（含 5 项跨工件契约：schema ↔ Rust ↔ SDK），CI 三门禁本地全绿。
 **Phase 0–5 全部完成**：结构债清偿（0/0.5/1）、声明式插件系统（2）、Dashboard 布局与主题（3）、
 隔离 UI + SDK（4）、逻辑运行时 helper 进程 + `logic.invoke` 只读扩展（5）。
-**Phase 6 已开工**：ADR-009/010 落定，6.1 LLM adapter、6.2 凭据 vault、6.3 会话事件流/任务快照、
-6.6 只读工具（首个 `ModDependency` 消费方）完成；6.5（loop/审批）与 6.7（隐私 UI）待做。
+**Phase 6 进行中**：ADR-009/010 落定，6.1 LLM adapter、6.2 凭据 vault、6.3 会话事件流/任务快照、
+6.6 只读工具、6.5 第一批（执行循环 + ApprovalBroker + IPC `agent_*` 9 条 + `/agent` 页面）完成（M7 ✅，2026-10-24）；
+6.4 注册表持久化随 Phase 7，6.7 隐私上下文范围 UI 随下一批。
 **Phase 7（插件目录/签名/生产分发）未开始**，需先落 ADR-008。
 
 ## 2. 阶段总览与依赖
@@ -125,5 +126,5 @@ Phase 7  插件目录 / 签名 / 生产分发（registry / 签名 / updater / �
 | M4 可定制 Dashboard ✅ | 卡片注册 + 布局持久化 + 主题令牌 | Phase 3 |
 | M5 第三方隔离 UI ✅ | 外部样例可独立构建/打包/安装；无法越权（独立源 + CSP + 逐条授权） | Phase 4 |
 | M6 逻辑运行时 ✅ | 运行时 PoC + ADR-007；插件崩溃不崩主程序 | Phase 5 |
-| M7 Agent 只读 | 只读工具 + 计划预览 + 审批可审计（事件流已就位，就差 6.5 的审批链） | Phase 6（前半） |
+| M7 Agent 只读 ✅ | 只读工具 + 计划预览 + 审批可审计（6.5 第一批：执行循环 + 审批链 + IPC/UI，2026-10-24） | Phase 6（前半） |
 | M8 生产分发 | 三平台原生产物 + 签名/公证 + updater 真实 endpoint | Phase 7 |

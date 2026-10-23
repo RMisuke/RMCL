@@ -9,6 +9,23 @@
 
 ## 0. 更新记录
 
+**2026-10-24（Phase 6.5 第一批轮）**：Agent 执行循环 + 审批链 + IPC/UI 接线（里程碑 M7 达成）。
+
+- **接线前审计债清偿**：P2-17（home 路径脱敏从死代码接上生产调用点；`agent/`/`private/` 目录经
+  新增的 `PlatformFs::restrict_owner_only_dir` 收紧到 0700；内置只读工具改为 `AgentRoots` 注入固定根目录，
+  输入 Schema 变为空对象——模型不再提供任何路径）；P2-28（无元数据 jar 不再计入已安装集合，
+  消除依赖漏报）；P2-29（工具审计失败 fail-closed、JSONL 追加互斥、`clear_all` 写 `agent.clear_history` 审计记录）。
+  `rmccc-platform` 新增目录权限 trait 方法（macOS 0700 / unsupported / mock 三后端）。
+- **6.5 执行循环**：`rmccc-agent::runtime`——`AgentService`（模型 ↔ 工具迭代、严格 ```rmccc-tool 围栏解析、
+  迭代上限、取消、上下文裁剪）+ `ApprovalBroker`（任务快照 `proposed→approved/rejected` + 事件留痕 + 轮询等待）。
+  8 项端到端测试（脚本化假 provider）：直接调用回灌 / 审批批准与拒绝 / 取消 / 迭代上限 / resolve 幂等。
+- **IPC + UI**：`agent_*` 9 条命令（注册表 77→86）+ `/agent` 页面（模型配置 / 对话运行与取消 /
+  审批队列 / 会话历史）+ Dashboard 入口。`src-tauri` 首次依赖 `rmccc-agent`。
+- **门禁**：`cargo test --workspace` **643 passed / 0 failed**（Agent 73 项）；
+  fmt / 两条 clippy / `pnpm typecheck` / `pnpm build` 全绿（JS 181.61 kB，gzip 52.78 kB）。
+- **体积**：主可执行 **8.16 MiB stripped**（+0.25 MiB，ADR-011 < 10 MiB ✅）。
+- **未做**：6.4 注册表持久化（Phase 7）、6.7 隐私上下文范围 UI、写工具注册（写操作仍被注册表拒绝）。
+
 **2026-10-22（Phase 6.3 轮）**：Agent 会话事件流与任务快照落地（ADR-010 决策 1/2/6）。
 
 - **6.3 Session Store**：`rmccc-agent::session`——`agent/sessions/<id>.jsonl` 的 9 种白名单事件
