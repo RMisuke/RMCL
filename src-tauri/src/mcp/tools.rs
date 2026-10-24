@@ -468,6 +468,7 @@ pub async fn call(app: &tauri::AppHandle, name: &str, args: Value) -> Result<Val
                 arg_opt_str(&args, "loader"),
                 arg_u64(&args, "page").map(|p| p as u32),
                 None,
+                arg_opt_str(&args, "index"),
             )
             .await?;
             Ok(serde_json::to_value(result)?)

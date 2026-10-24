@@ -48,6 +48,10 @@ export type {
   AiAnalysisHandle,
   ModsDependencyScanView,
   AppliedPlanReport,
+  McpStatusView,
+  McpToolView,
+  McpConfirmationView,
+  McpRecentCallView,
 } from "./types";
 
 import type {
@@ -59,6 +63,7 @@ import type {
   ModVersion,
   ModInfo,
   ModSearchResult,
+  InstanceInfo,
   VersionInfo,
   AppConfig,
   UserSettings,
@@ -90,6 +95,10 @@ import type {
   AiAnalysisHandle,
   ModsDependencyScanView,
   AppliedPlanReport,
+  McpStatusView,
+  McpToolView,
+  McpConfirmationView,
+  McpRecentCallView,
 } from "./types";
 
 // Input DTOs: partial updates. The fields come from the ts-rs generated types
@@ -126,6 +135,8 @@ export const auth = {
     safeInvoke<AuthSession>("auth_switch_account", { accountId }),
   removeAccount: (accountId: string) =>
     safeInvoke<void>("auth_remove_account", { accountId }),
+  /** Skin texture URL via the backend session-server proxy (null = none). */
+  skinUrl: (uuid: string) => safeInvoke<string | null>("auth_skin_url", { uuid }),
 };
 
 // ── Profiles ──
@@ -158,8 +169,15 @@ export const launch = {
 // ── Mods ──
 
 export const mods = {
-  search: (query: string, gameVersion?: string, loader?: string, page?: number, limit?: number) =>
-    safeInvoke<ModSearchResult>("mod_search", { query, gameVersion, loader, page, limit }),
+  search: (
+    query: string,
+    gameVersion?: string,
+    loader?: string,
+    page?: number,
+    limit?: number,
+    index?: string
+  ) =>
+    safeInvoke<ModSearchResult>("mod_search", { query, gameVersion, loader, page, limit, index }),
   getVersions: (modId: string) =>
     safeInvoke<ModVersion[]>("mod_get_versions", { modId }),
   getDownloadUrl: (versionId: string) =>
@@ -202,12 +220,21 @@ export const downloads = {
 // ── Instances（本地实例仓库 / 路径）──
 
 export const instances = {
+  /** Local version repository entries (disk `versions/` — NOT profiles). */
+  list: () => safeInvoke<InstanceInfo[]>("instance_list"),
   /** Effective on-disk locations; the run dir depends on the isolation setting. */
   paths: (id: string) => safeInvoke<InstancePaths>("instance_paths", { id }),
-  refresh: () => safeInvoke<number>("instance_refresh"),
+  refresh: () => safeInvoke<InstanceInfo[]>("instance_refresh"),
   checkCompletion: (id: string) =>
     safeInvoke<MissingFileInfo[]>("instance_check_completion", { id }),
-  repair: (id: string) => safeInvoke<void>("instance_repair", { id }),
+  /** Returns the number of repaired files. */
+  repair: (id: string) => safeInvoke<number>("instance_repair", { id }),
+  /** Version-repository maintenance (ids are VERSION ids, not profile ids). */
+  rename: (id: string, newId: string) =>
+    safeInvoke<void>("instance_rename", { id, newId }),
+  duplicate: (id: string, newId: string) =>
+    safeInvoke<void>("instance_duplicate", { id, newId }),
+  remove: (id: string) => safeInvoke<void>("instance_remove", { id }),
   /**
    * Effective launch values (instance overrides merged with launcher defaults).
    * Single source of truth for "what will actually be used" — the settings page
@@ -328,7 +355,8 @@ export const logic = {
 
 export const ai = {
   getConfig: () => safeInvoke<AiConfigView>("ai_config_get"),
-  setConfig: (baseUrl: string, model: string, apiKey: string) =>
+  /** All fields optional: blank = keep the stored value (backend merge). */
+  setConfig: (baseUrl?: string, model?: string, apiKey?: string) =>
     safeInvoke<void>("ai_config_set", { baseUrl, model, apiKey }),
   /** 模型探测：`GET {base}/models`。传参即可在保存前探测；不传用已存配置。 */
   probeModels: (baseUrl?: string, apiKey?: string) =>
@@ -338,6 +366,25 @@ export const ai = {
     safeInvoke<AiAnalysisHandle>("ai_analyze_log", { profileId }),
   cancelAnalysis: (analysisId: string) =>
     safeInvoke<boolean>("ai_analyze_cancel", { analysisId }),
+};
+
+// ── MCP server management（ADR-013 S4/S5）──
+
+export const mcp = {
+  status: () => safeInvoke<McpStatusView>("mcp_status"),
+  setEnabled: (enabled: boolean) =>
+    safeInvoke<McpStatusView>("mcp_set_enabled", { enabled }),
+  regenerateToken: () => safeInvoke<McpStatusView>("mcp_regenerate_token"),
+  toolsList: () => safeInvoke<McpToolView[]>("mcp_tools_list"),
+  toolsSet: (tool: string, policy: string | null) =>
+    safeInvoke<void>("mcp_tools_set", { tool, policy }),
+  disconnect: (sessionId?: string) =>
+    safeInvoke<number>("mcp_sessions_disconnect", { sessionId }),
+  confirmations: () => safeInvoke<McpConfirmationView[]>("mcp_confirmations_list"),
+  resolveConfirmation: (id: string, allow: boolean) =>
+    safeInvoke<boolean>("mcp_confirmation_resolve", { id, allow }),
+  recentCalls: (limit?: number) =>
+    safeInvoke<McpRecentCallView[]>("mcp_recent_calls", { limit }),
 };
 
 export const pluginUi = {

@@ -104,6 +104,8 @@ async fn run_install_background(
     profile_id: String,
 ) -> Result<(), IpcError> {
     // ── 1. Load profile + 事件适配器（短锁）──
+    // 完整/失败事件需要真实 batch_id；它只出现在进度回调里，这里记录最后一次值。
+    let last_batch_id = Arc::new(std::sync::Mutex::new(None::<String>));
     let (profile, progress_cb) = {
         let core = core.read().await;
         let profile = core
@@ -119,9 +121,11 @@ async fn run_install_background(
             core.config.event_throttle_ms,
         ));
         let log_pid = profile_id.clone();
+        let cb_last_batch = last_batch_id.clone();
         let progress_cb: rmccc_core::pipeline::ProgressCb =
             Arc::new(move |msg: &rmccc_core::pipeline::ProgressMsg| match msg {
                 rmccc_core::pipeline::ProgressMsg::Download { progress, .. } => {
+                    *cb_last_batch.lock().unwrap() = Some(progress.batch_id.clone());
                     emitter.emit_progress(&crate::events::DownloadProgressPayload {
                         batch_id: progress.batch_id.clone(),
                         completed_files: progress.completed_files,
@@ -146,6 +150,8 @@ async fn run_install_background(
     };
 
     // ── 3. 有失败条目：不提交 profile，上报错误 ──
+    let real_batch_id =
+        last_batch_id.lock().unwrap().clone().unwrap_or_default();
     if !report.is_complete() {
         tracing::warn!(
             profile_id = %profile_id,
@@ -156,7 +162,7 @@ async fn run_install_background(
         let _ = app_handle.emit(
             crate::events::DOWNLOAD_ERROR,
             serde_json::json!({
-                "batch_id": "",
+                "batch_id": real_batch_id,
                 "profile_id": profile_id,
                 "version": version,
                 "failed_files": report.failed_files,
@@ -175,7 +181,7 @@ async fn run_install_background(
     let _ = app_handle.emit(
         crate::events::DOWNLOAD_COMPLETE,
         serde_json::json!({
-            "batch_id": "",
+            "batch_id": real_batch_id,
             "profile_id": profile_id,
             "version": version,
         }),

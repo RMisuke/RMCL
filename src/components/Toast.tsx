@@ -1,96 +1,48 @@
-import { Component, createSignal, createRoot, Show, For } from "solid-js";
-import type { IpcError } from "../ipc/api";
+/**
+ * Toast layer (ui-design 10 \u00a75): bottom-right stack, 4s auto-dismiss,
+ * optional follow-up action; `aria-live="polite"`.
+ */
+import type { JSX } from "solid-js";
+import { For, Show } from "solid-js";
+import { Icon, type IconName } from "./icons";
+import { uiStore } from "../stores/ui";
+import { t } from "../i18n";
 
-// ── Toast store (global, wrapped in createRoot for clean HMR) ──
+const TONE_ICON: Record<string, IconName> = {
+  success: "check",
+  error: "alert",
+  info: "info",
+};
 
-/// Toast 输入：code 放宽为 string，既接受后端 ErrorCode，也接受前端
-/// 自定义成功/状态提示（如 "ok"/"error"/"success"）——P2-15 后 IpcError.code
-/// 为受限联合类型，故此处显式放宽。
-type ToastInput = Omit<IpcError, "code"> & { code: string };
-
-interface Toast {
-  id: number;
-  error: ToastInput;
-  timestamp: number;
-}
-
-const { toasts, showToast, dismissToast } = createRoot(() => {
-  const [toasts, setToasts] = createSignal<Toast[]>([]);
-  let nextId = 0;
-
-  function showToast(error: ToastInput) {
-    const id = nextId++;
-    setToasts((prev) => [...prev, { id, error, timestamp: Date.now() }]);
-
-    // Auto-dismiss after 5 seconds (unless retryable)
-    if (!error.retryable) {
-      setTimeout(() => dismissToast(id), 5000);
-    }
-  }
-
-  function dismissToast(id: number) {
-    setToasts((prev) => prev.filter((t) => t.id !== id));
-  }
-
-  return { toasts, showToast, dismissToast };
-});
-
-export { showToast, dismissToast };
-
-// ── Toast component ──
-
-export const ToastContainer: Component = () => {
+export function ToastContainer(): JSX.Element {
   return (
-    <div class="toast-container">
-      <For each={toasts()}>
-        {(toast) => <ToastItem toast={toast} />}
+    <div class="toast-container" aria-live="polite">
+      <For each={uiStore.toasts()}>
+        {(item) => (
+          <div class={`toast toast-${item.tone}`} role="status">
+            <Icon name={TONE_ICON[item.tone] ?? "info"} size={16} />
+            <span class="toast-message">{item.message}</span>
+            <Show when={item.actionLabel}>
+              <button
+                class="toast-action"
+                onClick={() => {
+                  item.onAction?.();
+                  uiStore.dismissToast(item.id);
+                }}
+              >
+                {item.actionLabel}
+              </button>
+            </Show>
+            <button
+              class="toast-close"
+              aria-label={t("common.close")}
+              onClick={() => uiStore.dismissToast(item.id)}
+            >
+              <Icon name="x" size={13} />
+            </button>
+          </div>
+        )}
       </For>
     </div>
   );
-};
-
-const ToastItem: Component<{ toast: Toast }> = (props) => {
-  const error = () => props.toast.error;
-
-  const getIcon = () => {
-    switch (error().code) {
-      case "java_not_found":
-        return "⚠️";
-      case "auth_failed":
-      case "token_expired":
-        return "🔑";
-      case "download_failed":
-      case "network_error":
-        return "📡";
-      case "insufficient_disk_space":
-        return "💾";
-      default:
-        return "❌";
-    }
-  };
-
-  const handleRetry = () => {
-    // TODO: Implement retry logic (re-invoke the failed command)
-    dismissToast(props.toast.id);
-  };
-
-  return (
-    <div class="toast-item">
-      <div class="toast-icon">{getIcon()}</div>
-      <div class="toast-content">
-        <div class="toast-message">{error().message}</div>
-        <Show when={error().retryable}>
-          <button class="toast-retry" onClick={handleRetry}>
-            Retry
-          </button>
-        </Show>
-      </div>
-      <button
-        class="toast-close"
-        onClick={() => dismissToast(props.toast.id)}
-      >
-        ×
-      </button>
-    </div>
-  );
-};
+}

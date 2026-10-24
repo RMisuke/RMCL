@@ -40,6 +40,7 @@ impl CliContext {
                 loader: loader.map(str::to_string),
                 page,
                 limit: limit.min(100),
+                index: None,
             })
             .await
     }

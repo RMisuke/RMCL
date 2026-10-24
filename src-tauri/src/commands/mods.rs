@@ -17,6 +17,7 @@ pub async fn mod_search(
     loader: Option<String>,
     page: Option<u32>,
     limit: Option<u32>,
+    index: Option<String>,
 ) -> Result<rmccc_mods::ModSearchResult, IpcError> {
     let core = state.core.read().await;
 
@@ -26,6 +27,7 @@ pub async fn mod_search(
         loader,
         page: page.unwrap_or(1),
         limit: limit.unwrap_or(20).min(100),
+        index,
     };
 
     // Use the first available mod source (Modrinth).
@@ -571,6 +573,7 @@ impl ModrinthPlanApplier {
                 loader: self.loader.clone(),
                 page: 0,
                 limit: 10,
+                index: None,
             })
             .await?;
         let hit = search.hits.first().ok_or_else(|| {

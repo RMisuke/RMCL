@@ -25,8 +25,16 @@ export const EVENTS = {
   // Instances
   INSTANCES_REFRESHED: "instances://refreshed",
 
-  // AI service (ADR-013): streaming log-analysis events, keyed by analysis_id
+  // AI service (ADR-013): streaming log-analysis events, keyed by analysisId
   AI_DELTA: "ai://delta",
   AI_DONE: "ai://done",
   AI_ERROR: "ai://error",
+
+  // MCP server (ADR-013 S4/S5): sessions / confirmations / attribution
+  MCP_SESSION: "mcp://session",
+  MCP_CONFIRMATION: "mcp://confirmation",
+  MCP_CALL: "mcp://call",
+
+  // Host → frontend relay of host→plugin bridge pushes (S6 llm.chat streaming)
+  PLUGIN_PUSH: "plugin://push",
 } as const;

@@ -18,6 +18,8 @@ pub struct ModSearchQuery {
     pub loader: Option<String>,
     pub page: u32,
     pub limit: u32,
+    /// Source ranking (`relevance` | `downloads` | `follows` | `newest` | `updated`).
+    pub index: Option<String>,
 }
 
 /// Mod search result page.

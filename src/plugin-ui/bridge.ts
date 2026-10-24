@@ -38,6 +38,20 @@ const METHOD_TIMEOUTS: Record<string, number> = {
 /// the tokens, so it is the only place that knows the effective palette.
 const LOCAL_METHODS = new Set(["theme.get"]);
 
+/**
+ * Live bridges by plugin id, for host→plugin push relay (ADR-013 S6:
+ * `plugin://push` events carrying `{v, type: "llm.delta"|"llm.done"|"llm.error"}`).
+ * A plugin may own several frames (card + settings page); the push goes to all.
+ */
+const liveBridges = new Map<string, Set<PluginBridge>>();
+
+/** Relay a host→plugin push to every live frame of `pluginId`. */
+export function dispatchPluginPush(pluginId: string, message: unknown): void {
+  for (const bridge of liveBridges.get(pluginId) ?? []) {
+    bridge.sendPush(message);
+  }
+}
+
 export interface BridgeOptions {
   pluginId: string;
   cardId: string;
@@ -80,11 +94,22 @@ export class PluginBridge {
     if (this.started) return;
     this.started = true;
     window.addEventListener("message", this.listener);
+    let set = liveBridges.get(this.pluginId);
+    if (!set) {
+      set = new Set();
+      liveBridges.set(this.pluginId, set);
+    }
+    set.add(this);
   }
 
   dispose(): void {
     this.disposed = true;
-    if (this.started) window.removeEventListener("message", this.listener);
+    if (this.started) {
+      window.removeEventListener("message", this.listener);
+      const set = liveBridges.get(this.pluginId);
+      set?.delete(this);
+      if (set && set.size === 0) liveBridges.delete(this.pluginId);
+    }
     for (const timer of this.timers.values()) window.clearTimeout(timer);
     this.timers.clear();
     this.pending.clear();
@@ -93,6 +118,11 @@ export class PluginBridge {
   /** Push a theme change to a live frame (no-op until it said `ready`). */
   sendTheme(tokens: ThemeTokens): void {
     this.post({ v: UI_API_VERSION, type: "theme", theme: tokens });
+  }
+
+  /** Host→plugin push (llm.chat streaming etc.); no-op when disposed. */
+  sendPush(message: unknown): void {
+    if (!this.disposed) this.post(message);
   }
 
   private onMessage(event: MessageEvent): void {

@@ -10,6 +10,32 @@
 
 ## 0. 更新记录
 
+**2026-10-23（前端重构轮：ui-design 全面落地）**：按 `docs/ui-design/`（15 份）从零重写前端。
+
+- **架构**：`src/pages/`（7 页，路由级 lazy 分包）+ `src/stores/`（9 个领域 store +
+  `init.ts` 唯一事件订阅点）+ `src/components/rm/`（组件库三件套）+ `src/components/`
+  （TaskCenter / LogDrawer / PageHeader / 内联 SVG 图标 47 枚）。旧 7 路由全部删除
+  （`src/routes/` 清空），`app.css` 从 2253 行手写样式重写为 1100 行 token 化设计系统。
+- **路由**：`/` `/instances` `/instances/:id`（hash 五 tab）`/download`（向导/Mod 仓库/
+  整合包占位）`/accounts`（合并旧 /login）`/plugins` `/settings`（七分区含 #ai）；
+  旧路由重定向（/login→/accounts、/mods→/download#mods、/agent→/settings#ai）。
+- **设计支柱落地**：Rail 全局导航 + SideTabs 页内子导航；快速启动卡五态机；字段级继承锁
+  （20 个可覆盖字段 + resolved settings 生效值）；实例上下文 Mod 仓库（锁定筛选 + 推荐版本
+  置顶 + 安装兼容警告）；任务中心非模态面板（Rail 指示器 + 确认卡置顶 + 双进度 + EMA 速度）；
+  日志抽屉（级别过滤 + 异常退出自动弹开 + AI 流式分析 + 外发确认）；MCP 设置面（令牌/接入
+  配置复制/会话/逐工具策略/审计视图）；插件 master-detail（拖拽安装/权限/Schema 配置表单/
+  逻辑调试台）；插件卡 error boundary + `plugin://push` 中继进 iframe。
+- **i18n**：全新 453 key 双语 bundle（en 参考 + zh-CN 同步，typecheck 守护 key 对齐）。
+- **门禁**：`pnpm typecheck` 0 错误；`pnpm build` 全绿（主 chunk 145 KB / gzip 47 KB，
+  各页独立 chunk，总 gzip ~74 KB，体积预算 +150 KB 内）；`ipc_tests` 契约（registry ↔
+  api.ts）47 项通过——后端零改动。
+- **已知降级形态**（对应 ui-design 00 §9 后端配套清单）：open_path（P1）未实现——浏览菜单
+  显示路径 + 复制；modloader 移除（P2）未开放；下载暂停事件（P3）用乐观 UI 兜底；
+  downloads-card 内置卡已接（P4 由 dashboard_list_widgets 提供，若后端未注册则经「添加卡片」）；
+  更新检查（P9）灰置「即将支持」；整合包（P10）纯占位。
+- **待人工验收**：真机 GUI 走查（ui-design 13 §7 QA 矩阵：分辨率/主题/语言/断点/三态/
+  MCP 确认流/AI 分析流式），`pnpm tauri dev` 联调。
+
 **2026-10-23（ADR-013 S4/S5/S6 轮：MCP 服务器 + 插件 AI 桥）**：后端完成外部 Agent 控制面，
 未动前端。
 

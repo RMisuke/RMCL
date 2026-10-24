@@ -1,44 +1,37 @@
 /**
- * Application shell.
+ * Application shell (ui-design 00 §3): TitleBar + Rail navigation + content
+ * area + global overlays (task center, log drawer, toasts, confirm host).
  *
- * The main window is created borderless, transparent and hidden
- * (`decorations: false`, `transparent: true`, `visible: false`), so the shell
- * owns both the window chrome and the reveal handshake:
- *
- * - `.app-root` paints the rounded, clipped window background. The route roots
- *   (`.launcher-root` / `.login-container`) rely on `flex: 1`, which only lays
- *   out correctly as flex children of this column container — without it the
- *   routes collapse and leave transparent gaps around the content.
- * - `<TitleBar />` supplies the drag region and the window controls. The window
- *   is borderless, so without it the window cannot be moved or closed.
- * - `<ToastContainer />` renders IPC errors; it was previously never mounted,
- *   so every `showToast()` call was invisible to the user.
- * - On mount the window is revealed once the shell has laid out (avoids a white
- *   flash) and checked against the connected monitors, because
- *   `tauri-plugin-window-state` may restore a stale position.
+ * The window is borderless/hidden at creation; this shell owns the reveal
+ * handshake (unchanged from the previous design).
  */
-import { ParentComponent, onMount } from "solid-js";
+import { ParentComponent, onMount, Show, For } from "solid-js";
+import { useLocation, useNavigate } from "@solidjs/router";
 import { availableMonitors, getCurrentWindow } from "@tauri-apps/api/window";
 import TitleBar from "./components/TitleBar";
 import { ToastContainer } from "./components/Toast";
-import { initI18n } from "./i18n";
+import { TaskCenterPanel, TaskIndicator } from "./components/TaskCenter";
+import { LogDrawer } from "./components/LogDrawer";
+import { LaunchBubble } from "./components/LaunchBubble";
+import { RmConfirmHost, RmPromptHost } from "./components/rm/overlays";
+import { Icon, type IconName } from "./components/icons";
+import { initStores } from "./stores/init";
+import { launchStore } from "./stores/launch";
+import { downloadsStore } from "./stores/downloads";
+import { uiStore } from "./stores/ui";
+import { initI18n, t } from "./i18n";
+import type { TranslationKey } from "./i18n/locales/messages";
 import { initTheme } from "./theme";
 import { reportFrontendMessage } from "./ipc/api";
 
 type AppWindow = Awaited<ReturnType<typeof getCurrentWindow>>;
 
-/** Visible strip required for the title bar to stay grabbable. */
 const MIN_VISIBLE_W = 240;
 const MIN_VISIBLE_H = 44;
 
-/**
- * Re-centers the window when the restored geometry leaves the title bar
- * off-screen (e.g. state saved while attached to a different display).
- */
 async function ensureReachable(win: AppWindow): Promise<void> {
   const monitors = await availableMonitors();
   if (monitors.length === 0) return;
-
   const [pos, size] = await Promise.all([win.outerPosition(), win.outerSize()]);
   const reachable = monitors.some((monitor) => {
     const overlapX =
@@ -51,39 +44,95 @@ async function ensureReachable(win: AppWindow): Promise<void> {
       overlapX >= Math.min(MIN_VISIBLE_W, size.width) && overlapY >= MIN_VISIBLE_H
     );
   });
-
-  if (!reachable) {
-    await win.center();
-  }
+  if (!reachable) await win.center();
 }
 
+interface RailItem {
+  href: string;
+  icon: IconName;
+  label: TranslationKey;
+}
+
+const RAIL_ITEMS: RailItem[] = [
+  { href: "/", icon: "home", label: "nav.home" },
+  { href: "/instances", icon: "gamepad", label: "nav.instances" },
+  { href: "/download", icon: "download", label: "nav.download" },
+  { href: "/accounts", icon: "person", label: "nav.accounts" },
+  { href: "/plugins", icon: "extension", label: "nav.plugins" },
+  { href: "/settings", icon: "settings", label: "nav.settings" },
+];
+
 const App: ParentComponent = (props) => {
+  const location = useLocation();
+  const navigate = useNavigate();
+
   onMount(async () => {
     try {
       const win = getCurrentWindow();
-      // Resolve the UI language before revealing the window, so the first paint
-      // is already in the user's language instead of flashing the default.
       await initI18n();
-      // Theme tokens must be applied before the first paint to avoid a flash.
       await initTheme();
-      // The window is created hidden, so the frontend reveals it once the shell
-      // has rendered (`ready-to-show` pattern).
+      initStores();
       await win.show();
       await win.setFocus();
       await ensureReachable(win);
     } catch (e) {
       console.warn("App: window API unavailable", e);
-      // The release WebView has no console, so mirror it into the log file.
-      void reportFrontendMessage(
-        `window shell failed to reveal: ${String(e)}`
-      );
+      void reportFrontendMessage(`window shell failed to reveal: ${String(e)}`);
     }
   });
+
+  const isActive = (href: string): boolean => {
+    if (href === "/") return location.pathname === "/";
+    return location.pathname === href || location.pathname.startsWith(`${href}/`);
+  };
+
+  const runningCount = () => launchStore.running().size;
+  const downloadCount = () => downloadsStore.batches().size;
 
   return (
     <div class="app-root">
       <TitleBar />
-      {props.children}
+      <div class="app-body">
+        <nav class={`rail${uiStore.railCollapsed() ? " is-collapsed" : ""}`}>
+          <For each={RAIL_ITEMS}>
+            {(item) => (
+              <button
+                class={`rail-item${isActive(item.href) ? " is-active" : ""}`}
+                onClick={() => navigate(item.href)}
+                title={t(item.label)}
+                aria-label={t(item.label)}
+              >
+                <Icon name={item.icon} size={20} />
+                <span class="rail-item-label">{t(item.label)}</span>
+                <Show when={item.href === "/instances" && runningCount() > 0}>
+                  <span class="rail-badge">{runningCount()}</span>
+                </Show>
+                <Show when={item.href === "/download" && downloadCount() > 0}>
+                  <span class="rail-badge">{downloadCount()}</span>
+                </Show>
+              </button>
+            )}
+          </For>
+          <div class="rail-footer">
+            <TaskIndicator />
+            <button
+              class="rail-item rail-collapse"
+              onClick={() => uiStore.toggleRail()}
+              aria-label={t("nav.collapse")}
+              title={t("nav.collapse")}
+            >
+              <Icon name="chevron-left" size={18} />
+              <span class="rail-item-label">{t("nav.collapse")}</span>
+            </button>
+          </div>
+        </nav>
+        <main class="app-content">{props.children}</main>
+      </div>
+      <TaskCenterPanel />
+      <LogDrawer />
+      <LaunchBubble />
+      <RmConfirmHost />
+      <RmPromptHost />
       <ToastContainer />
     </div>
   );

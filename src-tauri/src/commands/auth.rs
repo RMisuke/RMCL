@@ -139,6 +139,63 @@ pub async fn auth_logout(state: tauri::State<'_, AppState>) -> Result<(), IpcErr
     Ok(())
 }
 
+/// Fetch the profile's skin texture URL from Mojang's session server.
+///
+/// WKWebView 的 fetch 会被 CORS 拦截，crafatar 等镜像又不可靠（HTTP 500 → 默认
+/// Alex），所以由后端代理解码：sessionserver → textures 属性 → base64 → SKIN.url。
+/// 无皮肤/网络失败返回 None，前端回退首字母或 Steve。
+#[tauri::command]
+#[tracing::instrument]
+pub async fn auth_skin_url(uuid: String) -> Result<Option<String>, IpcError> {
+    let undashed = uuid.replace('-', "").to_lowercase();
+    if undashed.len() != 32 || !undashed.chars().all(|c| c.is_ascii_hexdigit()) {
+        return Ok(None);
+    }
+    let client = reqwest::Client::new();
+    let resp = client
+        .get(format!(
+            "https://sessionserver.mojang.com/session/minecraft/profile/{undashed}"
+        ))
+        .timeout(std::time::Duration::from_secs(8))
+        .send()
+        .await;
+    let resp = match resp {
+        Ok(r) if r.status().is_success() => r,
+        Ok(r) => {
+            tracing::warn!(status = %r.status(), "sessionserver skin lookup failed");
+            return Ok(None);
+        }
+        Err(e) => {
+            tracing::warn!(error = %e, "sessionserver skin lookup unreachable");
+            return Ok(None);
+        }
+    };
+    let body: serde_json::Value = match resp.json().await {
+        Ok(v) => v,
+        Err(_) => return Ok(None),
+    };
+    let textures = body["properties"]
+        .as_array()
+        .and_then(|props| {
+            props
+                .iter()
+                .find(|p| p["name"] == "textures")
+                .and_then(|p| p["value"].as_str())
+        })
+        .and_then(|raw| {
+            use base64::Engine as _;
+            base64::engine::general_purpose::STANDARD
+                .decode(raw)
+                .ok()
+                .and_then(|bytes| serde_json::from_slice::<serde_json::Value>(&bytes).ok())
+        });
+    let url = textures
+        .as_ref()
+        .and_then(|t| t["textures"]["SKIN"]["url"].as_str())
+        .map(|u| u.replacen("http://", "https://", 1));
+    Ok(url)
+}
+
 #[tauri::command]
 #[tracing::instrument(skip(state))]
 pub async fn auth_get_session(
