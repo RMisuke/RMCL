@@ -5,7 +5,7 @@
 > **当前状态入口**：各 Phase 的实际完成情况见下方每个 Phase 的「状态」块。
 > 完整的实测数据、架构 as-built 与待办优先级见 [`PROJECT_STATUS.md`](PROJECT_STATUS.md)。
 > 最后回填：2026-10-20（`cargo test --workspace` 300 passed / 0 failed，CI lint 三门禁本地通过）。
-> 完整功能矩阵与技术债台账见 [`AUDIT_2026-10-20.md`](AUDIT_2026-10-20.md)。
+> 完整功能矩阵与技术债台账见 [`audits/AUDIT_2026-10-20.md`](audits/AUDIT_2026-10-20.md)。
 >
 > **后续细化计划**：本文件覆盖 Phase 1–5（既有主线）。插件平台、Agent、平台适配层与生产分发的**细化分阶段执行计划**见 [`roadmap/`](roadmap/) 目录（Phase 0–7 + [`PLATFORM_ADAPTATION.md`](roadmap/PLATFORM_ADAPTATION.md)），服从 [`RMCCC_PLUGIN_PLATFORM_ARCHITECTURE_GUIDE.md`](RMCCC_PLUGIN_PLATFORM_ARCHITECTURE_GUIDE.md) §1.4（当前本机仅 macOS 开发、不跨平台编译/实测）与 §5.7（平台特定能力归档到适配层、核心只定义 trait）。
 
@@ -61,7 +61,7 @@
 > `MojangVersionProvider`、版本列表 TTL 缓存、assets/libraries、Java 检测与版本匹配、
 > response file 启动参数、`ManagedProcess` 进程管理、Profile CRUD 均已落地。
 > 启动链路已升级为本地 `DefaultGameRepository` + `DefaultLauncher`（离线可启动）。
-> 已有记录：CLI 端到端启动原版 26.2 成功（`docs/test_log.md`）。
+> 已有记录：CLI 端到端启动原版 26.2 成功（2026-07-30 手测）。
 
 **目标**：能下载并启动原版 Minecraft。
 
@@ -104,7 +104,7 @@
 
 > **状态：✅ 后端完成，前端已接；安装进度事件仍未订阅**
 > 后端支持 8 种 loader（Fabric / Forge / NeoForge / Quilt / LiteLoader / OptiFine / Cleanroom / LegacyFabric），
-> 其中 Cleanroom 仍是 stub（审计 P1-6：选中必然失败）。已有记录：Fabric / NeoForge 安装后可正常启动（`docs/test_log.md`）。
+> 其中 Cleanroom 仍是 stub（审计 P1-6：选中必然失败）。已有记录：Fabric / NeoForge 安装后可正常启动（2026-07-30 手测）。
 > **已达成**：实例设置页 `/instances/:id` 的「加载器」分区已可选择 loader 类型、列出稳定/预览版本并安装
 > （`modloader_list` / `modloader_install` 已在 `InstanceSettings.tsx` 调用）；安装路由已统一为
 > `rmccc-core::modloader::install_loader`（Phase 1.4 单体系，Forge/NeoForge → installer JAR，其余 → patch）。

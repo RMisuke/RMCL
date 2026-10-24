@@ -15,6 +15,7 @@ members = [
     "crates/rmccc-dashboard",
     "crates/rmccc-logic",
     "crates/rmccc-agent",
+    "crates/rmccc-llm",
     "src-tauri",
     "src-cli",
     "src-logic-host",
@@ -33,6 +34,11 @@ async-trait = "0.1"
 
 # HTTP
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json", "stream", "gzip", "brotli"] }
+# MCP 服务器（ADR-013 S4/S5）：复用 reqwest 依赖树中的 hyper 1.x，启用 server 端，
+# 不引入 axum/tower 全家桶（体积红线 ADR-011）。
+hyper = { version = "1", default-features = false, features = ["http1", "server"] }
+hyper-util = { version = "0.1", default-features = false, features = ["tokio", "server-auto"] }
+http-body-util = "0.1"
 
 # Logic plugins (Phase 5, ADR-007): only the helper binary links this.
 wasmi = "0.40"
@@ -103,6 +109,7 @@ rmccc-plugin = { path = "crates/rmccc-plugin" }
 rmccc-logic = { path = "crates/rmccc-logic" }
 rmccc-dashboard = { path = "crates/rmccc-dashboard" }
 rmccc-agent = { path = "crates/rmccc-agent" }
+rmccc-llm = { path = "crates/rmccc-llm" }
 
 [profile.release]
 opt-level = "s"

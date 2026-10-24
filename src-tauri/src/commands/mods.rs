@@ -453,3 +453,218 @@ pub struct ModList {
     /// Where this instance's mods live (follows its run directory).
     pub mods_dir: String,
 }
+
+// ── 依赖扫描与一键补装（ADR-013 S3：纯逻辑，去 Agent 化）──
+//
+// 原 Phase 6.5 的 `mods.dependency_scan` / `mods.apply_plan` Agent 工具上移为
+// 宿主命令：不依赖任何 AI 配置，GUI 直接可用（未来 MCP 工具也走同一实现）。
+
+use rmccc_agent::{
+    plan_from_report, scan_instance_mods, AppliedMod, AppliedPlanReport, DependencyReport,
+    FailedMod, ModInstallPlan, PlanApplier, PlannedDependency,
+};
+use rmccc_error::RmcccError;
+
+/// `mods_dependency_scan` 的返回：扫描报告 + dry-run 计划（UI 直接展示计划，
+/// 用户确认后调 `mods_apply_plan`）。
+#[derive(Debug, Clone, Serialize, TS)]
+#[ts(export_to = "types.ts")]
+pub struct ModsDependencyScanView {
+    pub report: DependencyReport,
+    pub plan: ModInstallPlan,
+}
+
+/// 解析实例上下文：mods 目录 / 游戏版本 / 加载器（Modrinth 检索用）。
+fn profile_mods_context(
+    core: &rmccc_core::CoreContext,
+    profile_id: &str,
+) -> rmccc_error::Result<(std::path::PathBuf, String, Option<String>)> {
+    let profile = core
+        .profile_store
+        .get(profile_id)?
+        .ok_or_else(|| RmcccError::ProfileNotFound(profile_id.to_string()))?;
+    let mods_dir = rmccc_launch::instance_mods_dir(&core.config, &profile);
+    let loader = profile
+        .mod_loader
+        .as_ref()
+        .map(|loader| format!("{:?}", loader.loader_type).to_lowercase());
+    Ok((mods_dir, profile.game_version, loader))
+}
+
+/// 检查缺失前置（纯本地扫描：fabric.mod.json 依赖图 × 已装集合对比）。
+#[tauri::command]
+#[tracing::instrument(skip(state))]
+pub async fn mods_dependency_scan(
+    state: tauri::State<'_, AppState>,
+    profile_id: String,
+) -> Result<ModsDependencyScanView, IpcError> {
+    let core = state.core.read().await;
+    let (mods_dir, _, _) = profile_mods_context(&core, &profile_id)?;
+    drop(core);
+
+    // 实例还没建过 mods 目录 = 没装任何 mod = 没有可扫的依赖，直接给空报告。
+    let report = if mods_dir.is_dir() {
+        scan_instance_mods(&mods_dir)?
+    } else {
+        DependencyReport {
+            mods: Vec::new(),
+            dependencies: Vec::new(),
+            missing_required: Vec::new(),
+            conflicts: Vec::new(),
+            unparsed: Vec::new(),
+        }
+    };
+    let plan = plan_from_report(&report, &mods_dir);
+    tracing::info!(
+        profile_id = %profile_id,
+        missing = report.missing_required.len(),
+        conflicts = report.conflicts.len(),
+        "Dependency scan completed"
+    );
+    Ok(ModsDependencyScanView { report, plan })
+}
+
+/// 指南 §10.6 场景的执行器：Modrinth 解析 + 下载安装（SHA1 校验由
+/// `ModSource::install` 负责）。同步 trait 经 `block_in_place` 桥接。
+struct ModrinthPlanApplier {
+    source: rmccc_mods::modrinth::ModrinthSource,
+    game_version: String,
+    loader: Option<String>,
+}
+
+impl ModrinthPlanApplier {
+    async fn apply_async(
+        &self,
+        mods_dir: &std::path::Path,
+        dependencies: &[PlannedDependency],
+    ) -> rmccc_error::Result<AppliedPlanReport> {
+        let mut installed = Vec::new();
+        let mut failed = Vec::new();
+        let mut attempted = Vec::new();
+        for dep in dependencies {
+            attempted.push(dep.mod_id.clone());
+            match self.install_one(mods_dir, dep).await {
+                Ok(applied) => installed.push(applied),
+                Err(error) => failed.push(FailedMod {
+                    mod_id: dep.mod_id.clone(),
+                    reason: error.to_string(),
+                }),
+            }
+        }
+        Ok(AppliedPlanReport {
+            installed,
+            failed,
+            attempted,
+        })
+    }
+
+    async fn install_one(
+        &self,
+        mods_dir: &std::path::Path,
+        dep: &PlannedDependency,
+    ) -> rmccc_error::Result<AppliedMod> {
+        let search = self
+            .source
+            .search(&rmccc_mods::ModSearchQuery {
+                query: dep.mod_id.clone(),
+                game_version: (!self.game_version.is_empty()).then(|| self.game_version.clone()),
+                loader: self.loader.clone(),
+                page: 0,
+                limit: 10,
+            })
+            .await?;
+        let hit = search.hits.first().ok_or_else(|| {
+            RmcccError::MissingDependency(format!("no Modrinth project matches '{}'", dep.mod_id))
+        })?;
+        let versions = self.source.list_versions(&hit.id).await?;
+        // 优先"游戏版本 + 加载器"都匹配，其次只匹配游戏版本，最后取最新。
+        let version = versions
+            .iter()
+            .find(|v| {
+                v.game_versions.iter().any(|g| g == &self.game_version)
+                    && self
+                        .loader
+                        .as_ref()
+                        .is_some_and(|l| v.loaders.iter().any(|v_l| v_l == l))
+            })
+            .or_else(|| {
+                versions
+                    .iter()
+                    .find(|v| v.game_versions.iter().any(|g| g == &self.game_version))
+            })
+            .or_else(|| versions.first())
+            .ok_or_else(|| {
+                RmcccError::MissingDependency(format!(
+                    "no downloadable version for '{}' ({})",
+                    dep.mod_id, hit.id
+                ))
+            })?
+            .clone();
+
+        // 约束字符串（如 ">=1.0"）以源元数据记录为准，由用户在计划展示时
+        // 人工确认——本版本不做 semver 求解。
+        let raw_name = version
+            .filename
+            .clone()
+            .unwrap_or_else(|| format!("{}-{}.jar", dep.mod_id, version.version_number));
+        let filename = sanitize_filename(&raw_name);
+        let dest = mods_dir.join(filename);
+        use rmccc_mods::ModSource as _;
+        self.source.install(&version, &dest).await?;
+        Ok(AppliedMod {
+            mod_id: dep.mod_id.clone(),
+            file: dest
+                .file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_default(),
+            version: Some(version.version_number.clone()),
+        })
+    }
+}
+
+impl PlanApplier for ModrinthPlanApplier {
+    fn apply(
+        &self,
+        mods_dir: &std::path::Path,
+        dependencies: &[PlannedDependency],
+    ) -> rmccc_error::Result<AppliedPlanReport> {
+        tokio::task::block_in_place(|| {
+            tokio::runtime::Handle::current().block_on(self.apply_async(mods_dir, dependencies))
+        })
+    }
+}
+
+/// 一键补装缺失前置：执行前重新扫描（"用户确认 + Core 再校验"），
+/// 把仍缺失的必需前置经 Modrinth 下载安装。**纯逻辑，不依赖 AI**。
+#[tauri::command]
+#[tracing::instrument(skip(state))]
+pub async fn mods_apply_plan(
+    state: tauri::State<'_, AppState>,
+    profile_id: String,
+) -> Result<AppliedPlanReport, IpcError> {
+    let core = state.core.read().await;
+    let (mods_dir, game_version, loader) = profile_mods_context(&core, &profile_id)?;
+    let source = rmccc_mods::modrinth::ModrinthSource::new(core.http_client.clone());
+    drop(core);
+
+    if !mods_dir.is_dir() {
+        return Err(IpcError {
+            code: rmccc_error::ErrorCode::ValidationError,
+            message: format!("mods directory does not exist: {}", mods_dir.display()),
+            retryable: false,
+        });
+    }
+    let applier = ModrinthPlanApplier {
+        source,
+        game_version,
+        loader,
+    };
+    let report = rmccc_agent::apply_missing_dependencies(&mods_dir, &applier)?;
+    tracing::info!(
+        profile_id = %profile_id,
+        installed = report.installed.len(),
+        failed = report.failed.len(),
+        "Missing dependencies applied"
+    );
+    Ok(report)
+}

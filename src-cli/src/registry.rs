@@ -335,6 +335,11 @@ pub const COMMANDS: &[CommandSpec] = &[
         ],
     },
     CommandSpec {
+        name: "mcp",
+        about: "MCP stdio bridge: expose the running launcher to external AI tools (ADR-013)",
+        subcommands: &[],
+    },
+    CommandSpec {
         name: "help",
         about: "Show help for a command",
         subcommands: &[],

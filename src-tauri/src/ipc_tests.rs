@@ -116,6 +116,17 @@ fn ipc_registry_is_covered_by_the_frontend_api() {
         "instance_rename",
         "instance_duplicate",
         "instance_remove",
+        // ADR-013 S4/S5：MCP 管理面（ui-design 07 §2）。服务器与命令已落地，
+        // 设置页分区随整体前端重构接线。
+        "mcp_status",
+        "mcp_set_enabled",
+        "mcp_regenerate_token",
+        "mcp_tools_list",
+        "mcp_tools_set",
+        "mcp_sessions_disconnect",
+        "mcp_confirmations_list",
+        "mcp_confirmation_resolve",
+        "mcp_recent_calls",
     ];
 
     let api = include_str!("../../src/ipc/api.ts");
@@ -133,7 +144,9 @@ fn ipc_registry_is_covered_by_the_frontend_api() {
 #[test]
 fn ipc_command_count_is_stable() {
     // 新增命令时这条会失败——提醒同时更新 bindings.rs / api.ts / 本文件。
-    assert_eq!(crate::handlers::IPC_COMMANDS.len(), 86);
+    // 86 → 84 → 93（ADR-013）：S7 移除 agent_* 9 条、新增 ai_* 5 + mods 2 条；
+    // S4/S5 再新增 mcp_* 9 条（设计目标 93 条达成）。
+    assert_eq!(crate::handlers::IPC_COMMANDS.len(), 93);
 }
 
 // ────────────────────────── 2. 错误码契约 ──────────────────────────

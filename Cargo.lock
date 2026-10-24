@@ -3486,6 +3486,7 @@ checksum = "eddd3ca559203180a307f12d114c268abf583f59b03cb906fd0b3ff8646c1147"
 dependencies = [
  "base64 0.22.1",
  "bytes",
+ "futures-channel",
  "futures-core",
  "futures-util",
  "http",
@@ -3602,13 +3603,18 @@ version = "0.1.0"
 dependencies = [
  "chrono",
  "dashmap",
+ "http-body-util",
+ "hyper",
+ "hyper-util",
  "reqwest 0.12.28",
+ "rmccc-agent",
  "rmccc-auth",
  "rmccc-config",
  "rmccc-core",
  "rmccc-download",
  "rmccc-error",
  "rmccc-launch",
+ "rmccc-llm",
  "rmccc-logic",
  "rmccc-modloader",
  "rmccc-mods",
@@ -3636,19 +3642,14 @@ name = "rmccc-agent"
 version = "0.1.0"
 dependencies = [
  "chrono",
- "reqwest 0.12.28",
- "rmccc-auth",
  "rmccc-error",
+ "rmccc-llm",
  "rmccc-mods",
  "rmccc-platform",
  "serde",
  "serde_json",
- "sha2",
- "thiserror 2.0.19",
- "tokio",
  "tracing",
- "url",
- "uuid",
+ "ts-rs",
  "zip 2.4.2",
 ]
 
@@ -3802,6 +3803,22 @@ dependencies = [
  "tracing",
  "uuid",
  "zip 2.4.2",
+]
+
+[[package]]
+name = "rmccc-llm"
+version = "0.1.0"
+dependencies = [
+ "reqwest 0.12.28",
+ "rmccc-auth",
+ "rmccc-error",
+ "rmccc-platform",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.19",
+ "tokio",
+ "tracing",
+ "url",
 ]
 
 [[package]]

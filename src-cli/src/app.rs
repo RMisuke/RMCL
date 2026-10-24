@@ -88,6 +88,13 @@ pub enum Commands {
         #[command(subcommand)]
         action: SystemAction,
     },
+    /// MCP stdio bridge: forward MCP JSON-RPC from stdin/stdout to the
+    /// running launcher (ADR-013 S5). The launcher must be running.
+    Mcp {
+        /// Launch the GUI first and wait until the MCP endpoint is ready.
+        #[arg(long)]
+        launch: bool,
+    },
     /// Show help for a command (REPL / script friendly).
     Help {
         /// Command path, e.g. `profile create`.

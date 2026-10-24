@@ -17,7 +17,7 @@
 
 1. 阅读仓库根目录 `AGENTS.md`（如存在）和 `docs/AI_EDITING_RULES.md`。
 2. 阅读 `docs/ARCHITECTURE.md`，理解现存实现；阅读本指南，理解目标方向。
-3. 阅读 `docs/AUDIT_2026-10-20.md`、`docs/PROJECT_STATUS.md` 和 `docs/DEVELOPMENT_PLAN.md`，确认当前代码事实、已知问题和阶段状态。
+3. 阅读 `docs/audits/AUDIT_2026-10-20.md`、`docs/PROJECT_STATUS.md` 和 `docs/DEVELOPMENT_PLAN.md`，确认当前代码事实、已知问题和阶段状态。
 4. 执行 `git status --short`，确认工作区状态；不得覆盖用户未提交修改。
 5. 通过源码和 Cargo/npm 配置确认问题，不允许把本文中的目标模块当作已经实现的代码。
 6. 先给出小范围执行计划和验收方法，再修改；一轮只解决清楚定义的一组问题。
@@ -890,85 +890,63 @@ WidgetInstance
 
 ---
 
-# 10. Agent 平台架构
+# 10. 轻干预 AI 与外部 Agent 控制
 
-## 10.1 Agent 是受控编排层
+> 本节于 2026-10-23 按 ADR-013 重写：启动器**不内建 Agent 平台**。
+> 完整设计见 `docs/AI_AND_MCP_ARCHITECTURE.md`；本节只保留与插件平台相关的约束。
 
-Agent 包含：
+## 10.1 定位反转：AI 是能力，Agent 在外部
 
-1. **LLM Provider Adapter**：统一流式消息、错误、模型能力和上下文长度信息。
-2. **Session Store**：持久化会话事件及工具调用记录。
-3. **Context Providers**：按需提供实例、版本、已装模组、日志片段、下载状态等上下文。
-4. **Tool Registry**：插件注册具备名称、描述、参数 Schema、输出 Schema、所需权限、超时和风险等级的工具。
-5. **Planning/Execution Loop**：将模型响应转化为受校验的工具请求，控制 step/turn、取消和超时。
-6. **Approval Broker**：在危险操作前向用户呈现计划、目标实例、文件变更摘要和风险。
-7. **Audit Log**：记录任务意图、计划、工具调用、审批、输出和最终状态。
+- **编排在外**：对话循环、工具编排、上下文管理由外部 AI 工具（ZCode/Claude/Cursor）
+  承担，它们经 MCP 服务器调用启动器能力（§10.3）。启动器内不做 Agent 循环、
+  工具注册表（对外）与会话存储。
+- **AI 在内但很轻**：启动器保留一个 OpenAI 兼容 AI 端口（地址/密钥/自动探测模型/
+  流式输出），供内置功能（如启动失败日志一键分析）与插件调用（§10.2）。
+  不设独立 Agent UI。
+- **不是什么都要 AI**：缺失前置检测、完整性体检、版本兼容判断是
+  **纯本地逻辑 + 网络请求**（`mods_dependency_scan` / `instance_check_completion` 等），
+  禁止为了"AI 化"而绕道 LLM。
 
-不要在第一版实现一个没有权限边界的“任意工具调用循环”。优先实现只读工具，再逐步开放可审批写操作。
+## 10.2 内部 AI 端口（插件消费面）
 
-## 10.2 Agent 工具契约
+- 宿主经 `rmccc-llm`（OpenAI 兼容客户端）提供 `list_models` / `chat` / `chat_stream`；
+  配置与密钥全局一份（密钥入凭据保险库，ADR-009，service=`llm`）。
+- 插件通过桥方法 **`llm.chat`** 消费（新增能力 **`ai.chat`**，风险 medium，需显式授予）：
+  非流式直接返回；流式先返回 `streamId`，宿主推 `llm.delta/llm.done/llm.error` 消息
+  （复用桥的宿主→插件推送通道）。
+- 插件**拿不到密钥本体**（宿主代持，`credentials.use:llm` 语义）；限流 6 次/分钟/插件。
+- 向模型发送的内容必须先经宿主 redact（home→`~`、token 遮蔽）；
+  模型输出的 Markdown/HTML/命令建议视为不可信，安全呈现（沿用原 §10.4 纪律）。
 
-概念字段：
+## 10.3 外部 Agent 经 MCP 控制（宿主级，不属于插件系统）
 
-```text
-AgentToolDescriptor
-  id
-  pluginId
-  name
-  description
-  inputSchema
-  outputSchema
-  requiredCapabilities
-  riskLevel = read_only | reversible_write | destructive | external_side_effect
-  timeoutMs
-  concurrencyPolicy
-  confirmationPolicy
-  execute(input, executionContext) -> ToolResult
-```
+- MCP 服务器跑在启动器进程内，双传输：本机回环 Streamable HTTP（Bearer token，
+  **默认关闭**）+ `rmccc mcp` stdio 桥；仅回环，不做局域网远程控制。
+- 31 个工具按三级风险：只读（默认放行）/ 操作（放行 + GUI 归因徽标）/
+  破坏性（GUI 确认卡，两阶段 proposed→approved→applied，超时默认拒绝）。
+- 工具调用与用户操作走**同一内部命令层**，GUI 天然实时可见
+  （下载进度、启动状态等既有事件 payload 增加 origin 字段）。
+- 插件**不直接注册 MCP 工具**；如未来需要，另立 ADR。
 
-`execute` 不是可由模型直接运行的任意函数。工具注册后由 Agent Host 调度，参数先校验，权限再判定，执行结果规范化后写入审计记录。
+## 10.4 沿用的纪律（原 ADR-010 有效部分）
 
-## 10.3 建议的风险分级
+- 审计：每次 MCP 工具调用与 AI 调用写审计（工具/脱敏参数/结果/来源会话）；
+  会话存储（sessions/）废止，TaskSnapshot 结构转用作 MCP 确认记录。
+- 凭据：API Key 只入保险库；不进配置 JSON、localStorage、日志、崩溃报告。
+- 隐私：向远程模型发送环境信息（日志分析等）必须说明数据范围并经首次确认；
+  不默认上传完整日志/存档/配置。
 
-- **Read-only：** 查询版本、读取已装 Mod 列表、检查兼容性。可默认自动执行，但仍限速、限上下文范围。
-- **Reversible write：** 创建安装计划、暂停下载、切换非关键 UI 设置。按用户策略授权。
-- **Destructive：** 删除 Mod、删除游戏实例或覆盖大量文件。必须展示具体计划并要求确认。
-- **External side effect：** 登录、发布内容、连接第三方账户、发送网络请求或执行用户自定义命令。需独立能力和显式授权。
+## 10.5 工作流示例：「检查并修复缺失前置」
 
-模型提供商不能自动扩大工具权限。Agent 发出工具调用时，始终用宿主当前授权和真实的目标实例进行检查。
+纯逻辑路径（无 AI，v1 主路径）：
 
-## 10.4 模型供应商与凭据
+1. 用户（或外部 Agent）对实例调用 `mods_dependency_scan` → 缺失必需/冲突报告；
+2. `mods.apply_plan` 生成/执行补装计划（Modrinth 搜索 → 版本匹配 → SHA1 下载）；
+3. GUI 展示计划与进度（Agent 发起则带归因徽标）；执行后重扫描验证。
 
-- 模型适配器统一支持流式输出、中止、超时、重试和限流；不同提供商的请求字段由 adapter 封装。
-- API Key 使用 Credential Store，不能保存到普通配置 JSON、前端 localStorage、崩溃报告或日志。
-- 用户可配置云端模型与本地模型端点；本地端点的网络安全策略与远程 HTTPS provider 分开处理。
-- 插件不得读取任意其他插件的模型凭据；只可请求某个服务的受控使用授权。
-- 记录费用/Token 用量应为可关闭的可选功能，并避免记录敏感提示词或私人日志。
-- 对模型输出的 Markdown、HTML、命令建议和 URL 均视为不可信，必须安全呈现。
-
-## 10.5 游戏上下文与隐私
-
-Agent 仅按任务需要访问上下文：
-
-- 读取当前 Profile ID、版本、Loader、Java 版本、已装 Mod 清单等最小元数据。
-- 读取启动日志时只提供用户确认或明确允许的日志范围，并脱敏用户名、路径、账号 ID 和认证数据。
-- 不默认扫描全盘，不默认上传完整日志/存档/配置。
-- 任何向远程模型发送环境信息的操作必须在设置和会话层清楚说明数据范围。
-- 不把用户私有世界存档、服务器凭据或聊天日志作为隐式上下文。
-
-## 10.6 Agent 工作流示例
-
-“帮我检查这个实例的模组兼容性并修复缺失前置”建议流程：
-
-1. 解析用户选择的 Profile，不猜测目标实例。
-2. 使用只读工具获取版本、Loader 和已装 Mod 元数据。
-3. 通过兼容性/依赖服务生成报告。
-4. 生成 `ModInstallPlan`，列出必需依赖、候选版本、来源、许可证/文件来源信息和将变更的文件。
-5. 显示摘要，要求用户确认。
-6. Core 再验证当前实例是否已变化，检查冲突和权限。
-7. 交给统一 Download/Mod Service 执行。
-8. 返回 Task ID，订阅任务进度；出现错误时停止继续修改并报告。
-9. 执行完成后重新扫描实例，并输出可验证的结果。
+外部 Agent 路径（编排在外）：ZCode 等经 MCP 依次调用
+`mods.dependency_scan` → `mods.apply_plan` → `launch.start`，
+用户在启动器 GUI 全程看到进度与确认卡。
 
 ---
 

@@ -44,6 +44,10 @@ export type {
   ThemeTokens,
   WidgetInstance,
   BridgeReply,
+  AiConfigView,
+  AiAnalysisHandle,
+  ModsDependencyScanView,
+  AppliedPlanReport,
 } from "./types";
 
 import type {
@@ -82,6 +86,10 @@ import type {
   ThemeTokens,
   WidgetInstance,
   BridgeReply,
+  AiConfigView,
+  AiAnalysisHandle,
+  ModsDependencyScanView,
+  AppliedPlanReport,
 } from "./types";
 
 // Input DTOs: partial updates. The fields come from the ts-rs generated types
@@ -166,6 +174,12 @@ export const mods = {
     safeInvoke<void>("mod_remove", { profileId, modFilename }),
   pickAndInstall: (profileId: string) =>
     safeInvoke<string | null>("mod_pick_and_install", { profileId }),
+  /** 检查缺失前置（ADR-013 S3，纯逻辑无 AI）：扫描报告 + dry-run 补装计划。 */
+  dependencyScan: (profileId: string) =>
+    safeInvoke<ModsDependencyScanView>("mods_dependency_scan", { profileId }),
+  /** 一键补装：执行前后端会重新扫描（Core 再校验），只装仍缺失项。 */
+  applyPlan: (profileId: string) =>
+    safeInvoke<AppliedPlanReport>("mods_apply_plan", { profileId }),
 };
 
 // ── Mod loaders ──
@@ -312,72 +326,18 @@ export const logic = {
 
 // ── Isolated plugin UI（Phase 4，ADR-006）──
 
-// ── Agent 平台（Phase 6.5，ADR-009/010）──
-//
-// 类型在 rmccc-agent 侧定义（serde snake_case / tag = "kind"），
-// 这里手工镜像 —— 这些 DTO 未走 ts-rs 导出，字段变更由契约测试兜底命令名。
-
-export interface AgentConfigView {
-  configured: boolean;
-  baseUrl: string | null;
-  model: string | null;
-}
-
-export interface AgentRunOutput {
-  session_id: string;
-  status: string;
-  replies: string[];
-  tool_calls: number;
-  /** Context actually sent to the remote model (redacted, 6.7). */
-  contextSent: unknown | null;
-}
-
-export interface AgentSessionSummary {
-  session_id: string;
-  started_at: string;
-  last_event_at: string;
-  event_count: number;
-  tool_calls: number;
-  ended: boolean;
-}
-
-export interface AgentTaskSnapshot {
-  task_id: string;
-  session_id: string | null;
-  kind: string;
-  created_at: string;
-  updated_at: string;
-  status: "proposed" | "approved" | "rejected" | "applied" | "failed";
-  payload: unknown;
-}
-
-export interface AgentSessionEvent {
-  ts: string;
-  session_id: string;
-  event: { kind: string } & Record<string, unknown>;
-}
-
-export interface AgentPurgeReport {
-  sessions_removed: number;
-  tasks_removed: number;
-  bytes_freed: number;
-}
-
-export const agent = {
-  getConfig: () => safeInvoke<AgentConfigView>("agent_config_get"),
+export const ai = {
+  getConfig: () => safeInvoke<AiConfigView>("ai_config_get"),
   setConfig: (baseUrl: string, model: string, apiKey: string) =>
-    safeInvoke<void>("agent_config_set", { baseUrl, model, apiKey }),
-  listSessions: () => safeInvoke<AgentSessionSummary[]>("agent_session_list"),
-  readSession: (sessionId: string) =>
-    safeInvoke<AgentSessionEvent[]>("agent_session_read", { sessionId }),
-  pendingTasks: () => safeInvoke<AgentTaskSnapshot[]>("agent_tasks_pending"),
-  resolveTask: (taskId: string, approved: boolean, reason?: string) =>
-    safeInvoke<AgentTaskSnapshot>("agent_task_resolve", { taskId, approved, reason }),
-  /** Blocking: resolves when the whole turn completes. Cancel via `cancelRun`. */
-  run: (message: string, profileId?: string) =>
-    safeInvoke<AgentRunOutput>("agent_run", { message, profileId }),
-  cancelRun: () => safeInvoke<boolean>("agent_cancel"),
-  clearHistory: () => safeInvoke<AgentPurgeReport>("agent_clear_history"),
+    safeInvoke<void>("ai_config_set", { baseUrl, model, apiKey }),
+  /** 模型探测：`GET {base}/models`。传参即可在保存前探测；不传用已存配置。 */
+  probeModels: (baseUrl?: string, apiKey?: string) =>
+    safeInvoke<string[]>("ai_models_probe", { baseUrl, apiKey }),
+  /** 游戏日志一键分析：返回 analysis_id，增量经 `ai://delta/done/error` 事件回传。 */
+  analyzeLog: (profileId?: string) =>
+    safeInvoke<AiAnalysisHandle>("ai_analyze_log", { profileId }),
+  cancelAnalysis: (analysisId: string) =>
+    safeInvoke<boolean>("ai_analyze_cancel", { analysisId }),
 };
 
 export const pluginUi = {

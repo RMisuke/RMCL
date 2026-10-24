@@ -307,6 +307,10 @@ pub async fn plugin_ui_invoke(
             Ok(value) => BridgeReply::ok(value),
             Err(e) => BridgeReply::from_bridge(e),
         },
+        "llm.chat" => match llm_chat(&state, &plugin_id, &params).await {
+            Ok(value) => BridgeReply::ok(value),
+            Err(e) => BridgeReply::from_bridge(e),
+        },
         other => BridgeReply::err(
             BridgeErrorCode::UnsupportedMethod,
             format!("未知方法：{other}"),
@@ -417,4 +421,234 @@ async fn network_request(state: &AppState, params: &Value) -> Result<Value, Brid
         "status": status,
         "body": String::from_utf8_lossy(&body),
     }))
+}
+
+// ────────────────────────── llm.chat（ADR-013 S6）──────────────────────────
+
+/// `llm.chat` 每插件限速（次/分钟）。
+const LLM_PLUGIN_RPM: usize = 6;
+/// 单条消息总量上限（请求体本身已有 64 KiB 桥限制，这里防拼装爆炸）。
+const MAX_LLM_MESSAGES: usize = 50;
+/// 非流式回复上限（与桥响应上限一致）。
+const MAX_LLM_REPLY_BYTES: usize = ui::MAX_RESPONSE_BYTES;
+
+/// 插件消费宿主 AI 服务：密钥经 `host_llm_credential` 代持，永不回传插件。
+///
+/// - 非流式：等待完整回复（宿主侧超时与方法表 `timeout_ms` 对齐，30s）；
+/// - 流式：立即返回 `{streamId}`，随后经 `plugin://push` 中继
+///   `{type:"llm.delta"|"llm.done"|"llm.error"}`（前端转发进 iframe）。
+async fn llm_chat(state: &AppState, plugin_id: &str, params: &Value) -> Result<Value, BridgeError> {
+    // ── 限流（每插件 6 次/分钟）──
+    if !acquire_llm_slot(state, plugin_id) {
+        return Err(BridgeError::new(
+            BridgeErrorCode::RateLimited,
+            "llm.chat 限流：每插件每分钟最多 6 次调用",
+        ));
+    }
+
+    let messages = parse_chat_messages(params)?;
+    let stream = params
+        .get("stream")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+
+    let credential = crate::commands::ai::host_llm_credential(state)
+        .await
+        .map_err(|e| BridgeError::new(BridgeErrorCode::Internal, e.to_string()))?;
+    let provider = rmccc_llm::OpenAiCompatibleProvider::new(
+        &credential,
+        rmccc_llm::LlmOptions {
+            timeout: Duration::from_secs(30),
+            ..Default::default()
+        },
+    )
+    .map_err(|e| BridgeError::new(BridgeErrorCode::Internal, e.to_string()))?;
+    let request = rmccc_llm::ChatRequest::new(messages);
+    let cancel = rmccc_llm::CancelToken::new();
+
+    if !stream {
+        let text = collect_stream(&provider, request, cancel)
+            .await
+            .map_err(|e| BridgeError::new(BridgeErrorCode::Internal, e))?;
+        return Ok(json!({ "text": text }));
+    }
+
+    // 流式：spawn 推送任务，立即回 streamId。
+    let stream_id = uuid::Uuid::new_v4().simple().to_string();
+    let app = state.app_handle.clone();
+    let push_plugin_id = plugin_id.to_string();
+    let push_stream_id = stream_id.clone();
+    tauri::async_runtime::spawn(async move {
+        use rmccc_llm::LlmEvent;
+        use tauri::Emitter as _;
+        let push = |message: Value| {
+            let _ = app.emit(
+                crate::events::PLUGIN_PUSH,
+                &crate::events::PluginPushPayload {
+                    plugin_id: push_plugin_id.clone(),
+                    message,
+                },
+            );
+        };
+        match consume_stream(&provider, request, cancel) {
+            Ok(mut rx) => {
+                while let Some(event) = rx.recv().await {
+                    match event {
+                        LlmEvent::Delta(text) => {
+                            push(rmccc_core::rmccc_plugin::ui::llm_delta_message(
+                                &push_stream_id,
+                                &text,
+                            ));
+                        }
+                        LlmEvent::Done { .. } => break,
+                        LlmEvent::Error(e) => {
+                            push(rmccc_core::rmccc_plugin::ui::llm_error_message(
+                                &push_stream_id,
+                                &e.to_string(),
+                            ));
+                            return;
+                        }
+                        LlmEvent::Usage { .. } => {}
+                    }
+                }
+                push(rmccc_core::rmccc_plugin::ui::llm_done_message(
+                    &push_stream_id,
+                ));
+            }
+            Err(e) => {
+                push(rmccc_core::rmccc_plugin::ui::llm_error_message(
+                    &push_stream_id,
+                    &e,
+                ));
+            }
+        }
+    });
+    Ok(json!({ "streamId": stream_id }))
+}
+
+/// 每插件滑动窗口限流；窗口 60s。
+fn acquire_llm_slot(state: &AppState, plugin_id: &str) -> bool {
+    use std::time::Instant;
+    let mut rates = state
+        .llm_rate
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let now = Instant::now();
+    let window = rates.entry(plugin_id.to_string()).or_default();
+    while let Some(front) = window.front() {
+        if now.duration_since(*front) > Duration::from_secs(60) {
+            window.pop_front();
+        } else {
+            break;
+        }
+    }
+    if window.len() >= LLM_PLUGIN_RPM {
+        return false;
+    }
+    window.push_back(now);
+    true
+}
+
+/// `{messages: [{role, content}]}` 校验：role ∈ system/user/assistant，内容非空、总量受限。
+fn parse_chat_messages(params: &Value) -> Result<Vec<rmccc_llm::ChatMessage>, BridgeError> {
+    let raw = params
+        .get("messages")
+        .and_then(Value::as_array)
+        .ok_or_else(|| {
+            BridgeError::new(BridgeErrorCode::Validation, "llm.chat 需要 messages 数组")
+        })?;
+    if raw.is_empty() {
+        return Err(BridgeError::new(
+            BridgeErrorCode::Validation,
+            "messages 不能为空",
+        ));
+    }
+    if raw.len() > MAX_LLM_MESSAGES {
+        return Err(BridgeError::new(
+            BridgeErrorCode::TooLarge,
+            format!("messages 超过 {MAX_LLM_MESSAGES} 条上限"),
+        ));
+    }
+    let mut messages = Vec::with_capacity(raw.len());
+    let mut total_bytes = 0usize;
+    for (index, item) in raw.iter().enumerate() {
+        let role = item.get("role").and_then(Value::as_str).ok_or_else(|| {
+            BridgeError::new(
+                BridgeErrorCode::Validation,
+                format!("messages[{index}].role 缺失"),
+            )
+        })?;
+        let content = item.get("content").and_then(Value::as_str).ok_or_else(|| {
+            BridgeError::new(
+                BridgeErrorCode::Validation,
+                format!("messages[{index}].content 缺失"),
+            )
+        })?;
+        if content.is_empty() {
+            return Err(BridgeError::new(
+                BridgeErrorCode::Validation,
+                format!("messages[{index}].content 不能为空"),
+            ));
+        }
+        total_bytes += content.len();
+        if total_bytes > MAX_LLM_REPLY_BYTES {
+            return Err(BridgeError::new(
+                BridgeErrorCode::TooLarge,
+                "messages 总量超过上限",
+            ));
+        }
+        let message = match role {
+            "system" => rmccc_llm::ChatMessage::system(content),
+            "user" => rmccc_llm::ChatMessage::user(content),
+            "assistant" => rmccc_llm::ChatMessage {
+                role: rmccc_llm::ChatRole::Assistant,
+                content: content.to_string(),
+            },
+            other => {
+                return Err(BridgeError::new(
+                    BridgeErrorCode::Validation,
+                    format!("messages[{index}].role 非法: {other}"),
+                ))
+            }
+        };
+        messages.push(message);
+    }
+    Ok(messages)
+}
+
+/// 非流式：消费流直到 Done，拼接全部增量。
+async fn collect_stream(
+    provider: &rmccc_llm::OpenAiCompatibleProvider,
+    request: rmccc_llm::ChatRequest,
+    cancel: rmccc_llm::CancelToken,
+) -> Result<String, String> {
+    let mut rx = consume_stream(provider, request, cancel)?;
+    use rmccc_llm::LlmEvent;
+    let mut text = String::new();
+    while let Some(event) = rx.recv().await {
+        match event {
+            LlmEvent::Delta(delta) => {
+                if text.len() + delta.len() > MAX_LLM_REPLY_BYTES {
+                    return Err("回复超过上限".into());
+                }
+                text.push_str(&delta);
+            }
+            LlmEvent::Done { .. } => break,
+            LlmEvent::Error(e) => return Err(e.to_string()),
+            LlmEvent::Usage { .. } => {}
+        }
+    }
+    Ok(text)
+}
+
+/// 启动一次流式请求，返回事件接收端。
+fn consume_stream(
+    provider: &rmccc_llm::OpenAiCompatibleProvider,
+    request: rmccc_llm::ChatRequest,
+    cancel: rmccc_llm::CancelToken,
+) -> Result<rmccc_llm::LlmStream, String> {
+    use rmccc_llm::LlmProvider as _;
+    provider
+        .stream_chat(request, cancel)
+        .map_err(|e| e.to_string())
 }

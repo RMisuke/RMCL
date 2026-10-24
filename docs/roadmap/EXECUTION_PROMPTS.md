@@ -1,7 +1,7 @@
 # RMCCC 执行提示词集（Agent 启动用）
 
 > 本文件是一套**可复制**的提示词，用于在新的 Agent session 中快速定向、判断优先级、按切片执行。
-> 它服从 [`AGENTS.md`](../../AGENTS.md)、[`RMCCC_PLUGIN_PLATFORM_ARCHITECTURE_GUIDE.md`](../RMCCC_PLUGIN_PLATFORM_ARCHITECTURE_GUIDE.md) §1.4/§5.7，并锚定 [`AUDIT_2026-10-20.md`](../AUDIT_2026-10-20.md) 的条目。
+> 它服从 [`AGENTS.md`](../../AGENTS.md)、[`RMCCC_PLUGIN_PLATFORM_ARCHITECTURE_GUIDE.md`](../RMCCC_PLUGIN_PLATFORM_ARCHITECTURE_GUIDE.md) §1.4/§5.7，并锚定 [`AUDIT_2026-10-20.md`](../audits/AUDIT_2026-10-20.md) 的条目。
 > 维护：随阶段推进更新"当前优先级"块；切片协议与 deferred 规则长期不变。
 
 ---
@@ -14,7 +14,7 @@
 1. `git status --short` + `git log --oneline -5`，确认工作区干净、不覆盖未提交改动。
 2. 读 `AGENTS.md`（顶层约束 + Session Startup）。
 3. 读 `docs/roadmap/README.md` 与 `docs/roadmap/00_ROADMAP_OVERVIEW.md`，确认当前细化阶段与里程碑。
-4. 读 `docs/AUDIT_2026-10-20.md` §1（一页纸结论）、§14（测试现状）、§15（技术债台账）、§15.5（环境回归），确认当前事实。
+4. 读 `docs/audits/AUDIT_2026-10-20.md` §1（一页纸结论）、§14（测试现状）、§15（技术债台账）、§15.5（环境回归），确认当前事实。
 5. 若任务涉及插件/Agent/平台适配，读 `docs/RMCCC_PLUGIN_PLATFORM_ARCHITECTURE_GUIDE.md`，特别注意：
    - §1.4：当前本机仅 macOS Apple Silicon；不跨平台编译、不做 Windows/Linux 实测；非 macOS 验收一律 deferred。
    - §5.7：平台特定能力（文件系统/进程/凭据/shell/Java 等）归档到平台适配层，启动器核心只定义 trait/DTO，不内联 #[cfg] 执行。
@@ -122,7 +122,7 @@ deferred 标记规则：
 - 复跑五门禁：cargo fmt --check / clippy×2 / cargo test --workspace / pnpm typecheck+build。
 - 失败一律记录真实输出，本轮不修代码（修复属后续切片）。
 - 产出：复跑结果表（命令 / 结果 / 日期），区分环境问题与代码问题。
-- 更新 docs/AUDIT_2026-10-20.md §14.1 复跑日期与结果；§15.5 环境现状。
+- 更新 docs/audits/AUDIT_2026-10-20.md §14.1 复跑日期与结果；§15.5 环境现状。
 - 平台：仅 macOS；Windows/Linux 体积与烟测 = deferred。
 - 完成后停下，报告结果，不自动进 0.3。
 ```
@@ -165,5 +165,5 @@ deferred 标记规则：
 
 - 每轮只选 Prompt 4 中的一个切片（或 Prompt 1 中一个切片），独立 PR。
 - Prompt 0 每次必做；Prompt 2 每轮通用；Prompt 3 每轮自查。
-- 切片完成后：回填 `docs/PROJECT_STATUS.md` 一轮记录；在 `docs/AUDIT_2026-10-20.md` 对应 P1-x/P2-x 销账；更新对应 `docs/roadmap/0x_*.md` 的状态标记。
+- 切片完成后：回填 `docs/PROJECT_STATUS.md` 一轮记录；在 `docs/audits/AUDIT_2026-10-20.md` 对应 P1-x/P2-x 销账；更新对应 `docs/roadmap/0x_*.md` 的状态标记。
 - 阶段切换时更新本文件 Prompt 1 的"当前优先级"块。

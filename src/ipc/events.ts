@@ -24,4 +24,9 @@ export const EVENTS = {
 
   // Instances
   INSTANCES_REFRESHED: "instances://refreshed",
+
+  // AI service (ADR-013): streaming log-analysis events, keyed by analysis_id
+  AI_DELTA: "ai://delta",
+  AI_DONE: "ai://done",
+  AI_ERROR: "ai://error",
 } as const;

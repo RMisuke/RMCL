@@ -33,15 +33,20 @@ RMCL/
 ├── AGENTS.md              ← 你正在读的文件
 ├── docs/
 │   ├── ARCHITECTURE.md            # 完整架构设计（最高权威）
+│   ├── AI_AND_MCP_ARCHITECTURE.md # AI 服务 + 外部 Agent 控制（ADR-013，S1–S7 切片与进度）
 │   ├── AI_EDITING_RULES.md        # AI 编码规范
 │   ├── DEVELOPMENT_PLAN.md        # 开发路线图（Phase 1–5）
-│   ├── AUDIT_2026-10-20.md        # 横切全景 + 技术债台账
 │   ├── PROJECT_STATUS.md          # 轮次变更记录
 │   ├── RMCCC_PLUGIN_PLATFORM_ARCHITECTURE_GUIDE.md  # 插件平台目标架构（含 §1.4 当前 macOS-only 约束、§5.7 平台适配层）
-│   ├── adr/                       # 架构决策记录（ADR-002–007、009–011 accepted；001/012 proposed）
-│   └── roadmap/                   # 细化执行计划（Phase 0–7 + 平台适配）
+│   ├── README.md                  # docs 分类索引
+│   ├── adr/                       # 架构决策记录（ADR-002–007、009–011、013 accepted；001/012 proposed）
+│   ├── audits/                    # 全量审计 + 增量台账（AUDIT_2026-10-20 / 10-23，agent 部分已标注 ADR-013 取代）
+│   ├── guides/                    # 运维手册 / 插件编写指南
+│   ├── roadmap/                   # 细化执行计划（Phase 0–7 + 平台适配）
+│   ├── ui-design/                 # 前端重设计（15 份，前端重构依据）
+│   └── archive/                   # 历史快照（仅问题溯源）
 ├── schemas/                # 公共协议 schema（manifest / dashboard-layout / plugin-ui-bridge）
-├── crates/                # Rust workspace crates（含 rmccc-platform / rmccc-plugin / rmccc-dashboard / rmccc-logic / rmccc-agent）
+├── crates/                # Rust workspace crates（含 rmccc-platform / rmccc-plugin / rmccc-dashboard / rmccc-logic / rmccc-llm / rmccc-agent[ADR-013 瘦身]）
 ├── examples/plugins/      # 插件样例（theme-midnight / server-dashboard：隔离 UI 卡片）
 ├── plugin-sdk/            # 第三方插件 SDK（plugin-api / plugin-ui / 模板 / 校验打包工具）
 ├── src-tauri/             # Tauri 应用层（IPC 命令）
@@ -57,7 +62,8 @@ RMCL/
 1. 读取 `docs/DEVELOPMENT_PLAN.md` 确认当前 Phase 和进度
 2. 读取 `docs/ARCHITECTURE.md` 中与当前任务相关的章节
 3. 读取 `docs/roadmap/README.md` 与 `00_ROADMAP_OVERVIEW.md`，确认当前细化阶段
-4. 若涉及插件/Agent/平台适配，读 `docs/RMCCC_PLUGIN_PLATFORM_ARCHITECTURE_GUIDE.md`（注意 §1.4 当前 macOS-only 约束、§5.7 平台适配层归属规则）
-5. 遵循 `docs/AI_EDITING_RULES.md` 中的所有规范
+4. 若涉及插件/平台适配，读 `docs/RMCCC_PLUGIN_PLATFORM_ARCHITECTURE_GUIDE.md`（注意 §1.4 当前 macOS-only 约束、§5.7 平台适配层归属规则）；若涉及 AI/MCP，读 `docs/AI_AND_MCP_ARCHITECTURE.md`（ADR-013：内部轻量 AI + 外部 Agent 经 MCP，**不做内建 Agent**）
+5. 若做前端工作，读 `docs/ui-design/`（前端重构的唯一设计依据）
+6. 遵循 `docs/AI_EDITING_RULES.md` 中的所有规范
 
 > **当前阶段约束（服从插件平台指南 §1.4）**：本机仅 macOS Apple Silicon 开发；不在本机做跨平台交叉编译或 Windows/Linux 实测。架构须保留全平台能力：平台差异集中在适配层（`docs/roadmap/PLATFORM_ADAPTATION.md`），领域核心只定义 trait/DTO，不内联 `#[cfg]` 执行分支。非 macOS 的"必须验证"项一律记 deferred / release-blocked。

@@ -59,7 +59,7 @@ RMCCC 目标平台为 macOS Apple Silicon、macOS Intel、Windows x64、Linux x6
 
 ## 迁移影响
 
-- 仅文档与 CI：需在 `README.md`、`OPERATIONS.md`、发布说明中写明最低版本。
+- 仅文档与 CI：需在 `README.md`、`docs/guides/OPERATIONS.md`、发布说明中写明最低版本。
 - 无数据迁移。
 
 ## 跨平台验证方式

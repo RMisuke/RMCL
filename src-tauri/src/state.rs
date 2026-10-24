@@ -32,8 +32,20 @@ pub struct AppState {
     /// blocking thread.
     pub logic: Arc<std::sync::Mutex<rmccc_logic::LogicRunner>>,
 
-    /// 当前 Agent 回合的取消令牌（Phase 6.5）。同一时刻最多一个回合在跑。
-    pub agent_cancel: Arc<std::sync::Mutex<Option<rmccc_agent::CancelToken>>>,
+    /// 进行中的 AI 日志分析（analysis_id → 取消令牌，ADR-013 S2）。
+    /// 并发上限见 `commands/ai.rs`；任务结束自摘除。
+    pub ai_cancels:
+        Arc<std::sync::Mutex<std::collections::HashMap<String, rmccc_llm::CancelToken>>>,
+
+    /// MCP 服务器句柄（ADR-013 S4/S5）。默认关闭，`mcp_set_enabled` 启停。
+    pub mcp: Arc<crate::mcp::McpHandle>,
+
+    /// 插件桥 `llm.chat` 的限流状态（S6：每插件 6 次/分钟）。
+    pub llm_rate: Arc<
+        std::sync::Mutex<
+            std::collections::HashMap<String, std::collections::VecDeque<std::time::Instant>>,
+        >,
+    >,
 }
 
 impl AppState {
@@ -50,6 +62,12 @@ impl AppState {
             .build()
             .unwrap_or_else(|_| reqwest::Client::new());
 
+        let mcp = Arc::new(crate::mcp::McpHandle::new(
+            data_dir,
+            core.platform.fs.clone(),
+        )?);
+        mcp.set_app(app_handle.clone());
+
         Ok(Self {
             core: Arc::new(RwLock::new(core)),
             http_client,
@@ -57,7 +75,9 @@ impl AppState {
             app_handle,
             running_games: Arc::new(dashmap::DashMap::new()),
             logic: Arc::new(std::sync::Mutex::new(rmccc_logic::LogicRunner::new())),
-            agent_cancel: Arc::new(std::sync::Mutex::new(None)),
+            ai_cancels: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
+            mcp,
+            llm_rate: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
         })
     }
 }

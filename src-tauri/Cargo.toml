@@ -20,6 +20,7 @@ rmccc-mods = { workspace = true }
 rmccc-profile = { workspace = true }
 rmccc-logic = { workspace = true }
 rmccc-agent = { workspace = true }
+rmccc-llm = { workspace = true }
 
 # External
 serde = { workspace = true }
@@ -30,6 +31,9 @@ tracing = { workspace = true }
 chrono = { workspace = true }
 uuid = { workspace = true }
 reqwest = { workspace = true }
+hyper = { workspace = true }
+hyper-util = { workspace = true }
+http-body-util = { workspace = true }
 ts-rs = { workspace = true }
 
 # Tauri

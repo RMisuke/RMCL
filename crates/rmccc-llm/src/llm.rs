@@ -1,19 +1,24 @@
-//! LLM provider adapter (Phase 6.1, 指南 §10.4).
+//! LLM provider adapter（OpenAI 兼容，ADR-013「轻 AI」内核）。
 //!
 //! # 为什么是"adapter + 事件流"而不是直接调 HTTP
 //!
-//! 上层（未来的 Planning/Execution Loop，Phase 6.5）需要三件与供应商无关的东西：
+//! 调用方（内置日志分析、插件 `llm.chat`、未来的 MCP 日志工具）需要三件
+//! 与供应商无关的东西：
 //!
 //! 1. **统一的流式事件**：`Delta` / `Usage` / `Done` / `Error`，不暴露 SSE 细节；
 //! 2. **统一的中止、超时、重试、限流**语义——尤其"取消"必须能打断正在收的流；
-//! 3. **能力声明**（上下文长度、是否支持流式/工具），供 loop 做预算与降级。
+//! 3. **模型探测**（[`probe_models`]），供设置页"输入地址 → 自动检测可用模型"。
 //!
-//! 本模块只实现 **OpenAI 兼容** 的 chat completions 流（OpenAI / DeepSeek / Ollama /
-//! llama.cpp 等都遵循同一形状）。新增供应商 = 新增一个 [`LlmProvider`] 实现，不改上层。
+//! 本模块只实现 **OpenAI 兼容** 的 chat completions 流（OpenAI / DeepSeek / GLM /
+//! Ollama / llama.cpp 等都遵循同一形状）。新增供应商 = 新增一个 [`LlmProvider`]
+//! 实现，不改上层。
+//!
+//! 明确**不做**（ADR-013）：多轮编排、工具调用（function calling 透传）、
+//! 会话存储、Token 计费——那些属于外部 Agent 工具的职责。
 //!
 //! # 安全
 //!
-//! - API Key 由 [`rmccc_agent::credentials`] 解密后传入，不在本模块落盘或打印。
+//! - API Key 由 [`crate::credentials`] 解密后传入，不在本模块落盘或打印。
 //! - 端点策略（HTTPS / loopback HTTP）在构造时校验一次（ADR-009 决策 5）。
 //! - 模型输出一律视为**不可信文本**：本模块不做 Markdown/HTML 渲染。
 
@@ -393,6 +398,62 @@ fn chat_completions_url(base: &Url) -> Result<Url, LlmError> {
     }
     Url::parse(&format!("{trimmed}/chat/completions"))
         .map_err(|e| LlmError::Validation(e.to_string()))
+}
+
+/// 探测端点的可用模型列表（`GET {base}/models`，OpenAI 兼容）。
+///
+/// 设置页"输入 API 地址 → 自动检测可用模型"用：不需要已保存的模型，
+/// 也不写任何状态。`api_key` 可为空串（本地模型端点通常不需要鉴权）。
+/// 返回按字典序排序去重的模型 id（部分网关返回顺序不稳定）。
+pub async fn probe_models(base_url: &str, api_key: &str) -> Result<Vec<String>, LlmError> {
+    let base = validate_endpoint(base_url).map_err(|e| LlmError::Validation(e.to_string()))?;
+    let endpoint = models_url(&base)?;
+    let client = reqwest::Client::builder()
+        .connect_timeout(Duration::from_secs(10))
+        .timeout(Duration::from_secs(30))
+        .build()
+        .map_err(|e| LlmError::Http(e.to_string()))?;
+    let response = client
+        .get(endpoint)
+        .bearer_auth(api_key)
+        .send()
+        .await
+        .map_err(|e| LlmError::Http(e.to_string()))?;
+    let status = response.status();
+    if !status.is_success() {
+        let text = response.text().await.unwrap_or_default();
+        return Err(LlmError::Status {
+            status: status.as_u16(),
+            body: truncate(&text, 512),
+        });
+    }
+    let value: Value = response
+        .json()
+        .await
+        .map_err(|e| LlmError::InvalidResponse(e.to_string()))?;
+    let mut ids: Vec<String> = value
+        .get("data")
+        .and_then(Value::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(|item| item.get("id").and_then(Value::as_str))
+                .map(str::to_string)
+                .collect()
+        })
+        .unwrap_or_default();
+    ids.sort();
+    ids.dedup();
+    Ok(ids)
+}
+
+/// 拼接 `…/models`；已带该后缀则原样使用。
+fn models_url(base: &Url) -> Result<Url, LlmError> {
+    let trimmed = base.as_str().trim_end_matches('/');
+    if trimmed.ends_with("/models") {
+        return Url::parse(trimmed).map_err(|e| LlmError::Validation(e.to_string()));
+    }
+    Url::parse(&format!("{trimmed}/models")).map_err(|e| LlmError::Validation(e.to_string()))
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -981,6 +1042,60 @@ mod tests {
             "https://api.openai.com/v1/chat/completions"
         );
         let again = chat_completions_url(&joined).expect("again");
+        assert_eq!(again, joined);
+    }
+
+    /// 极简一次性 JSON 服务器：读完请求后返回固定响应。
+    fn json_server(status: u16, body: &'static str) -> String {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
+        let addr = listener.local_addr().expect("addr");
+        std::thread::spawn(move || {
+            let Ok((mut socket, _)) = listener.accept() else {
+                return;
+            };
+            let mut buf = [0u8; 8192];
+            let _ = socket.read(&mut buf);
+            let reason = if status == 200 { "OK" } else { "Error" };
+            let response = format!(
+                "HTTP/1.1 {status} {reason}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len()
+            );
+            let _ = socket.write_all(response.as_bytes());
+        });
+        format!("http://{addr}/v1")
+    }
+
+    #[tokio::test]
+    async fn probe_models_lists_sorts_and_dedups() {
+        let base = json_server(
+            200,
+            r#"{"data":[{"id":"zeta"},{"id":"alpha"},{"id":"alpha"}]}"#,
+        );
+        let models = probe_models(&base, "sk-test").await.expect("models");
+        assert_eq!(models, vec!["alpha".to_string(), "zeta".to_string()]);
+    }
+
+    #[tokio::test]
+    async fn probe_models_surfaces_http_errors() {
+        let base = json_server(401, r#"{"error":"bad key"}"#);
+        let error = probe_models(&base, "sk-wrong").await.expect_err("401");
+        assert!(matches!(error, LlmError::Status { status: 401, .. }));
+    }
+
+    #[tokio::test]
+    async fn probe_models_rejects_non_https_remote_endpoints() {
+        let error = probe_models("http://llm.example.com/v1", "sk-a")
+            .await
+            .expect_err("endpoint policy");
+        assert!(matches!(error, LlmError::Validation(_)));
+    }
+
+    #[test]
+    fn models_url_is_idempotent() {
+        let base = Url::parse("https://api.openai.com/v1").expect("url");
+        let joined = models_url(&base).expect("joined");
+        assert_eq!(joined.as_str(), "https://api.openai.com/v1/models");
+        let again = models_url(&joined).expect("again");
         assert_eq!(again, joined);
     }
 }

@@ -128,6 +128,15 @@ pub const CAPABILITIES: &[CapabilitySpec] = &[
         executable: false,
     },
     CapabilitySpec {
+        name: "ai.chat",
+        description:
+            "调用宿主 AI 服务（OpenAI 兼容端口，ADR-013）：密钥由宿主代持，插件永远拿不到 key 本体",
+        risk: CapabilityRisk::Medium,
+        requires_hosts: false,
+        instance_scoped: false,
+        executable: true,
+    },
+    CapabilitySpec {
         name: "logic.invoke",
         description: "运行插件的只读逻辑扩展（独立 helper 进程内的 WASM，ADR-007）",
         risk: CapabilityRisk::Medium,

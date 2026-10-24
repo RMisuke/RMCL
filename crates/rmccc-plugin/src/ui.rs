@@ -99,6 +99,14 @@ pub const BRIDGE_METHODS: &[BridgeMethod] = &[
         capability: Some("network.request"),
         timeout_ms: MAX_TIMEOUT_MS,
     },
+    // ADR-013 S6：宿主 AI 服务。流式回复以 `llm.delta/done/error` 推送
+    // （见下方构造器，经前端中继进 iframe）；非流式等待完整回复，
+    // 宿主侧超时与 [`MAX_TIMEOUT_MS`] 对齐。
+    BridgeMethod {
+        name: "llm.chat",
+        capability: Some("ai.chat"),
+        timeout_ms: MAX_TIMEOUT_MS,
+    },
 ];
 
 /// 按名字查方法表；未知方法返回 `None`（调用方映射为 [`BridgeErrorCode::UnsupportedMethod`]）。
@@ -142,6 +150,8 @@ pub enum BridgeErrorCode {
     HostNotAllowed,
     /// 宿主内部错误（拿到的是非插件错误）。
     Internal,
+    /// 调用频率超限（`llm.chat` 每插件 6 次/分钟，ADR-013 S6）。
+    RateLimited,
 }
 
 impl BridgeErrorCode {
@@ -160,12 +170,13 @@ impl BridgeErrorCode {
             Self::PermissionPending => "permission_pending",
             Self::HostNotAllowed => "host_not_allowed",
             Self::Internal => "internal",
+            Self::RateLimited => "rate_limited",
         }
     }
 
     /// 是否值得重试（写进响应的 `retryable`）。
     pub fn retryable(self) -> bool {
-        matches!(self, Self::Timeout | Self::Internal)
+        matches!(self, Self::Timeout | Self::Internal | Self::RateLimited)
     }
 
     /// 映射到 IPC 错误码，让宿主 UI 用同一套错误展示。
@@ -179,6 +190,7 @@ impl BridgeErrorCode {
             Self::UnsupportedMethod => ErrorCode::ValidationError,
             Self::Timeout => ErrorCode::NetworkError,
             Self::Cancelled | Self::Internal => ErrorCode::InternalError,
+            Self::RateLimited => ErrorCode::NetworkError,
         }
     }
 }
@@ -428,6 +440,27 @@ pub fn revoke_message(capability: &str) -> Value {
     serde_json::json!({ "v": UI_API_VERSION, "type": "revoke", "capability": capability })
 }
 
+/// 宿主 → 插件的 AI 流式增量（ADR-013 S6 `llm.chat {stream:true}`）。
+pub fn llm_delta_message(stream_id: &str, text: &str) -> Value {
+    serde_json::json!({
+        "v": UI_API_VERSION, "type": "llm.delta",
+        "streamId": stream_id, "text": text,
+    })
+}
+
+/// 宿主 → 插件的 AI 流式完成通知。
+pub fn llm_done_message(stream_id: &str) -> Value {
+    serde_json::json!({ "v": UI_API_VERSION, "type": "llm.done", "streamId": stream_id })
+}
+
+/// 宿主 → 插件的 AI 流式失败通知。
+pub fn llm_error_message(stream_id: &str, message: &str) -> Value {
+    serde_json::json!({
+        "v": UI_API_VERSION, "type": "llm.error",
+        "streamId": stream_id, "message": message,
+    })
+}
+
 /// 成功的响应。
 pub fn ok_response(id: &str, result: Value) -> Value {
     serde_json::json!({ "v": UI_API_VERSION, "id": id, "ok": true, "result": result })
@@ -532,7 +565,8 @@ mod tests {
                 "theme.get",
                 "settings.get",
                 "instances.list",
-                "network.request"
+                "network.request",
+                "llm.chat"
             ]
         );
         let mut sorted = names.clone();

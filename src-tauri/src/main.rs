@@ -5,6 +5,7 @@ mod events;
 mod handlers;
 #[cfg(test)]
 mod ipc_tests;
+mod mcp;
 mod state;
 
 use rmccc_config::logging::init_logging;

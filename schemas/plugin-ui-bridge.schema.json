@@ -24,6 +24,15 @@
     },
     {
       "$ref": "#/$defs/hostRevoke"
+    },
+    {
+      "$ref": "#/$defs/hostLlmDelta"
+    },
+    {
+      "$ref": "#/$defs/hostLlmDone"
+    },
+    {
+      "$ref": "#/$defs/hostLlmError"
     }
   ],
   "$defs": {
@@ -95,7 +104,8 @@
         "permission_denied",
         "permission_pending",
         "host_not_allowed",
-        "internal"
+        "internal",
+        "rate_limited"
       ]
     },
     "wireError": {
@@ -141,7 +151,8 @@
             "theme.get",
             "settings.get",
             "instances.list",
-            "network.request"
+            "network.request",
+            "llm.chat"
           ]
         },
         "params": {
@@ -310,6 +321,77 @@
         },
         "id": {
           "$ref": "#/$defs/requestId"
+        }
+      }
+    },
+    "hostLlmDelta": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "v",
+        "type",
+        "streamId",
+        "text"
+      ],
+      "properties": {
+        "v": {
+          "$ref": "#/$defs/apiVersion"
+        },
+        "type": {
+          "const": "llm.delta"
+        },
+        "streamId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "text": {
+          "type": "string"
+        }
+      }
+    },
+    "hostLlmDone": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "v",
+        "type",
+        "streamId"
+      ],
+      "properties": {
+        "v": {
+          "$ref": "#/$defs/apiVersion"
+        },
+        "type": {
+          "const": "llm.done"
+        },
+        "streamId": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "hostLlmError": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "v",
+        "type",
+        "streamId",
+        "message"
+      ],
+      "properties": {
+        "v": {
+          "$ref": "#/$defs/apiVersion"
+        },
+        "type": {
+          "const": "llm.error"
+        },
+        "streamId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "message": {
+          "type": "string"
         }
       }
     }

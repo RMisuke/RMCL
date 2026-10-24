@@ -1,13 +1,15 @@
-//! 只读 Mod 兼容性工具（Phase 6.6，指南 §10.6）。
+//! 实例 Mod 依赖诊断与补装（**纯逻辑，不依赖 AI**；ADR-013 去 Agent 化）。
 //!
 //! 首个端到端场景："检查这个实例的模组兼容性并修复缺失前置"。
-//! 本模块只做**只读**的前半段：
+//! 本模块实现其中的全部确定性逻辑：
 //!
 //! 1. 扫描实例 `mods/` 下的 jar，解析 `fabric.mod.json` 的 `depends` / `breaks`；
 //! 2. 生成 [`DependencyReport`]（已装 / 依赖 / 缺失必需 / 冲突 / 未解析）；
-//! 3. 生成 [`ModInstallPlan`]（`dry_run = true`，`requires_confirmation = true`），**不执行写入**。
+//! 3. 生成 [`ModInstallPlan`]（dry-run 计划，供 UI / MCP 调用方向用户展示）；
+//! 4. [`apply_missing_dependencies`] 执行补装：执行前**重新扫描**（"用户确认 +
+//!    Core 再校验"），把仍缺失的必需前置交给 [`PlanApplier`]（宿主注入）落地。
 //!
-//! 由此 [`rmccc_mods::ModDependency`] 第一次有了真实消费方（审计 P3-2）。
+//! 由此 [`rmccc_mods::ModDependency`] 有了真实消费方（审计 P3-2）。
 //!
 //! # 覆盖范围
 //!
@@ -18,27 +20,25 @@
 use rmccc_error::{Result, RmcccError};
 use rmccc_mods::{DependencyType, ModDependency};
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs::File;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use ts_rs::TS;
 use zip::ZipArchive;
 
-use crate::tools::{
-    object_schema, AgentTool, AgentToolDescriptor, ConfirmationPolicy, RiskLevel, ToolRegistry,
-};
-
 /// Fabric 元数据来源；`Unsupported` 表示未解析（不是"无依赖"）。
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "snake_case")]
+#[ts(export_to = "types.ts")]
 pub enum MetadataSource {
     FabricJson,
     Unsupported,
 }
 
 /// 已安装 Mod 的最小元数据。
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export_to = "types.ts")]
 pub struct InstalledMod {
     pub file: String,
     pub mod_id: String,
@@ -48,7 +48,8 @@ pub struct InstalledMod {
 }
 
 /// 计划中的一条依赖（不执行）。
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export_to = "types.ts")]
 pub struct PlannedDependency {
     pub mod_id: String,
     pub constraint: Option<String>,
@@ -58,7 +59,8 @@ pub struct PlannedDependency {
 }
 
 /// 已装 Mod 声明的不兼容项。
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export_to = "types.ts")]
 pub struct ModConflict {
     pub mod_id: String,
     pub declared_by: String,
@@ -66,7 +68,8 @@ pub struct ModConflict {
 }
 
 /// 只读扫描结果。
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export_to = "types.ts")]
 pub struct DependencyReport {
     pub mods: Vec<InstalledMod>,
     /// 所有声明出的依赖（含 optional / incompatible），已消费 [`ModDependency`]。
@@ -77,8 +80,9 @@ pub struct DependencyReport {
     pub unparsed: Vec<String>,
 }
 
-/// 安装计划：**永远 dry-run**，写操作由 Phase 6.5 的审批链路接手。
-#[derive(Debug, Clone, Serialize, Deserialize)]
+/// 安装计划：**永远 dry-run**，是否执行由调用方（GUI 确认 / MCP 确认流）决定。
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export_to = "types.ts")]
 pub struct ModInstallPlan {
     pub dry_run: bool,
     pub requires_confirmation: bool,
@@ -261,97 +265,21 @@ pub fn plan_from_report(report: &DependencyReport, mods_dir: &Path) -> ModInstal
     }
 }
 
-/// `mods.apply_plan` —— 第一个写工具（指南 §10.6 旗舰场景）。
+/// 补装缺失必需依赖（原 Phase 6.5 `mods.apply_plan` 写工具的去 Agent 化形态）。
 ///
-/// 模型**不提供任何参数**：工具自己重新扫描 mods 目录、重算缺失依赖，
-/// 生成 dry-run 计划作为审批载荷；审批通过后 `execute` 再次扫描
-/// （"用户确认 + Core 再校验"）并把**仍然缺失**的依赖交给
-/// [`PlanApplier`] 落地。文件写入只发生在批准后的这一次调用里。
-struct ApplyPlanTool {
-    mods_dir: PathBuf,
-    applier: Arc<dyn PlanApplier>,
-}
-
-impl AgentTool for ApplyPlanTool {
-    fn descriptor(&self) -> &AgentToolDescriptor {
-        use std::sync::OnceLock;
-        static DESCRIPTOR: OnceLock<AgentToolDescriptor> = OnceLock::new();
-        DESCRIPTOR.get_or_init(|| AgentToolDescriptor {
-            id: "mods.apply_plan".into(),
-            plugin_id: None,
-            name: "安装缺失依赖".into(),
-            description: "重新扫描实例 mods 目录，把仍缺失的 Fabric 必需前置解析并下载安装；                          需要用户批准，执行前会再次校验。"
-                .into(),
-            input_schema: empty_input_schema(),
-            output_schema: json!({ "type": "object" }),
-            required_capabilities: vec![],
-            risk_level: RiskLevel::ReversibleWrite,
-            timeout_ms: 60_000,
-            confirmation_policy: ConfirmationPolicy::Always,
-        })
+/// **执行前重新扫描**（"用户确认 + Core 再校验"）：确认期间实例状态可能变化，
+/// 以此刻扫描出的仍缺失项为准；没有缺失则直接返回空报告。
+/// 文件写入只发生在 [`PlanApplier`]（宿主注入）内部。
+pub fn apply_missing_dependencies(
+    mods_dir: &Path,
+    applier: &dyn PlanApplier,
+) -> Result<AppliedPlanReport> {
+    ensure_dir(mods_dir)?;
+    let report = scan_instance_mods(mods_dir)?;
+    if report.missing_required.is_empty() {
+        return Ok(AppliedPlanReport::default());
     }
-
-    fn approval_payload(&self, _input: &Value) -> Result<Option<Value>> {
-        ensure_dir(&self.mods_dir)?;
-        let report = scan_instance_mods(&self.mods_dir)?;
-        let plan = plan_from_report(&report, &self.mods_dir);
-        Ok(Some(json!({ "plan": plan })))
-    }
-
-    fn execute(&self, _input: &Value) -> Result<Value> {
-        ensure_dir(&self.mods_dir)?;
-        // Core 再校验：审批期间实例状态可能变化，以此刻扫描为准。
-        let report = scan_instance_mods(&self.mods_dir)?;
-        if report.missing_required.is_empty() {
-            return Ok(json!({
-                "installed": [],
-                "failed": [],
-                "attempted": [],
-                "message": "依赖在批准后已全部满足，无需安装",
-            }));
-        }
-        let attempted: Vec<String> = report
-            .missing_required
-            .iter()
-            .map(|d| d.mod_id.clone())
-            .collect();
-        let applied = self
-            .applier
-            .apply(&self.mods_dir, &report.missing_required)?;
-        Ok(json!({
-            "installed": applied.installed,
-            "failed": applied.failed,
-            "attempted": attempted,
-        }))
-    }
-}
-
-/// 默认只读工具集（Phase 6.6）：已装 Mod、依赖扫描、已装版本。
-///
-/// 工具的目录在构造时固定为 [`AgentRoots`]，输入 schema 为空对象——
-/// 模型传任何参数都会被拒绝。
-pub fn read_only_registry(roots: &AgentRoots) -> Result<ToolRegistry> {
-    let mut registry = ToolRegistry::new();
-    registry.register(std::sync::Arc::new(InstalledModsTool {
-        mods_dir: roots.mods_dir.clone(),
-    }))?;
-    registry.register(std::sync::Arc::new(DependencyScanTool {
-        mods_dir: roots.mods_dir.clone(),
-    }))?;
-    registry.register(std::sync::Arc::new(InstalledVersionsTool {
-        versions_dir: roots.versions_dir.clone(),
-    }))?;
-    Ok(registry)
-}
-
-/// 完整工具集 = 只读工具 + `mods.apply_plan` 写工具（审批链路，指南 §10.6）。
-pub fn full_registry(roots: &AgentRoots, applier: Arc<dyn PlanApplier>) -> Result<ToolRegistry> {
-    let mut registry = read_only_registry(roots)?;
-    registry.register(std::sync::Arc::new(ApplyPlanTool {
-        mods_dir: roots.mods_dir.clone(),
-        applier,
-    }))?;
-    Ok(registry)
+    applier.apply(mods_dir, &report.missing_required)
 }
 
 struct FabricMeta {
@@ -472,14 +400,15 @@ fn is_platform_dependency(mod_id: &str) -> bool {
     )
 }
 
-/// 指南 §10.6 的首个写场景执行器：把"缺失依赖 → 已安装"落地。
+/// 补装执行器：把"缺失依赖 → 已安装"落地（宿主注入，ADR-013）。
 ///
-/// Agent 侧不持有 `CoreContext`（架构约束），真正的解析（Modrinth slug /
-/// 版本匹配加载器与游戏版本）与下载写入由宿主注入实现。
-/// 实现方必须对每个 jar 做 SHA1 校验，并只写入传入的 `mods_dir`。
+/// 本 crate 不持有 `CoreContext`（架构约束），真正的解析（Modrinth slug /
+/// 版本匹配加载器与游戏版本）与下载写入由宿主实现（`src-tauri` 的
+/// `ModrinthPlanApplier`）。实现方必须对每个 jar 做 SHA1 校验，
+/// 并只写入传入的 `mods_dir`。
 ///
-/// 同步约束：`AgentTool::execute` 是同步的；宿主实现内部用
-/// `tokio::task::block_in_place` + `Handle::block_on` 桥接异步下载。
+/// 同步约束：宿主的异步下载在实现内部用 `tokio::task::block_in_place` +
+/// `Handle::block_on` 桥接。
 pub trait PlanApplier: Send + Sync {
     fn apply(
         &self,
@@ -489,7 +418,8 @@ pub trait PlanApplier: Send + Sync {
 }
 
 /// 单个依赖的安装结果。
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, TS)]
+#[ts(export_to = "types.ts")]
 pub struct AppliedMod {
     pub mod_id: String,
     pub file: String,
@@ -497,36 +427,21 @@ pub struct AppliedMod {
 }
 
 /// 单个依赖的失败原因。
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, TS)]
+#[ts(export_to = "types.ts")]
 pub struct FailedMod {
     pub mod_id: String,
     pub reason: String,
 }
 
-/// `mods.apply_plan` 的执行结果。
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+/// `apply_missing_dependencies` 的执行结果。
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, TS, Default)]
+#[ts(export_to = "types.ts")]
 pub struct AppliedPlanReport {
     pub installed: Vec<AppliedMod>,
     pub failed: Vec<FailedMod>,
     /// 执行前的重新扫描发现的仍缺失项（= installed ∪ failed 的 id 集合）。
     pub attempted: Vec<String>,
-}
-
-/// 内置只读工具的固定根目录。
-///
-/// 路径在构造时由宿主注入（ADR-010 决策 5：不扫描磁盘，只看启动器自己的
-/// 数据目录），**模型永远不提供路径**——否则接上 LLM 后就是现成的
-/// prompt-injection 全盘探测面（审计 P2-17）。
-#[derive(Debug, Clone)]
-pub struct AgentRoots {
-    pub versions_dir: PathBuf,
-    pub mods_dir: PathBuf,
-}
-
-/// 无参数输入 Schema：`{"type":"object","additionalProperties":false}`。
-/// 模型夹带任何字段（包括曾经的 `mods_dir`）都会被 schema 拒绝。
-fn empty_input_schema() -> Value {
-    object_schema(json!({}), &[])
 }
 
 fn ensure_dir(path: &Path) -> Result<()> {
@@ -537,129 +452,6 @@ fn ensure_dir(path: &Path) -> Result<()> {
         )));
     }
     Ok(())
-}
-
-fn descriptor(
-    id: &str,
-    name: &str,
-    description: &str,
-    input_schema: Value,
-    output_schema: Value,
-) -> AgentToolDescriptor {
-    AgentToolDescriptor {
-        id: id.into(),
-        plugin_id: None,
-        name: name.into(),
-        description: description.into(),
-        input_schema,
-        output_schema,
-        required_capabilities: vec![],
-        risk_level: RiskLevel::ReadOnly,
-        timeout_ms: 5_000,
-        confirmation_policy: ConfirmationPolicy::Never,
-    }
-}
-
-/// `mods.installed` — 列出实例已装 Mod 的最小元数据。
-struct InstalledModsTool {
-    mods_dir: PathBuf,
-}
-
-impl AgentTool for InstalledModsTool {
-    fn descriptor(&self) -> &AgentToolDescriptor {
-        use std::sync::OnceLock;
-        static DESCRIPTOR: OnceLock<AgentToolDescriptor> = OnceLock::new();
-        DESCRIPTOR.get_or_init(|| {
-            descriptor(
-                "mods.installed",
-                "列出已装 Mod",
-                "读取实例 mods/ 目录，返回每个 jar 的 mod id / 名称 / 版本；不修改文件。",
-                empty_input_schema(),
-                json!({ "type": "object" }),
-            )
-        })
-    }
-
-    fn execute(&self, _input: &Value) -> Result<Value> {
-        ensure_dir(&self.mods_dir)?;
-        let report = scan_instance_mods(&self.mods_dir)?;
-        Ok(json!({
-            "mods": report.mods,
-            "unparsed": report.unparsed,
-        }))
-    }
-}
-
-/// `mods.dependency_scan` — 缺失前置/冲突 + dry-run 安装计划。
-struct DependencyScanTool {
-    mods_dir: PathBuf,
-}
-
-impl AgentTool for DependencyScanTool {
-    fn descriptor(&self) -> &AgentToolDescriptor {
-        use std::sync::OnceLock;
-        static DESCRIPTOR: OnceLock<AgentToolDescriptor> = OnceLock::new();
-        DESCRIPTOR.get_or_init(|| {
-            descriptor(
-                "mods.dependency_scan",
-                "检查 Mod 依赖与冲突",
-                "解析实例内 Fabric 模组的依赖，返回缺失的必需前置、声明式不兼容与 dry-run 安装计划；不执行安装。",
-                empty_input_schema(),
-                json!({ "type": "object" }),
-            )
-        })
-    }
-
-    fn execute(&self, _input: &Value) -> Result<Value> {
-        ensure_dir(&self.mods_dir)?;
-        let report = scan_instance_mods(&self.mods_dir)?;
-        let plan = plan_from_report(&report, &self.mods_dir);
-        Ok(json!({ "report": report, "plan": plan }))
-    }
-}
-
-/// `versions.installed` — 列出 `versions/` 下的版本目录与关键文件是否存在。
-struct InstalledVersionsTool {
-    versions_dir: PathBuf,
-}
-
-impl AgentTool for InstalledVersionsTool {
-    fn descriptor(&self) -> &AgentToolDescriptor {
-        use std::sync::OnceLock;
-        static DESCRIPTOR: OnceLock<AgentToolDescriptor> = OnceLock::new();
-        DESCRIPTOR.get_or_init(|| {
-            descriptor(
-                "versions.installed",
-                "列出已装版本",
-                "扫描 versions/ 目录，返回版本 id 以及 client jar / manifest 是否存在；不下载、不修改。",
-                empty_input_schema(),
-                json!({ "type": "object" }),
-            )
-        })
-    }
-
-    fn execute(&self, _input: &Value) -> Result<Value> {
-        let dir = &self.versions_dir;
-        ensure_dir(dir)?;
-        let mut versions = Vec::new();
-        for entry in std::fs::read_dir(dir)?.flatten() {
-            let path = entry.path();
-            if !path.is_dir() {
-                continue;
-            }
-            let Some(id) = path.file_name().and_then(|name| name.to_str()) else {
-                continue;
-            };
-            let version_dir = &path;
-            versions.push(json!({
-                "id": id,
-                "has_json": version_dir.join(format!("{id}.json")).is_file(),
-                "has_jar": version_dir.join(format!("{id}.jar")).is_file(),
-            }));
-        }
-        versions.sort_by(|a, b| a["id"].as_str().cmp(&b["id"].as_str()));
-        Ok(json!({ "versions": versions }))
-    }
 }
 
 #[cfg(test)]
@@ -792,100 +584,6 @@ mod tests {
         assert!(scan_instance_mods(&missing).is_err());
     }
 
-    fn rooted_registry(dir: &Path) -> ToolRegistry {
-        read_only_registry(&AgentRoots {
-            versions_dir: dir.join("versions"),
-            mods_dir: dir.to_path_buf(),
-        })
-        .expect("registry")
-    }
-
-    #[test]
-    fn registry_exposes_three_read_only_tools() {
-        let registry = read_only_registry(&AgentRoots {
-            versions_dir: PathBuf::from("/tmp/versions"),
-            mods_dir: PathBuf::from("/tmp/mods"),
-        })
-        .expect("registry");
-        assert_eq!(registry.len(), 3);
-        for descriptor in registry.descriptors() {
-            assert_eq!(descriptor.risk_level, RiskLevel::ReadOnly);
-            assert_eq!(descriptor.confirmation_policy, ConfirmationPolicy::Never);
-        }
-    }
-
-    #[test]
-    fn dependency_tool_returns_plan_without_writing() {
-        let dir = temp_dir("tool");
-        write_jar(
-            &dir,
-            "a.jar",
-            Some(r#"{"id":"a","version":"1","depends":{"missing-lib":">=2"}}"#),
-        );
-        let before: Vec<_> = std::fs::read_dir(&dir)
-            .expect("read")
-            .flatten()
-            .map(|e| e.file_name())
-            .collect();
-        let registry = rooted_registry(&dir);
-        let result = registry
-            .invoke("mods.dependency_scan", &json!({}))
-            .expect("invoke");
-        assert!(result.ok);
-        assert_eq!(result.output["plan"]["dry_run"], true);
-        assert_eq!(result.output["plan"]["requires_confirmation"], true);
-        assert_eq!(
-            result.output["report"]["missing_required"][0]["mod_id"],
-            "missing-lib"
-        );
-        let after: Vec<_> = std::fs::read_dir(&dir)
-            .expect("read")
-            .flatten()
-            .map(|e| e.file_name())
-            .collect();
-        assert_eq!(before.len(), after.len(), "scan must not create files");
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    #[test]
-    fn tools_accept_no_input_and_reject_any_path_from_the_model() {
-        let dir = temp_dir("roots");
-        // 指向不存在的目录：空对象输入可到达工具并得到目录错误。
-        let registry = read_only_registry(&AgentRoots {
-            versions_dir: dir.join("versions"),
-            mods_dir: dir.join("missing-mods"),
-        })
-        .expect("registry");
-        assert!(registry.invoke("mods.installed", &json!({})).is_err());
-        // 模型夹带的任何路径参数都被 schema 拒绝（P2-17）。
-        assert!(registry
-            .invoke("mods.installed", &json!({ "mods_dir": "/tmp" }))
-            .is_err());
-        assert!(registry
-            .invoke("mods.installed", &json!({ "extra": true }))
-            .is_err());
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    #[test]
-    fn tools_use_injected_roots_not_model_supplied_paths() {
-        let dir = temp_dir("injected");
-        write_jar(&dir, "a.jar", Some(r#"{"id":"a","version":"1"}"#));
-        std::fs::create_dir_all(dir.join("versions/1.20.4")).expect("versions");
-        let registry = rooted_registry(&dir);
-
-        let mods = registry
-            .invoke("mods.installed", &json!({}))
-            .expect("invoke");
-        assert_eq!(mods.output["mods"][0]["mod_id"], "a");
-
-        let versions = registry
-            .invoke("versions.installed", &json!({}))
-            .expect("invoke");
-        assert_eq!(versions.output["versions"][0]["id"], "1.20.4");
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
     #[test]
     fn unparsed_jar_does_not_satisfy_dependencies() {
         // P2-28 回归：名为 indium.jar 的无元数据 jar（Forge mod 或损坏文件）
@@ -897,41 +595,96 @@ mod tests {
             "sodium.jar",
             Some(r#"{"id":"sodium","version":"0.5","depends":{"indium":">=1.0"}}"#),
         );
-        let registry = rooted_registry(&dir);
-        let result = registry
-            .invoke("mods.dependency_scan", &json!({}))
-            .expect("invoke");
+        let report = scan_instance_mods(&dir).expect("scan");
         assert_eq!(
-            result.output["report"]["missing_required"][0]["mod_id"], "indium",
+            report.missing_required[0].mod_id, "indium",
             "unparsed jar must not satisfy the dependency"
         );
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    #[test]
-    fn installed_versions_tool_reports_files() {
-        let dir = temp_dir("versions");
-        let versions_root = dir.join("versions");
-        let version_dir = versions_root.join("1.20.4");
-        std::fs::create_dir_all(&version_dir).expect("version dir");
-        std::fs::write(version_dir.join("1.20.4.json"), b"{}").expect("json");
-        std::fs::write(version_dir.join("1.20.4.jar"), b"jar").expect("jar");
-        std::fs::create_dir_all(versions_root.join("1.21")).expect("empty version dir");
+    /// 真实落盘的假执行器：为每个依赖写一个带 fabric.mod.json 的 jar，
+    /// 使下一次扫描能看到依赖已满足（验证"执行前再校验"语义）。
+    struct WritingApplier;
 
-        let registry = read_only_registry(&AgentRoots {
-            versions_dir: versions_root,
-            mods_dir: dir.clone(),
-        })
-        .expect("registry");
-        let result = registry
-            .invoke("versions.installed", &json!({}))
-            .expect("invoke");
-        let versions = result.output["versions"].as_array().expect("array");
-        assert_eq!(versions.len(), 2);
-        assert_eq!(versions[0]["id"], "1.20.4");
-        assert_eq!(versions[0]["has_json"], true);
-        assert_eq!(versions[0]["has_jar"], true);
-        assert_eq!(versions[1]["has_json"], false);
+    impl PlanApplier for WritingApplier {
+        fn apply(
+            &self,
+            mods_dir: &Path,
+            dependencies: &[PlannedDependency],
+        ) -> Result<AppliedPlanReport> {
+            let mut installed = Vec::new();
+            for dep in dependencies {
+                let file = format!("{}.jar", dep.mod_id);
+                write_jar(
+                    mods_dir,
+                    &file,
+                    Some(&format!(r#"{{"id":"{}","version":"1.0"}}"#, dep.mod_id)),
+                );
+                installed.push(AppliedMod {
+                    mod_id: dep.mod_id.clone(),
+                    file,
+                    version: Some("1.0".into()),
+                });
+            }
+            Ok(AppliedPlanReport {
+                attempted: dependencies.iter().map(|d| d.mod_id.clone()).collect(),
+                installed,
+                failed: Vec::new(),
+            })
+        }
+    }
+
+    #[test]
+    fn apply_missing_re_scans_before_installing() {
+        let dir = temp_dir("apply");
+        write_jar(
+            &dir,
+            "a.jar",
+            Some(r#"{"id":"a","version":"1","depends":{"indium":">=1.0"}}"#),
+        );
+        let first = apply_missing_dependencies(&dir, &WritingApplier).expect("apply");
+        assert_eq!(first.attempted, vec!["indium".to_string()]);
+        assert_eq!(first.installed.len(), 1);
+
+        // 第二次：上一轮已落盘，重新扫描应为空，不再触发执行器。
+        let second = apply_missing_dependencies(&dir, &WritingApplier).expect("apply again");
+        assert!(second.attempted.is_empty());
+        assert!(second.installed.is_empty());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn apply_missing_reports_applier_failures() {
+        struct FailingApplier;
+        impl PlanApplier for FailingApplier {
+            fn apply(
+                &self,
+                _mods_dir: &Path,
+                dependencies: &[PlannedDependency],
+            ) -> Result<AppliedPlanReport> {
+                Ok(AppliedPlanReport {
+                    attempted: dependencies.iter().map(|d| d.mod_id.clone()).collect(),
+                    installed: Vec::new(),
+                    failed: dependencies
+                        .iter()
+                        .map(|d| FailedMod {
+                            mod_id: d.mod_id.clone(),
+                            reason: "no Modrinth match".into(),
+                        })
+                        .collect(),
+                })
+            }
+        }
+        let dir = temp_dir("apply-fail");
+        write_jar(
+            &dir,
+            "a.jar",
+            Some(r#"{"id":"a","version":"1","depends":{"ghost":">=1.0"}}"#),
+        );
+        let report = apply_missing_dependencies(&dir, &FailingApplier).expect("apply");
+        assert_eq!(report.failed.len(), 1);
+        assert_eq!(report.failed[0].mod_id, "ghost");
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

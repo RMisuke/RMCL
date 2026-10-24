@@ -4,21 +4,28 @@
 
 ## 1. 数据目录
 
-默认数据目录（`~/.rmccc` 或平台标准目录，可用 `-d` 覆盖）：
+默认数据目录（`~/.rmccc` 或平台标准目录，可用 `-d` 覆盖；完整布局见
+[`../ARCHITECTURE.md`](../ARCHITECTURE.md) §15.1）：
 
-| 子目录 | 内容 | 说明 |
+| 子目录 / 文件 | 内容 | 说明 |
 |--------|------|------|
-| `config.json` | 全局配置（schema v1） | 含 `game_root_dir`/`mirror_url` 等 |
+| `config/launcher-settings.json` | 全局设置（$schema 版本化） | 含 `game_root_dir`/`mirror_url` 等 |
+| `user-settings.json` | 用户级偏好（语言等） | |
+| `state/launcher-state.json` | 运行态（可容忍丢失） | |
 | `profiles/` | 实例 Profile（JSON） | 每实例一个文件 |
-| `accounts/` | 多账户（`{uuid}.json` + `active` 指针） | 加密存储 |
-| `.key` | AES-256-GCM 密钥文件 | 勿泄露/勿删除 |
+| `accounts.json` + `.key` | 账户元数据（明文）+ 账号 vault 加密 key | 缺 `.key` 无法解密 |
+| `private/account-private-data.json` | 账号私密数据（AES-256-GCM） | |
+| `private/agent-credentials.json` + `private/agent.key` | AI 服务凭据 vault（ADR-013，service=`llm`） | 文件名沿用 agent 时代以无缝迁移 |
+| `.api_keys/curseforge` | CurseForge API key | |
 | `cache/` | 下载缓存（按 SHA1 去重） | 可安全清空 |
-| `logs/` | JSON 滚动日志 | 每日滚动，保留 10 份 |
 | `instances/` | 默认游戏根目录（.minecraft 等价） | 版本/库/资源/mod |
+| `logs/` | 滚动日志 | 每日滚动，保留 10 份 |
 
 ## 2. 备份
 
-**必须备份**：`config.json`、`profiles/`、`accounts/`、`.key`（四者同时备份，缺 `.key` 无法解密账号）。
+**必须备份**：`config/`、`user-settings.json`、`profiles/`、`accounts.json`、`.key`
+与整个 `private/`（含 AI 凭据 vault；缺 `.key` 无法解密账号，缺 `private/agent.key`
+无法解密 AI 凭据）。
 
 **可选备份**：`instances/`（游戏本体，体积大，可仅备份配置与 mod）。
 
@@ -52,7 +59,8 @@ CLI 与 GUI 日志体系一致（均为 JSON 滚动文件）。
 | MS 登录失败 | 设备码是否展示；网络可达 `login.microsoftonline.com`；过期自动重试（最多 3 次） |
 | 版本下载慢/失败 | 检查 `mirror_url` 是否配置（如 bmclapi）；看下载失败文件数与 batch_id |
 | 启动游戏失败 | 检查 Java 检测；`versions/{id}/{id}.jar` 完整性；资源自动修复日志 |
-| 账户解密失败 | `.key` 与 `accounts/` 不匹配（备份时未同时备份 `.key`） |
+| 账户解密失败 | `.key` 与 `accounts.json` 不匹配（备份时未同时备份 `.key`） |
+| AI 日志分析失败 | 设置页 AI 配置是否完整（地址/模型/密钥）；端点须 HTTPS 或 loopback；`private/agent-credentials.json` 是否随 `private/agent.key` 一起备份 |
 | Mod 安装失败 | `mods/` 目录权限；SHA1 校验失败日志 |
 
 ## 6. 安全注意事项

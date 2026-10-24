@@ -65,5 +65,5 @@
 ## 7. 文档同步
 
 - `ARCHITECTURE.md` §12/§13/§14 同步发布产物矩阵。
-- `AUDIT` §13.7 全部销账；`OPERATIONS.md` 发布步骤完整。
+- `AUDIT` §13.7 全部销账；`docs/guides/OPERATIONS.md` 发布步骤完整。
 - `PROJECT_STATUS` 回填；ADR-008 入库。

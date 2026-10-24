@@ -1,6 +1,6 @@
 //! IPC command handlers.
 
-pub mod agent;
+pub mod ai;
 pub mod auth;
 pub mod dashboard;
 pub mod download;
@@ -8,6 +8,7 @@ pub mod external;
 pub mod instance;
 pub mod launch;
 pub mod logs;
+pub mod mcp;
 pub mod modloader;
 pub mod mods;
 pub mod plugin;

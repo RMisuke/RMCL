@@ -1,0 +1,18 @@
+[package]
+name = "rmccc-llm"
+version = "0.1.0"
+edition = "2021"
+description = "Lightweight OpenAI-compatible AI service (ADR-013): provider adapter, credential vault, redaction. No agent loop."
+
+[dependencies]
+rmccc-error = { workspace = true }
+rmccc-platform = { workspace = true }
+rmccc-auth = { workspace = true }
+
+serde = { workspace = true }
+serde_json = { workspace = true }
+tokio = { workspace = true }
+reqwest = { workspace = true }
+tracing = { workspace = true }
+url = { workspace = true }
+thiserror = { workspace = true }

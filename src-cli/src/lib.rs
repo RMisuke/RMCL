@@ -87,6 +87,12 @@ pub fn run(raw_args: Vec<String>, stdin_is_terminal: bool, stdout_is_terminal: b
     let log_dir = data_dir.join("logs");
     let _ = rmccc_config::logging::init_logging(&log_dir);
 
+    // MCP stdio bridge 不需要后端 facade（数据面在启动器进程内），
+    // 在构建 CliContext 之前直接进入转发循环。
+    if let Some(Commands::Mcp { launch }) = &cli.command {
+        return commands::mcp::run(&data_dir, *launch);
+    }
+
     // Build the backend facade.
     let ctx = match CliContext::new(&data_dir) {
         Ok(ctx) => ctx,
@@ -237,6 +243,8 @@ async fn run_command(ctx: &CliContext, out: &Output, command: Commands) -> CliRe
         Commands::Plugin { action } => commands::plugin::handle(ctx, out, action).await,
         Commands::Launch { action } => commands::launch::handle(ctx, out, action).await,
         Commands::System { action } => commands::system::handle(ctx, out, action).await,
+        // MCP 桥在 `run` 中提前分发（不经过 facade / tokio runtime）。
+        Commands::Mcp { .. } => Ok(Value::Null),
         Commands::Help { .. } | Commands::Completions { .. } => {
             Ok(Value::Null) // handled by `dispatch` directly
         }

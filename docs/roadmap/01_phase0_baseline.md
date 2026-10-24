@@ -29,7 +29,7 @@
 ### 0.1 工具链与环境复现
 - 确认 `rust-toolchain.toml` 生效（`rustc --version` / `cargo --version`）。
 - 用 `rustup component add llvm-tools` 或等价方式补齐 strip 所需；记录失败则列为 deferred。
-- 在 `OPERATIONS.md` 记录**当前有效**的本机构建命令（不再引用过期 Cellar 路径）。
+- 在 `docs/guides/OPERATIONS.md` 记录**当前有效**的本机构建命令（不再引用过期 Cellar 路径）。
 - 验证命令：`cargo --version && rustc --version && cargo fmt --version && cargo clippy --version`。
 
 ### 0.2 五门禁复跑
@@ -99,7 +99,7 @@
 - [ ] 体积基线表含 4 个数 + strip 是否可自动（不可自动则记 deferred + 原因）。
 - [ ] 差距清单完成；所有非 macOS Apple Silicon 项标 deferred。
 - [ ] ADR-001/011/012 草案（proposed）入库。
-- [ ] `OPERATIONS.md` 更新为当前有效命令；删除过期 Cellar 路径引用。
+- [ ] `docs/guides/OPERATIONS.md` 更新为当前有效命令；删除过期 Cellar 路径引用。
 
 ## 6. 验证命令
 

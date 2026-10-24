@@ -21,11 +21,11 @@
 ```
 RMCL/
 ├── Cargo.toml                    # Workspace root
-├── docs/                         # Architecture & planning docs
-│   ├── ARCHITECTURE.md
-│   ├── ARCHITECTURE_IMPROVEMENT_PLAN.md
-│   ├── AI_EDITING_RULES.md
-│   └── DEVELOPMENT_PLAN.md
+├── docs/                         # Architecture & planning docs（分类索引见 docs/README.md）
+│   ├── ARCHITECTURE.md           # 设计基线（最高权威）
+│   ├── AI_AND_MCP_ARCHITECTURE.md # AI 服务 + 外部 Agent 控制（ADR-013）
+│   ├── AI_EDITING_RULES.md / DEVELOPMENT_PLAN.md / PROJECT_STATUS.md
+│   └── adr/ audits/ guides/ roadmap/ ui-design/ archive/
 ├── crates/                       # Rust business logic crates
 │   ├── rmccc-error/              # Unified error types (leaf)
 │   │   └── src/lib.rs            # RmcccError + ErrorCode (snake_case wire form)
@@ -103,6 +103,10 @@ RMCL/
 │   │   └── src/                  # manifest / version / capability / package /
 │   │                             # installer / registry / permissions /
 │   │                             # config / manager
+│   ├── rmccc-dashboard/          # Dashboard 布局与主题（Phase 3，ADR-005）
+│   ├── rmccc-logic/              # 逻辑插件协议与 DTO（Phase 5，ADR-007；wasm 宿主在 src-logic-host）
+│   ├── rmccc-llm/                # OpenAI 兼容 AI 客户端（ADR-013：llm 流式/探测 + credentials + redact）
+│   ├── rmccc-agent/              # 依赖扫描/补装 + 审计 + 两阶段确认原语（ADR-013 瘦身后）
 │   └── rmccc-core/               # Core orchestrator + DI container
 │       └── src/
 │           ├── lib.rs            # CoreContext, re-exports
@@ -1349,12 +1353,14 @@ User clicks "Launch" on a profile
 
 ## 11. IPC Command Table
 
-46 commands, all registered in `src-tauri/src/main.rs` `generate_handler!`.
-Definition count and registration count are verified equal (2026-10-20 实测：
-`grep -c 'commands::' main.rs` = 46，与 `commands/*.rs` 中 `pub fn` 数一致).
+93 commands, all defined in `src-tauri/src/commands/` and registered via
+`IPC_COMMANDS` + `generate_handler!` in `src-tauri/src/handlers.rs`
+（数量由 `ipc_tests.rs` 的计数断言守护；ADR-013 迁移后 agent_* 9 条已由
+ai_* 5 条 + mods 纯逻辑 2 条取代，S4/S5 再加 mcp_* 9 条）。
 
 | Command | Handler | Description |
 |---------|---------|-------------|
+| `open_external_url` | `external.rs` | Open a URL in the system browser |
 | `auth_microsoft_login` | `auth.rs` | Start MS OAuth2 device flow (emits `auth://device-code`) |
 | `auth_offline_login` | `auth.rs` | Create offline session |
 | `auth_logout` | `auth.rs` | Clear session + remove private data |
@@ -1363,10 +1369,53 @@ Definition count and registration count are verified equal (2026-10-20 实测：
 | `auth_list_accounts` | `auth.rs` | List accounts (plaintext metadata only) |
 | `auth_switch_account` | `auth.rs` | Change the selected account |
 | `auth_remove_account` | `auth.rs` | Remove an account and its private data |
+| `download_cancel` | `download.rs` | Cancel an entire download batch |
+| `download_pause` | `download.rs` | Pause download batch |
+| `download_resume` | `download.rs` | Resume paused download batch |
+| `launch_start` | `launch.rs` | Launch game through `DefaultLauncher` |
+| `launch_kill` | `launch.rs` | Kill game process (process group on Unix) |
+| `launch_status` | `launch.rs` | Get running game status |
+| `log_get` | `logs.rs` | Get recent launcher log lines |
+| `log_clear` | `logs.rs` | Clear/truncate log file |
+| `frontend_log` | `ui.rs` | Frontend runtime message → launcher log (release 仅有日志通道) |
+| `ai_config_get` | `ai.rs` | AI 服务配置视图 `{configured, baseUrl, model, hasKey}` |
+| `ai_config_set` | `ai.rs` | 保存 AI 配置（字段可选，留空沿用已存值；key 入 vault，ADR-013） |
+| `ai_models_probe` | `ai.rs` | `GET {base}/models` 自动检测可用模型（未传参用已存配置） |
+| `ai_analyze_log` | `ai.rs` | 游戏日志一键分析（脱敏尾部 → 流式事件 `ai://delta/done/error`） |
+| `ai_analyze_cancel` | `ai.rs` | 取消进行中的分析 |
+| `mcp_status` | `mcp.rs` | MCP 服务器状态（开关/端口/令牌/会话/待确认数） |
+| `mcp_set_enabled` | `mcp.rs` | 启停 MCP 服务器（默认关闭；开启即监听回环） |
+| `mcp_regenerate_token` | `mcp.rs` | 重新生成 Bearer Token 并断开全部会话 |
+| `mcp_tools_list` / `mcp_tools_set` | `mcp.rs` | 31 工具目录与逐工具策略覆盖（allow/confirm/deny） |
+| `mcp_sessions_disconnect` | `mcp.rs` | 断开指定（或全部）外部会话 |
+| `mcp_confirmations_list` | `mcp.rs` | 待确认的破坏性操作（确认卡数据） |
+| `mcp_confirmation_resolve` | `mcp.rs` | 用户放行/拒绝一次破坏性调用 |
+| `mcp_recent_calls` | `mcp.rs` | 最近 MCP 调用审计（脱敏视图） |
+| `modloader_list` | `modloader.rs` | List loader versions (`loader_type` param) |
+| `modloader_install` | `modloader.rs` | Install mod loader (emits install progress) |
+| `mod_search` | `mods.rs` | Search mods (Modrinth) |
+| `mod_get_versions` | `mods.rs` | List versions of a mod |
+| `mod_get_download_url` | `mods.rs` | Resolve a download URL |
+| `mod_list` | `mods.rs` | List installed mods (active + disabled) |
+| `mod_toggle` | `mods.rs` | Enable/disable mod (move to/from `mods/disabled/`) |
+| `mod_install` | `mods.rs` | Download + install mod (remote) |
+| `mod_remove` | `mods.rs` | Remove mod from profile |
+| `mod_install_local` | `mods.rs` | Install mod from a local file path |
+| `mod_pick_and_install` | `mods.rs` | System file picker + install (local mod) |
+| `mods_dependency_scan` | `mods.rs` | 纯逻辑依赖扫描（缺失必需/冲突/未解析，ADR-013 §4.4） |
+| `mods_apply_plan` | `mods.rs` | 一键补装缺失前置（Modrinth 匹配 + SHA1 校验，纯逻辑无 AI） |
 | `profile_list` | `profile.rs` | List all profiles |
 | `profile_create` | `profile.rs` | Create new profile |
 | `profile_update` | `profile.rs` | Update profile settings |
 | `profile_delete` | `profile.rs` | Delete profile + cleanup game dir |
+| `settings_get` | `settings.rs` | Get global settings |
+| `settings_set` | `settings.rs` | Update global settings (debounced `FileSaver` write) |
+| `settings_get_user` | `settings.rs` | Get user-level settings (UI language, update check) |
+| `settings_set_user` | `settings.rs` | Update user settings; `locale: ""` = follow the system |
+| `settings_supported_locales` | `settings.rs` | List shipped UI languages with their native names |
+| `java_detect` | `settings.rs` | Auto-detect Java installations |
+| `version_list` | `version.rs` | List available MC versions (with cache) |
+| `version_install` | `version.rs` | Install MC version; returns a real `batch_id` |
 | `instance_list` | `instance.rs` | List instances from the local repository index |
 | `instance_refresh` | `instance.rs` | Rescan `versions/`, emit `instances://refreshed` |
 | `instance_rename` | `instance.rs` | Rename an instance |
@@ -1375,38 +1424,34 @@ Definition count and registration count are verified equal (2026-10-20 实测：
 | `instance_check_completion` | `instance.rs` | Report missing files |
 | `instance_repair` | `instance.rs` | Download missing files |
 | `instance_paths` | `instance.rs` | Effective game root / run dir / mods dir (depends on isolation) |
-| `version_list` | `version.rs` | List available MC versions (with cache) |
-| `version_install` | `version.rs` | Install MC version; returns a real `batch_id` |
-| `modloader_list` | `modloader.rs` | List loader versions (`loader_type` param) |
-| `modloader_install` | `modloader.rs` | Install mod loader (emits install progress) |
-| `mod_search` | `mods.rs` | Search mods (Modrinth) |
-| `mod_get_versions` | `mods.rs` | List versions of a mod |
-| `mod_get_download_url` | `mods.rs` | Resolve a download URL |
-| `mod_install` | `mods.rs` | Download + install mod (remote or local file) |
-| `mod_remove` | `mods.rs` | Remove mod from profile |
-| `mod_list` | `mods.rs` | List installed mods (active + disabled) |
-| `mod_toggle` | `mods.rs` | Enable/disable mod (move to/from `mods/disabled/`) |
-| `launch_start` | `launch.rs` | Launch game through `DefaultLauncher` |
-| `launch_kill` | `launch.rs` | Kill game process (process group on Unix) |
-| `launch_status` | `launch.rs` | Get running game status |
-| `download_cancel` | `download.rs` | Cancel an entire download batch |
-| `download_pause` | `download.rs` | Pause download batch |
-| `download_resume` | `download.rs` | Resume paused download batch |
-| `settings_get` | `settings.rs` | Get global settings |
-| `settings_set` | `settings.rs` | Update global settings (debounced `FileSaver` write) |
-| `settings_get_user` | `settings.rs` | Get user-level settings (UI language, update check) |
-| `settings_set_user` | `settings.rs` | Update user settings; `locale: ""` = follow the system |
-| `settings_supported_locales` | `settings.rs` | List shipped UI languages with their native names |
-| `java_detect` | `settings.rs` | Auto-detect Java installations |
-| `log_get` | `logs.rs` | Get recent launcher log lines |
-| `log_clear` | `logs.rs` | Clear/truncate log file |
-| `open_external_url` | `external.rs` | Open a URL in the system browser (deep-link) |
+| `instance_resolved_settings` | `instance.rs` | Resolve per-launch effective settings (defaults + profile) |
+| `plugin_list` | `plugin.rs` | List installed plugins |
+| `plugin_inspect` | `plugin.rs` | Inspect package before install (manifest + checks) |
+| `plugin_install` | `plugin.rs` | Install plugin package (transactional, ADR-003) |
+| `plugin_pick_and_install` | `plugin.rs` | System file picker + install |
+| `plugin_enable` / `plugin_disable` | `plugin.rs` | Toggle plugin enabled state |
+| `plugin_remove` | `plugin.rs` | Uninstall plugin (rollback data retained) |
+| `plugin_rollback` | `plugin.rs` | Roll back to previous install state |
+| `plugin_grant` / `plugin_revoke` | `plugin.rs` | Grant/revoke capabilities |
+| `plugin_config_get/set/reset` | `plugin.rs` | Plugin-scoped config CRUD |
+| `plugin_capabilities` | `plugin.rs` | Capability catalog for a plugin |
+| `plugin_contributions` | `plugin.rs` | Dashboard/theme contributions of a plugin |
+| `plugin_ui_invoke` | `plugin_ui.rs` | Isolated UI container bridge invoke (ADR-006) |
+| `plugin_logic_invoke` | `plugin_logic.rs` | Read-only logic call behind `logic.invoke` (ADR-007) |
+| `plugin_logic_cancel` | `plugin_logic.rs` | Cancel a running logic call |
+| `dashboard_get_layout` | `dashboard.rs` | Load persisted dashboard layout |
+| `dashboard_save_layout` | `dashboard.rs` | Save dashboard layout (normalized, ADR-005) |
+| `dashboard_reset_layout` | `dashboard.rs` | Reset layout to defaults |
+| `dashboard_list_widgets` | `dashboard.rs` | List available widgets (incl. plugin contributions) |
+| `dashboard_list_themes` | `dashboard.rs` | List themes (builtin + plugin) |
+| `dashboard_get_theme_tokens` | `dashboard.rs` | Resolve active theme tokens |
+| `dashboard_set_theme_preference` | `dashboard.rs` | Set theme preference |
+| `dashboard_get_theme_preference` | `dashboard.rs` | Get theme preference |
+| `dashboard_get_theme_json` | `dashboard.rs` | Read raw theme JSON (plugin theme viewer) |
 
-> 前端现状（2026-10-20 实测）：**UI 可直达 27 个**（Dashboard 11 / InstanceSettings 8 /
-> Login 3 / Settings 5）；另有 15 个只在 `src/ipc/api.ts` 有 wrapper 但无页面调用
-> （`mod_search` 等 4 个、`download_pause/resume`、4 个账户管理、`log_get/clear`、
-> `instance_check_completion/repair/refresh`）；`instance_list/duplicate/rename/remove`
-> 连 wrapper 都没有——它们操作的是"版本 id"而非 profile，见审计文档 §7.4。
+> 前端调用覆盖（wrapper / 页面实际调用）与规划目标见
+> [`ui-design/11_IPC_COVERAGE.md`](ui-design/11_IPC_COVERAGE.md)；
+> 前端整体将按 [`ui-design/`](ui-design/) 文档重构。
 
 ## 12. Size Budget
 
@@ -1551,8 +1596,8 @@ strategy:
 ├── accounts.json                    # Plaintext account metadata + selected
 ├── private/
 │   ├── account-private-data.json    # AES-256-GCM encrypted private data
-│   ├── agent-credentials.json       # Phase 6: Agent 服务凭据（ADR-009，独立 key）
-│   └── agent.key                    # Agent 凭据加密 key（600；与账号 .key 隔离）
+│   ├── agent-credentials.json       # AI 服务凭据 vault（service=`llm`，ADR-013；文件名沿用 agent 时代以无缝迁移）
+│   └── agent.key                    # 上述 vault 的加密 key（600；与账号 .key 隔离）
 ├── .api_keys/                       # API keys (separate from settings)
 │   └── curseforge                   # CurseForge API key
 ├── cache/                           # Offline caches
@@ -1565,10 +1610,8 @@ strategy:
 │   ├── versions/                    # Local instance index source
 │   ├── libraries/  assets/          # Shared across instances
 │   └── launcher_profiles.json       # Created on demand (Forge/LiteLoader need it)
-├── agent/                           # Phase 6: Agent 会话/审计（ADR-010）
-│   ├── sessions/{id}.jsonl          # 事件流（提示词默认只存哈希+长度）
-│   ├── tasks/{id}.json              # 待确认的 dry-run 计划
-│   └── audit.jsonl                  # 工具调用审计（写盘前脱敏）
+├── agent/                           # 审计目录（ADR-010；ADR-013 后会话/任务存储已退役）
+│   └── audit.jsonl                  # 工具调用审计（结构保留，MCP 服务器 S4/S5 落地时由宿主写入）
 └── logs/                            # Launcher logs
     ├── rmccc-2026-07-29.log         # Daily rolling, 10 kept
     └── rmccc-2026-07-28.log
@@ -2075,65 +2118,80 @@ stdin/stdout，一行一个 JSON：
 - helper 尚未打进 `.app`：通过 `RMCCC_LOGIC_HOST` 或与启动器同目录解析；
   打包/签名/公证与三平台 runner 一起留到 Phase 7。
 
-## 25. Agent 平台（Phase 6，进行中）
+## 25. AI 服务与外部 Agent 控制（Phase 6 方向重定义，ADR-013）
 
-> 决策以 [ADR-009](adr/ADR-009-credential-storage.md)（凭据）与
-> [ADR-010](adr/ADR-010-agent-session-audit-privacy.md)（会话/审计/隐私）为准。
-> 本节只记录已落地的形态；**Agent 执行循环（6.5）尚未实现**。
+> 决策记录：[ADR-013](adr/ADR-013-lightweight-ai-and-external-mcp.md)（轻干预 · 轻 AI）。
+> 完整设计（含 MCP 服务器 31 工具目录、确认流、部署方式）见
+> [`AI_AND_MCP_ARCHITECTURE.md`](AI_AND_MCP_ARCHITECTURE.md)；本节只记录已落地形态。
+> 历史：原「内建 Agent 平台」方向（执行循环 / 工具注册表 / 会话存储，ADR-010 的会话部分）
+> 已于 2026-10-23 退役，当时的全景记录见 [`audits/`](audits/)。
 
-### 25.1 边界
+### 25.1 定位与边界
 
-- Agent 是**受控编排层**：模型输出不是指令。工具调用必须经过
-  `ToolRegistry::invoke`（参数 Schema 校验 → 风险门禁 → 审计）。
-- Phase 6.6 只注册 `read_only` 工具；`reversible_write` / `destructive` /
-  `external_side_effect` 在审批链路（6.5）落地前一律拒绝。
-- Agent 不持有 `CoreContext`、不直接读账号 vault；凭据由 `CredentialStore` 解密后仅交给 adapter。
-- 插件拿不到 API Key 明文；未来只能走 Host Broker 的"服务 + 能力"授权代发（ADR-009 决策 6）。
+- **启动器不内建 Agent**：AI 编排交给外部工具（ZCode 等，经 MCP 接入；MCP 尚未实现），
+  启动器内部只保留一个轻量 OpenAI 兼容 AI 服务。
+- **AI 是能力不是主体**：一次 AI 调用 = 发文本 → 拿流式回复；没有循环、没有工具注册表、
+  没有会话状态机。
+- **不是什么都要 AI**：依赖缺失检测（`mods_dependency_scan`）、一键补装（`mods_apply_plan`）、
+  完整性体检（`instance_check_completion/repair`）都是纯本地逻辑 + 网络请求。
+- **一次配置全局使用**：端点 / 模型 / 密钥在设置页配置一次（vault service=`llm`），
+  启动器内置功能与（未来的）插件桥共用同一凭据。
 
 ### 25.2 组件
 
 | 模块 | 职责 |
 |------|------|
-| `rmccc-agent::credentials` | `CredentialStore` trait + `FileCredentialStore`（AES-256-GCM，`private/agent.key`，0600） |
-| `rmccc-agent::llm` | `LlmProvider` trait + `OpenAiCompatibleProvider`（SSE 流、超时、指数退避重试、最小间隔限流、`CancelToken`） |
-| `rmccc-agent::tools` | `AgentToolDescriptor` / `RiskLevel` / `ConfirmationPolicy` / `ToolRegistry` + 最小 JSON Schema 校验 |
-| `rmccc-agent::mods` | 只读扫描 `mods/*.jar` 的 `fabric.mod.json`（`depends`/`suggests`/`breaks`），生成 `DependencyReport` 与 dry-run `ModInstallPlan` |
-| `rmccc-agent::audit` | `agent/audit.jsonl` 追加写（字段白名单） |
-| `rmccc-agent::session` | 会话事件流（`agent/sessions/<id>.jsonl`）、任务快照（`agent/tasks/<id>.json`）、保留期裁剪 / 清除历史 |
-| `rmccc-agent::redact` | 写盘前脱敏（敏感键名 / `Bearer` / 凭据前缀 / URL 查询参数 / home 路径 / 邮箱） |
+| `rmccc-llm::llm` | `LlmProvider` trait + `OpenAiCompatibleProvider`（SSE 流、超时、指数退避重试、最小间隔限流、`CancelToken`）+ `probe_models`（`GET {base}/models`） |
+| `rmccc-llm::credentials` | `CredentialStore` trait + `FileCredentialStore`（AES-256-GCM，`private/agent-credentials.json` + `private/agent.key`，0600） |
+| `rmccc-llm::redact` | 发送 / 落盘前脱敏（敏感键名 / `Bearer` / 凭据前缀 / URL 查询参数 / home 路径 / 邮箱） |
+| `rmccc-agent::mods` | 只读扫描 `mods/*.jar` 的 `fabric.mod.json`（`depends`/`suggests`/`breaks`）→ `DependencyReport` + `ModInstallPlan`；`PlanApplier` trait 由宿主注入执行器 |
+| `rmccc-agent::audit` | `AuditLog` 追加写（字段白名单 + 脱敏；MCP 服务器落地时启用） |
+| `rmccc-agent::confirm` | `TaskSnapshot` 两阶段确认原语（proposed→approved→applied/failed，供 MCP 确认流复用） |
+| `src-tauri/commands/ai.rs` | `ai_*` IPC 5 条（配置 / 探测 / 日志分析） |
 
-### 25.3 内置只读工具
+### 25.3 IPC 与事件
 
-| id | 输入 | 输出 |
-|----|------|------|
-| `versions.installed` | `versions_dir`（绝对路径） | `id` / `has_json` / `has_jar` |
-| `mods.installed` | `mods_dir`（绝对路径） | 已装 Mod 元数据 + 未解析 jar 列表 |
-| `mods.dependency_scan` | `mods_dir`（绝对路径） | `DependencyReport` + `ModInstallPlan`（`dry_run = true`，`requires_confirmation = true`） |
+命令 5 条 + Mod 纯逻辑 2 条（详见 §11）：
 
-输入路径必须是绝对路径且目录存在；未知字段被 `additionalProperties: false` 拒绝。
-依赖扫描 v1 只解析 Fabric 元数据；Forge/NeoForge 的 `mods.toml` 进入 `unparsed`，
-**不会被当成"兼容"**。
+- `ai_config_get` / `ai_config_set`：配置视图永不回传 key；set 字段可选，
+  留空沿用已存值（vault 键 `llm` 沿用 agent 时代的文件名，旧配置无缝迁移）。
+- `ai_models_probe`：`GET {base}/models` 自动检测可用模型；未传参时用已存配置。
+- `ai_analyze_log` / `ai_analyze_cancel`：取实例 `logs/latest.log` 尾部 ≤ 12,000 字符
+  → `redact`（home → `~`、凭据遮蔽）→ `chat_stream` → 事件
+  `ai://delta` / `ai://done` / `ai://error`（payload 键 `analysisId`）。
+  并发上限 2、整体超时 180s；返回 `{analysisId, sentLines}` 保持外发透明。
+- `mods_dependency_scan` / `mods_apply_plan`：纯逻辑依赖扫描与一键补装
+  （宿主 `ModrinthPlanApplier`：搜索 → game+loader 版本匹配 → SHA1 校验下载）。
 
 ### 25.4 数据与隐私
 
-- 会话事件、任务计划、工具审计分别落 `agent/sessions/`、`agent/tasks/`、`agent/audit.jsonl`
-  （见 §15.1）；文件权限经 `PlatformFs::restrict_owner_only`。
-- 事件是**白名单枚举**：`session_started` / `user_message` / `model_response` / `tool_call` /
-  `tool_result` / `approval_requested` / `approval_resolved` / `error` / `session_ended`。
-  提示词与模型输出只存 `sha256` + 字符数；`tool_result` 只存 `ok` / 耗时 / 输出哈希 / 字节数。
-- 任务快照走 `atomic_replace`（临时文件 → 原子替换），写入前脱敏；session/task id 只允许
-  `[A-Za-z0-9_-]{1,64}`，这是路径穿越的唯一拦截点（id 可能来自模型）。
-- 保留期默认 30 天，`purge_expired` 是纯 mtime 裁剪（不接定时器）；`clear_all` 删会话与任务，
-  **保留 `audit.jsonl`**（清除动作仍可审计）。
-- 审计输入写盘前脱敏，含 URL 查询参数（`?token=…`），因为 Mod 下载链接常带临时令牌。
+- 密钥只存 vault（service=`llm`）；`AiConfigView` 只暴露 `hasKey` 布尔。
+- 日志发送前强制脱敏；错误信息不包含密钥。
 - 远程端点必须 HTTPS；本地模型仅允许 loopback HTTP（ADR-009 决策 5）。
-- 不默认读取日志/存档/账号数据；上下文范围在 6.5 由 UI 明示。
+- `agent/audit.jsonl` 审计结构与 ADR-010 的脱敏 / 保留规则继续有效，
+  当前无生产写入方（MCP S4/S5 落地时启用）；会话 / 任务存储已退役。
 
-### 25.5 平台与遗留
+### 25.5 MCP 服务器（S4/S5，已落地）与遗留
 
-- macOS ARM64：本机实现 + 63 项单元/本地 HTTP 测试；主可执行**不链接**该 crate
-  （尚无 IPC 调用方，`cargo tree -p rmccc` 中 0 处），体积与 ADR-011 不受影响。
-- Windows/Linux：加密/解析逻辑是纯 Rust，但 `restrict_owner_only` 为
-  `UnsupportedPlatform` → **deferred / release-blocked**。
-- 遗留：IPC/UI 入口、Planning/Execution Loop、Approval Broker、工具注册持久化、
-  `cargo bloat` 影响评估均随 Phase 6.4–6.5 落地。
+- **服务器**：`src-tauri/src/mcp/`——Streamable HTTP（JSON 模式），仅回环 +
+  Bearer Token（`<data>/mcp-token` 0600）；默认**关闭**，`mcp_set_enabled` 启停。
+  传输基于 hyper 1.x（reqwest 依赖树已有，启用 server feature；未引入 axum/tower）。
+- **31 工具**：只读 15 / 操作 11 / 破坏性 5；dispatch 直接调用与 GUI 同一份
+  `commands::*`（下载/启动事件天然可见），操作类另发 `mcp://call` 归因事件。
+- **确认流**：破坏性工具复用 `rmccc_agent::confirm::TaskSnapshot` 两阶段语义
+  （`kind = mcp:<tool>`），GUI 经 `mcp_confirmation_resolve` 放行/拒绝，
+  120s 超时即拒；破坏性操作审计 fail-closed。
+- **策略**：默认 按风险（只读/操作 allow，破坏性 confirm），可逐工具覆盖
+  （`<data>/mcp-policies.json`）；会话 ≤ 4，60 次/分钟/会话，
+  `instance.check_completion` 全局并发 1。
+- **stdio 桥**：`rmccc mcp [--launch]`（src-cli）——stdin/stdout MCP 转发到
+  HTTP 端点（`<data>/mcp-endpoint`），启动器未运行时返回明确 JSON-RPC 错误。
+- **S6 插件桥**：能力 `ai.chat`（medium）+ 桥方法 `llm.chat`（限流 6/min/插件，
+  流式经 `plugin://push` 中继 `llm.delta/done/error`，密钥由宿主代持）。
+- **随前端重构落地**：设置页 MCP 分区、确认卡、归因徽标/toast（`mcp://call`
+  与 `mcp://confirmation` 的消费方）、`plugin://push` 的 iframe 中继、
+  事件 payload `origin` 字段（当前以 `mcp://call` 替代）。
+- Windows/Linux：vault 的 `restrict_owner_only` 为 `UnsupportedPlatform`
+  → **deferred / release-blocked**（权限语义与账号 vault 相同）。
+- 旧面清理：`/agent` 路由重定向到 `/settings`；`agent_*` 9 条 IPC 移除，
+  前端无引用（`ipc_tests` 计数断言 93）。

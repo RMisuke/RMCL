@@ -10,6 +10,7 @@
 pub mod auth;
 pub mod config;
 pub mod launch;
+pub mod mcp;
 pub mod modloader;
 pub mod mods;
 pub mod plugin;

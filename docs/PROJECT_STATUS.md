@@ -1,13 +1,69 @@
-# RMCCC 项目现状与继续开发交接（2026-10-22 更新）
+# RMCCC 项目现状与继续开发交接（2026-10-23 更新）
 
 > 本文档是**变更记录与交接入口**，按轮次记录"这轮改了什么"。
-> **完整架构说明 + 功能矩阵 + 技术债台账**见 [`AUDIT_2026-10-20.md`](AUDIT_2026-10-20.md)（横切全景，不按轮次组织）。
-> 历史审计与整改台账仍然有效作为**问题溯源**（见 §6），但其"当前状态"结论已过期。
+> **完整架构说明 + 功能矩阵 + 技术债台账**见 [`audits/AUDIT_2026-10-20.md`](audits/AUDIT_2026-10-20.md)（横切全景，不按轮次组织）。
+> 历史审计与整改台账仍然有效作为**问题溯源**（见 §6），但其"当前状态"结论已过期；
+> §6–§9 为早期交接快照，现状一律以上方轮次记录为准。
 > 本文所有数字均由本机实际执行命令得到，未采信文档自述。
 
 ---
 
 ## 0. 更新记录
+
+**2026-10-23（ADR-013 S4/S5/S6 轮：MCP 服务器 + 插件 AI 桥）**：后端完成外部 Agent 控制面，
+未动前端。
+
+- **MCP 服务器**（新模块 `src-tauri/src/mcp/`）：Streamable HTTP（JSON 模式）仅回环 +
+  Bearer Token（`<data>/mcp-token` 0600）；默认**关闭**，`mcp_set_enabled` 启停，端口自动挑选
+  并落 `<data>/mcp-endpoint`。传输基于 hyper 1.x（reqwest 依赖树已有，启用 server feature，
+  未引入 axum/tower——体积红线见下）。会话 ≤4（`Mcp-Session-Id`），每会话 60 次/分钟，
+  `instance.check_completion` 全局并发 1；`initialize` 登记客户端名并发 `mcp://session`。
+- **31 工具**（15 只读 / 11 操作 / 5 破坏性）：dispatch 直接调用与 GUI 同一份 `commands::*`，
+  下载/启动事件天然可见；操作类另发 `mcp://call`（started/finished 归因，GUI 徽标数据源）。
+  只读 `settings.get` 递归剔除形似凭据的键；破坏性 `settings.set` 字段白名单（目录/内存/并发/
+  镜像等，未知字段拒绝）。工具策略逐条可覆盖（`<data>/mcp-policies.json`；破坏性默认 confirm）。
+- **确认流**：破坏性工具复用 `TaskSnapshot` 两阶段（`kind=mcp:<tool>`，120s 超时即拒）；
+  `mcp://confirmation` 事件 + `mcp_confirmations_list/resolve` IPC 供确认卡；审计 fail-closed
+  （`agent/audit.jsonl`，ADR-010 脱敏规则，破坏性先落审计再执行）。
+- **stdio 桥**：`rmccc mcp [--launch]`（src-cli，reqwest blocking）——行分隔 JSON-RPC 转发到
+  HTTP 端点，捕获 `Mcp-Session-Id`；未运行返回明确错误「RMCCC 未运行，请先启动启动器」；
+  `--launch` 拉起同目录 GUI（或 `RMCCC_APP_PATH`）等待端点就绪 ≤10s。
+- **S6 插件桥**：能力 `ai.chat`（medium，需显式授予）+ 桥方法 `llm.chat`——
+  非流式回完整文本（30s 上限），流式立即返 `streamId` 并经 `plugin://push` 中继
+  `llm.delta/done/error`；每插件 6 次/分钟限流；密钥由宿主代持（`host_llm_credential`），
+  插件永不接触 key 本体。桥契约四处同步（ui.rs 方法表 / schema / SDK / 契约测试），
+  新增线上错误码 `rate_limited`。
+- **IPC 84→93**（设计目标达成）：`mcp_*` 9 条；`mcp_*` 暂列 `ipc_tests::BACKEND_ONLY`
+  白名单（设置页分区随前端重构接线）。types.ts 再生成。
+- **门禁**：`cargo test --workspace` **631 passed / 0 failed**（+12：MCP 协议/工具/schema、
+  桥转发）；fmt / 两条 clippy 门禁 / `pnpm typecheck` / `pnpm sdk:test`（14 项）全绿。
+  **体积 8.82 MiB stripped**（hyper server 合入后 +0.64 MiB，ADR-011 < 10 MiB ✅）。
+- **未做（随前端重构）**：设置页 MCP 分区与 AI 分区 UI、任务中心确认卡、`mcp://call`/`mcp://session`
+  消费的徽标与 toast、`plugin://push` 的 iframe 中继、事件 payload `origin` 字段
+  （当前以 `mcp://call` 替代归因数据源）。
+
+**2026-10-23（ADR-013 迁移轮：去 Agent 化 + 文档重组）**：按
+[`AI_AND_MCP_ARCHITECTURE.md`](AI_AND_MCP_ARCHITECTURE.md) 完成 S1/S2/S3/S7 后端落地，
+并整理 docs 目录。
+
+- **crate 拆分**：新增 `rmccc-llm`（`llm` 流式/重试/取消 + `probe_models` 模型探测 +
+  `credentials` vault + `redact` 脱敏，31 项测试；vault 沿用 `private/agent-credentials.json`
+  与 service=`llm`，旧配置无缝继承）。`rmccc-agent` 瘦身为 `mods`（依赖扫描/补装纯逻辑）+
+  `audit` + `confirm`（`TaskSnapshot` 两阶段原语，供 MCP 确认流复用），删除
+  `runtime`/`tools`/`session`（14 项测试）。
+- **IPC 换血（86→84）**：移除 `agent_*` 9 条；新增 `ai_config_get/set`（字段可选、
+  留空沿用已存值）、`ai_models_probe`、`ai_analyze_log/cancel`（日志尾部 12k 字符 →
+  脱敏 → 流式事件 `ai://delta/done/error`，并发 ≤2、整体 180s 超时）与
+  `mods_dependency_scan/apply_plan`（纯逻辑，Modrinth 版本匹配 + SHA1 校验）。
+  `/agent` 路由重定向 `/settings`；i18n / api.ts / types.ts 同步再生成。
+- **门禁**：`cargo test --workspace` **619 passed / 0 failed**；`cargo fmt` /
+  两条 clippy 门禁 / `pnpm typecheck` 全绿（`ipc_tests` 计数断言 84）。
+- **文档重组**：docs/ 归类为 `adr/ audits/ guides/ roadmap/ ui-design/ archive/`，
+  删除 RMCLI 时代测试日志与 `old/` 迁移存根；新增 `AI_AND_MCP_ARCHITECTURE.md`（S1–S7
+  实施切片）与 `ui-design/`（15 份前端重设计文档）；`ARCHITECTURE.md` §25 重写为
+  ADR-013 形态、§11 IPC 表重建为 84 条。
+- **未做（后续切片）**：S4/S5 MCP 服务器、S6 插件桥 `llm.chat`；设置页 AI 分区 /
+  实例页「检查缺失前置」/ 日志 AI 分析面板的 UI 随整体前端重构（`ui-design/`）一并落地。
 
 **2026-10-24（Phase 6.5 第二批轮）**：首个写工具 + 上下文范围（6.7）。
 
@@ -81,7 +137,7 @@
   `IPC_COMMANDS` **77 条**（前端引用 72 条）；GUI 手动 strip 后 **7.96 MiB**；`git status` 干净，HEAD `a7a4f57`。
 - `roadmap/00_ROADMAP_OVERVIEW.md`：起点描述、状态锚点（成员/测试/IPC）、进度段落、里程碑 M0/M1/M2/M6 全部改为 Phase 0–5 完成口径；
   新增 Agent/发布两行欠账；`roadmap/README.md` 给 Phase 4/5 文档打 ✅ 并补"当前阶段"导语。
-- `AUDIT_2026-10-20.md` §15 台账：P2-5/P2-8/P2-9 销账，P2-6（72/77）与 P2-10（语义已定、入口仍缺）转部分修复，
+- `audits/AUDIT_2026-10-20.md` §15 台账：P2-5/P2-8/P2-9 销账，P2-6（72/77）与 P2-10（语义已定、入口仍缺）转部分修复，
   P2-7/P2-3 标注 2026-10-22 复测仍开；§10.5 与 §11 加"46 命令快照"横幅，指向 `handlers.rs` 单一真源。
 - `DEVELOPMENT_PLAN.md`：Phase 3/4/5 状态块改为现状（loader 进度事件未订阅、CurseForge 与依赖解析仍缺、分发缺口移交 roadmap Phase 7）。
 
@@ -435,7 +491,7 @@
   - 遗留（deferred）：Windows/Linux 隔离 UI 行为（release-blocked）、插件页面（settingsPages）的
     iframe 路由、`plugin:dev` 热更新（与"不信任任意路径"冲突）、前端组件测试仍为 0。
 
-**2026-10-20（第 7 轮）**：产出**全量架构与审计文档** [`AUDIT_2026-10-20.md`](AUDIT_2026-10-20.md)，
+**2026-10-20（第 7 轮）**：产出**全量架构与审计文档** [`audits/AUDIT_2026-10-20.md`](audits/AUDIT_2026-10-20.md)，
 并修正本文档与 `ARCHITECTURE.md`、`DEVELOPMENT_PLAN.md` 中过期的数字。
 
 审计新增的关键发现（此前未记录）：
@@ -616,7 +672,7 @@ Game repository refreshed game_dir=.../instances instances=1        ← 修复 1
 | 测试 | **617 passed / 0 failed**（2026-10-22 全量复跑；插件 106 项 + Dashboard 17 项 + 逻辑运行时 8 单测与 9 项 helper spawn 集成 + Agent 63 项 + bundle 6 项）；`pnpm sdk:test` **14 项**全过 |
 | 版本控制 | HEAD = `a7a4f57`；工作树干净（Phase 0–5 均已按主题提交） |
 | 发布体积 | GUI 未剥离 12,139,832 B（11.58 MiB）/ 手动 strip **8,346,816 B（7.96 MiB）**；CLI 未剥离 6,523,016 B / 手动 strip 4,701,256 B（4.48 MiB）；逻辑 helper（独立）**2.25 MiB**（ADR-011：主可执行 stripped < 10 MiB ✅；`strip = true` 仍失效，P2-7） |
-| 代码规模 | Rust **200 文件 / 50,872 行**（含 `rmccc-logic`、`src-logic-host` 与 `rmccc-agent`）；前端 22 文件 / 7,171 行；SDK 19 文件 / 1,306 行（详见 [`AUDIT_2026-10-20.md`](AUDIT_2026-10-20.md)） |
+| 代码规模 | Rust **200 文件 / 50,872 行**（含 `rmccc-logic`、`src-logic-host` 与 `rmccc-agent`）；前端 22 文件 / 7,171 行；SDK 19 文件 / 1,306 行（详见 [`audits/AUDIT_2026-10-20.md`](audits/AUDIT_2026-10-20.md)） |
 | 文档同步 | `ARCHITECTURE.md` 新增 §25（Agent 平台）；ADR-002–007/009/010/011 accepted，ADR-001/012 仍 proposed |
 | 阶段判断 | **Phase 0–5 完成；Phase 6 进行中**（6.1 LLM adapter / 6.2 凭据 / 6.3 会话事件流 / 6.6 只读工具完成；6.5 loop+审批 与 6.7 隐私待做）；Phase 7 未开始 |
 
@@ -803,19 +859,19 @@ response file 竞态、argfile 首行混入 java 路径——全部修复；"安
 
 ## 7. 文档体系现状与漂移
 
-### 7.1 现有文档
+### 7.1 现有文档（2026-10-23 重组后）
 
 | 文档 | 性质 | 时效 |
 |------|------|------|
-| `ARCHITECTURE.md` | 设计基线，AGENTS.md 指定的最高权威 | ✅ 2026-10-10 已同步实现（1,728 行） |
-| `DEVELOPMENT_PLAN.md` | Phase 1–5 路线图 | ✅ 2026-10-10 已回填各 Phase 状态块 |
-| `AI_EDITING_RULES.md`（101 行） | 编码规范 | 有效 |
-| `ARCHITECTURE_AUDIT_REPORT.md` | 2026-07-31 审计 | ✅ 已加「历史快照」横幅 |
-| `ARCHITECTURE_AUDIT_REPORT_2026-08-04.md` | 2026-08-04 审计（Phase 2–4 交界） | ✅ 已加「历史快照」横幅；其 5 个 P0 均已修复 |
-| `FIX_PLAN_2026-08-04.md` | 53 项整改台账（P0×5/P1×9/P2×25/P3×14） | ✅ 已加「历史台账」横幅 |
-| `BACKEND_ISSUES_INDEX.md` | 51 项问题索引 | ✅ 已加「已被 `PROJECT_STATUS.md` 取代」横幅 |
-| `MODLOADER_IMPLEMENTATION_PLAN.md`、`test-flow.md`、`test_log.md`、`OPERATIONS.md` | 专题 | 可用 |
-| `plans/*.md`（3 份，2026-08-05） | 认证/配置重构、版本管理兼容、启动模块重写 | ✅ 已加「已落地」横幅 |
+| `ARCHITECTURE.md` | 设计基线，AGENTS.md 指定的最高权威 | ✅ 2026-10-23 已同步（IPC 表 84 条、§25 重写为 ADR-013 形态） |
+| `AI_AND_MCP_ARCHITECTURE.md` | AI 服务 + 外部 Agent 控制 | ✅ 2026-10-23 权威设计（ADR-013，S1–S7 切片） |
+| `DEVELOPMENT_PLAN.md` | Phase 1–5 路线图 | ✅ 各 Phase 状态块已回填 |
+| `AI_EDITING_RULES.md` | 编码规范 | 有效 |
+| `audits/AUDIT_2026-10-20.md` / `audits/AUDIT_2026-10-23.md` | 全量审计 + 增量台账 | 有效（agent 相关条目已标注被 ADR-013 取代） |
+| `guides/OPERATIONS.md` / `guides/PLUGIN_AUTHORING.md` | 运维 / 插件编写指南 | 有效 |
+| `adr/` / `roadmap/` / `ui-design/` | 决策记录 / 细化执行计划 / 前端重设计 | 有效 |
+| `archive/`（07-31 与 08-04 审计、整改台账、问题索引、HMCL 架构分析等 6 份） | 历史快照 | 仅问题溯源（2026-10-23 移入） |
+| ~~`test_log.md`、`test-flow.md`、`old/`~~ | RMCLI 时代测试日志 / 迁移存根 | ❌ 已删除（2026-10-23，git 历史可查） |
 
 ### 7.2 ARCHITECTURE.md 的漂移点 —— ✅ 已全部修正（2026-10-10）
 

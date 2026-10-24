@@ -1,6 +1,6 @@
 # RMCCC 细化执行计划（roadmap/）
 
-> **本目录的定位**：把 [`RMCCC_PLUGIN_PLATFORM_ARCHITECTURE_GUIDE.md`](../RMCCC_PLUGIN_PLATFORM_ARCHITECTURE_GUIDE.md) 的目标架构（Phase 0–7）与 [`AUDIT_2026-10-20.md`](../AUDIT_2026-10-20.md) 的当前事实逐条对接，为**当前 macOS-only 开发阶段**产出可执行、可验收、与代码现状一致的细化计划。
+> **本目录的定位**：把 [`RMCCC_PLUGIN_PLATFORM_ARCHITECTURE_GUIDE.md`](../RMCCC_PLUGIN_PLATFORM_ARCHITECTURE_GUIDE.md) 的目标架构（Phase 0–7）与 [`AUDIT_2026-10-20.md`](../audits/AUDIT_2026-10-20.md) 的当前事实逐条对接，为**当前 macOS-only 开发阶段**产出可执行、可验收、与代码现状一致的细化计划。
 >
 > **本目录与其它文档的关系**：
 >
@@ -16,7 +16,11 @@
 
 ## 当前阶段
 
-**Phase 0–5 已完成；Phase 6（Agent）进行中**：6.1 LLM adapter、6.2 凭据（ADR-009）、6.3 会话事件流/任务快照、6.6 只读工具（首个 `ModDependency` 消费方）已于 2026-10-22 落地；剩 6.5（loop/审批）与 6.7（隐私 UI）。
+**Phase 0–5 已完成；Phase 6（Agent）已达 M7，但方向已调整（2026-10-23，ADR-013 accepted）**：
+内建 Agent 平台不再继续演进——AI 方向重构为「内部轻量 AI 服务 + 外部 Agent 经 MCP 控制启动器」，
+后续工作以 [`docs/AI_AND_MCP_ARCHITECTURE.md`](../AI_AND_MCP_ARCHITECTURE.md)（S1–S7 切片）为准；
+`08_phase6_agent.md` 保留为历史记录。已完成的依赖扫描/补装/脱敏/审计代码已迁移并去 Agent 化
+（2026-10-23 完成：`ai_*` 5 条 + `mods_dependency_scan/apply_plan` 落地，`agent_*` 9 条移除）。
 Phase 7（插件目录/签名/分发）仍需先落 ADR-008。跨平台原生验证仍按 §1.4 记 deferred / release-blocked。
 
 ## 阅读顺序
@@ -43,7 +47,7 @@ Phase 7（插件目录/签名/分发）仍需先落 ADR-008。跨平台原生验
 | [05_phase3_dashboard.md](05_phase3_dashboard.md) ✅ | Phase 3 | ADR-005、Widget/布局/主题 |
 | [06_phase4_isolated_ui_sdk.md](06_phase4_isolated_ui_sdk.md) ✅ | Phase 4 | ADR-006、隔离 UI + SDK |
 | [07_phase5_logic_runtime.md](07_phase5_logic_runtime.md) ✅ | Phase 5 | ADR-007、运行时 PoC |
-| [08_phase6_agent.md](08_phase6_agent.md) 🚧 | Phase 6 | ADR-009/010、Agent 工具管线（6.1/6.2/6.3/6.6 done） |
+| [08_phase6_agent.md](08_phase6_agent.md) 📌 | Phase 6 | M7 已达成后方向调整为 ADR-013（AI/MCP，见 `../AI_AND_MCP_ARCHITECTURE.md`）；本文保留为历史记录 |
 | [09_phase7_distribution.md](09_phase7_distribution.md) | Phase 7 | ADR-008/011/012、签名/公证/发布 |
 | [PLATFORM_ADAPTATION.md](PLATFORM_ADAPTATION.md) | 跨阶段（指南 §5.7 细化） | 平台执行散落在领域 crate 的迁移 |
 

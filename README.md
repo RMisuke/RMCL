@@ -34,10 +34,11 @@ RMCL/
 ├── AGENTS.md               # AI 协作规范（顶层指引）
 ├── Cargo.toml              # Rust workspace 清单
 ├── package.json            # 前端（SolidJS）工程配置
-├── docs/                   # 架构、开发计划与测试文档
-│   ├── ARCHITECTURE.md     # 完整架构设计
+├── docs/                   # 架构与计划文档（分类索引见 docs/README.md）
+│   ├── ARCHITECTURE.md     # 完整架构设计（最高权威）
+│   ├── AI_AND_MCP_ARCHITECTURE.md  # AI 服务 + 外部 Agent 控制（ADR-013）
 │   ├── DEVELOPMENT_PLAN.md # 开发路线图（Phase 1-5）
-│   └── test_log.md         # 全功能测试日志与 Bug 记录
+│   ├── adr/ audits/ guides/ roadmap/ ui-design/ archive/
 ├── crates/                 # Rust workspace crates
 │   ├── rmccc-auth/         # 认证（Microsoft OAuth2 / 离线）
 │   ├── rmccc-config/       # 配置管理与默认路径
@@ -45,8 +46,15 @@ RMCL/
 │   ├── rmccc-download/     # 并发下载与批量任务
 │   ├── rmccc-error/        # 错误码体系
 │   ├── rmccc-launch/       # Java 检测、响应文件、进程管理
+│   ├── rmccc-modloader/    # Mod 加载器安装
 │   ├── rmccc-mods/         # Mods 相关 API
 │   ├── rmccc-profile/      # 实例（Profile）管理
+│   ├── rmccc-platform/     # 平台适配层
+│   ├── rmccc-plugin/       # 声明式插件系统
+│   ├── rmccc-dashboard/    # Dashboard 布局与主题
+│   ├── rmccc-logic/        # 逻辑插件协议（ADR-007）
+│   ├── rmccc-llm/          # OpenAI 兼容 AI 客户端（ADR-013）
+│   ├── rmccc-agent/        # 依赖扫描/补装 + 审计 + 确认原语（ADR-013 瘦身后）
 │   └── rmccc-version/      # Minecraft 版本元数据、库解析
 ├── src/                    # SolidJS 前端源码
 ├── src-cli/                # CLI 二进制（rmcli）
@@ -117,7 +125,7 @@ rmcli
 
 ## 测试与验证结果摘要
 
-完整记录见 [`docs/test_log.md`](docs/test_log.md)。关键结论：
+以下为 2026-07-30 CLI 全功能测试的摘要（完整日志已随历史文档清理，可在 git 历史查阅；当前测试现状见 [`docs/PROJECT_STATUS.md`](docs/PROJECT_STATUS.md)）。关键结论：
 
 | 指标 | 结果 |
 |------|------|
@@ -143,13 +151,18 @@ rmcli
 
 ## 文档索引
 
-- [`docs/AUDIT_2026-10-20.md`](docs/AUDIT_2026-10-20.md) — **系统架构 + 实现 + 功能矩阵 + 技术债审计（全景，先读这个）**
+> 完整分类索引见 [`docs/README.md`](docs/README.md)。
+
+- [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) — 设计基线（架构决策的权威来源，IPC 表 84 条）
+- [`docs/AI_AND_MCP_ARCHITECTURE.md`](docs/AI_AND_MCP_ARCHITECTURE.md) — AI 服务 + 外部 Agent 控制（ADR-013，S1–S7 实施切片）
+- [`docs/audits/AUDIT_2026-10-20.md`](docs/audits/AUDIT_2026-10-20.md) — **系统架构 + 实现 + 功能矩阵 + 技术债审计（全景，先读这个）**
+- [`docs/audits/AUDIT_2026-10-23.md`](docs/audits/AUDIT_2026-10-23.md) — 全量复核 + 增量审计台账
 - [`docs/PROJECT_STATUS.md`](docs/PROJECT_STATUS.md) — 现状交接与按轮次的变更记录
-- [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) — 设计基线（架构决策的权威来源）
 - [`docs/DEVELOPMENT_PLAN.md`](docs/DEVELOPMENT_PLAN.md) — 开发路线图
-- [`docs/PLUGIN_AUTHORING.md`](docs/PLUGIN_AUTHORING.md) — 插件编写指南（Manifest/权限/配置/打包）
-- [`docs/roadmap/`](docs/roadmap/) — Phase 0–7 细化执行计划（含 Phase 2 插件协议）
-- [`docs/adr/`](docs/adr/) — 架构决策记录（ADR-002/003/004/011 已 accepted）
-- [`docs/test_log.md`](docs/test_log.md) — 测试日志与 Bug 记录
-- [`docs/MODLOADER_IMPLEMENTATION_PLAN.md`](docs/MODLOADER_IMPLEMENTATION_PLAN.md) — 模组加载器实现方案
+- [`docs/guides/PLUGIN_AUTHORING.md`](docs/guides/PLUGIN_AUTHORING.md) — 插件编写指南（Manifest/权限/配置/打包）
+- [`docs/guides/OPERATIONS.md`](docs/guides/OPERATIONS.md) — 运维手册
+- [`docs/roadmap/`](docs/roadmap/) — Phase 0–7 细化执行计划（含平台适配）
+- [`docs/ui-design/`](docs/ui-design/) — 前端重设计（15 份，后续前端重构依据）
+- [`docs/adr/`](docs/adr/) — 架构决策记录（ADR-002–007、009–011、013 accepted；001/012 proposed）
+- [`docs/archive/`](docs/archive/) — 历史审计快照（仅问题溯源）
 - [`AGENTS.md`](AGENTS.md) — AI 协作规范

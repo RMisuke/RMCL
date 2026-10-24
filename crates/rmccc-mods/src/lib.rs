@@ -65,7 +65,8 @@ pub struct ModVersion {
 }
 
 /// Mod dependency.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export_to = "types.ts")]
 pub struct ModDependency {
     pub mod_id: String,
     pub version_constraint: Option<String>,
@@ -73,8 +74,9 @@ pub struct ModDependency {
     pub source: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, TS)]
 #[serde(rename_all = "snake_case")]
+#[ts(export_to = "types.ts")]
 pub enum DependencyType {
     Required,
     Optional,

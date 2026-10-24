@@ -32,12 +32,14 @@ export type WireErrorCode =
   | "permission_denied"
   | "permission_pending"
   | "host_not_allowed"
+  | "rate_limited"
   | "internal";
 
 /** Bridge method names in UI API v1. */
 export type BridgeMethod =
   | "host.info"
   | "theme.get"
+  | "llm.chat"
   | "settings.get"
   | "instances.list"
   | "network.request";
@@ -49,6 +51,7 @@ export const METHOD_CAPABILITIES: Record<BridgeMethod, string | null> = {
   "settings.get": "settings.read",
   "instances.list": "instance.read",
   "network.request": "network.request",
+  "llm.chat": "ai.chat",
 };
 
 /** Per-method host timeout in milliseconds. */
@@ -58,6 +61,7 @@ export const METHOD_TIMEOUTS: Record<BridgeMethod, number> = {
   "settings.get": 10_000,
   "instances.list": 10_000,
   "network.request": 30_000,
+  "llm.chat": 30_000,
 };
 
 /** Plugin → host request. */

@@ -1,5 +1,14 @@
 # Phase 6 — Agent 平台
 
+> **⚠ 方向调整（2026-10-23，ADR-013 accepted）**：启动器**不再内建 Agent 平台**。
+> AI 方向重构为「内部轻量 AI 服务（OpenAI 兼容端口）+ 外部 Agent 经 MCP 控制启动器」，
+> 详见 `docs/AI_AND_MCP_ARCHITECTURE.md`（S1–S7 实施切片）与
+> `docs/ui-design/07_AI_AND_MCP.md`。本文档保留下文作为 Phase 6 已完成工作（M7）的
+> **历史记录**：其中依赖扫描/补装执行器/脱敏/审计代码已在迁移中保留并去 Agent 化
+> （迁移于 2026-10-23 完成：上移为宿主能力 `mods_dependency_scan`/`mods_apply_plan`，
+> `rmccc-llm` 拆出，`rmccc-agent` 瘦身为 mods/audit/confirm）；AgentService 执行循环、
+> 对外工具注册表、会话存储、`agent_*` 9 条 IPC 与 `/agent` 页面退役（ADR-010 部分修订）。
+
 > **对应指南**：§10，§17 Phase 6。**状态**：**M7 达成（2026-10-24）**：6.1/6.2/6.3/6.6 + 6.5 第一批
 >（执行循环 + 审批链 + IPC/UI）完成；接线前的审计债（P2-17/28/29）已清。6.4 注册表持久化随 Phase 7。
 > **前置**：Phase 1 Core Service + Phase 2/5 权限系统。**ADR-009**（凭据存储）+ **ADR-010**（Agent 会话/审计/隐私）已于 2026-10-22 accepted。

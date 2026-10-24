@@ -72,7 +72,7 @@
 
 - 无数据迁移；仅 CI 与发布脚本。
 - `AGENTS.md` 体积红线已更新为"strip 后的主可执行 < 10 MiB"。
-- 需在 `OPERATIONS.md` 记录 strip 方法与失败处理（后续补）。
+- 需在 `docs/guides/OPERATIONS.md` 记录 strip 方法与失败处理（后续补）。
 
 ## 跨平台验证方式
 

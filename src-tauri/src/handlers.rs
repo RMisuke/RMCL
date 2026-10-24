@@ -41,6 +41,9 @@ pub const IPC_COMMANDS: &[&str] = &[
     "mod_remove",
     "mod_install_local",
     "mod_pick_and_install",
+    // ── mods 依赖诊断（ADR-013 S3，纯逻辑）──
+    "mods_dependency_scan",
+    "mods_apply_plan",
     "profile_list",
     "profile_create",
     "profile_update",
@@ -89,16 +92,22 @@ pub const IPC_COMMANDS: &[&str] = &[
     "dashboard_set_theme_preference",
     "dashboard_get_theme_preference",
     "dashboard_get_theme_json",
-    // ── agent（Phase 6.5，ADR-009/010）──
-    "agent_config_get",
-    "agent_config_set",
-    "agent_session_list",
-    "agent_session_read",
-    "agent_tasks_pending",
-    "agent_task_resolve",
-    "agent_run",
-    "agent_cancel",
-    "agent_clear_history",
+    // ── AI 服务（ADR-013 S1/S2）──
+    "ai_config_get",
+    "ai_config_set",
+    "ai_models_probe",
+    "ai_analyze_log",
+    "ai_analyze_cancel",
+    // ── MCP 服务器管理（ADR-013 S4/S5）──
+    "mcp_status",
+    "mcp_set_enabled",
+    "mcp_regenerate_token",
+    "mcp_tools_list",
+    "mcp_tools_set",
+    "mcp_sessions_disconnect",
+    "mcp_confirmations_list",
+    "mcp_confirmation_resolve",
+    "mcp_recent_calls",
 ];
 
 /// 全部 IPC 命令（顺序无关，但请与 `commands/` 的模块顺序保持可读）。
@@ -134,16 +143,12 @@ pub fn invoke_handlers() -> impl Fn(tauri::ipc::Invoke<tauri::Wry>) -> bool + Se
         commands::logs::log_clear,
         // ── webview ──
         commands::ui::frontend_log,
-        // ── agent（Phase 6.5）──
-        commands::agent::agent_config_get,
-        commands::agent::agent_config_set,
-        commands::agent::agent_session_list,
-        commands::agent::agent_session_read,
-        commands::agent::agent_tasks_pending,
-        commands::agent::agent_task_resolve,
-        commands::agent::agent_run,
-        commands::agent::agent_cancel,
-        commands::agent::agent_clear_history,
+        // ── AI 服务（ADR-013）──
+        commands::ai::ai_config_get,
+        commands::ai::ai_config_set,
+        commands::ai::ai_models_probe,
+        commands::ai::ai_analyze_log,
+        commands::ai::ai_analyze_cancel,
         // ── modloader ──
         commands::modloader::modloader_list,
         commands::modloader::modloader_install,
@@ -157,6 +162,9 @@ pub fn invoke_handlers() -> impl Fn(tauri::ipc::Invoke<tauri::Wry>) -> bool + Se
         commands::mods::mod_remove,
         commands::mods::mod_install_local,
         commands::mods::mod_pick_and_install,
+        // ── mods 依赖诊断（ADR-013 S3，纯逻辑）──
+        commands::mods::mods_dependency_scan,
+        commands::mods::mods_apply_plan,
         // ── profile ──
         commands::profile::profile_list,
         commands::profile::profile_create,
@@ -213,5 +221,15 @@ pub fn invoke_handlers() -> impl Fn(tauri::ipc::Invoke<tauri::Wry>) -> bool + Se
         commands::dashboard::dashboard_set_theme_preference,
         commands::dashboard::dashboard_get_theme_preference,
         commands::dashboard::dashboard_get_theme_json,
+        // ── MCP server management (ADR-013 S4/S5) ──
+        commands::mcp::mcp_status,
+        commands::mcp::mcp_set_enabled,
+        commands::mcp::mcp_regenerate_token,
+        commands::mcp::mcp_tools_list,
+        commands::mcp::mcp_tools_set,
+        commands::mcp::mcp_sessions_disconnect,
+        commands::mcp::mcp_confirmations_list,
+        commands::mcp::mcp_confirmation_resolve,
+        commands::mcp::mcp_recent_calls,
     ]
 }

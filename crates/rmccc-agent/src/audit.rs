@@ -1,23 +1,44 @@
-//! 工具调用审计（ADR-010 决策 3）。
+//! 操作审计（ADR-010 决策 3 的有效部分，ADR-013 沿用）。
 //!
 //! 追加写 JSONL：一行一条 [`AuditRecord`]。默认字段都是白名单，
-//! **不记录** api_key、完整命令输出或文件内容；输入在构造记录时经 [`crate::redact`] 处理。
+//! **不记录** api_key、完整命令输出或文件内容；输入在构造记录时经
+//! [`rmccc_llm::redact`] 处理。
 //!
 //! 审计写入失败的处理原则：
 //!
-//! - 只读工具：错误返回给调用方，调用结果不被伪造；
-//! - 写操作（Phase 6.5 起）：必须 fail-closed（审计写不进去就不执行）。
+//! - 只读操作：错误返回给调用方，调用结果不被伪造；
+//! - 破坏性操作（MCP 确认流，S4/S5）：必须 fail-closed（审计写不进去就不执行）。
 //!   本模块只提供机制，策略在调用方。
 
-use crate::redact::redact_json;
-use crate::tools::RiskLevel;
 use rmccc_error::{Result, RmcccError};
+use rmccc_llm::redact::{redact_json, redact_text, user_home};
 use rmccc_platform::PlatformFs;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
+
+/// 操作风险分级（指南 §10.3 → ADR-013：MCP 工具目录沿用同一分级）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RiskLevel {
+    ReadOnly,
+    ReversibleWrite,
+    Destructive,
+    ExternalSideEffect,
+}
+
+impl RiskLevel {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            RiskLevel::ReadOnly => "read_only",
+            RiskLevel::ReversibleWrite => "reversible_write",
+            RiskLevel::Destructive => "destructive",
+            RiskLevel::ExternalSideEffect => "external_side_effect",
+        }
+    }
+}
 
 /// 审计结果分类。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -60,12 +81,10 @@ impl AuditRecord {
             session_id: session_id.into(),
             tool_id: tool_id.into(),
             risk_level,
-            input: redact_json(input, crate::redact::user_home().as_deref()),
+            input: redact_json(input, user_home().as_deref()),
             outcome,
             duration_ms: duration.as_millis().min(u128::from(u64::MAX)) as u64,
-            error: error.map(|text| {
-                crate::redact::redact_text(text, crate::redact::user_home().as_deref())
-            }),
+            error: error.map(|text| redact_text(text, user_home().as_deref())),
         }
     }
 }
