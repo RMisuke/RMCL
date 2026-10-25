@@ -63,7 +63,10 @@ pub struct CoreContext {
     pub download_manager: Arc<dyn rmccc_download::DownloadManager>,
 
     /// Profile / game instance store (JSON file-based).
-    pub profile_store: rmccc_profile::ProfileStore,
+    ///
+    /// Held as `Arc` so [`CoreHandle`] snapshots (see [`CoreContext::handle`])
+    /// can outlive the IPC read guard — every method is `&self` (file-backed).
+    pub profile_store: std::sync::Arc<rmccc_profile::ProfileStore>,
 
     /// Local game repository (HMCL `GameRepository`).
     ///
@@ -75,11 +78,11 @@ pub struct CoreContext {
 
     /// Version provider — resolves Mojang version manifests and fetches version JSON.
     /// Defaults to [`rmccc_version::MojangVersionProvider`].
-    pub version_provider: Box<dyn rmccc_version::VersionProvider>,
+    pub version_provider: std::sync::Arc<dyn rmccc_version::VersionProvider>,
 
     /// Download provider — translates URLs for mirror support.
     /// Defaults to Mojang official source.
-    pub download_provider: Box<dyn rmccc_download::provider::DownloadProvider>,
+    pub download_provider: std::sync::Arc<dyn rmccc_download::provider::DownloadProvider>,
 
     /// Auth provider — handles Microsoft OAuth2 / offline authentication.
     /// Defaults to [`rmccc_auth::MicrosoftAuthProvider`] using the shared HTTP
@@ -109,6 +112,66 @@ pub struct CoreContext {
 
     /// Dashboard 布局存储（Phase 3，ADR-005）。布局归一化/持久化/默认恢复。
     pub dashboard: rmccc_dashboard::LayoutStore,
+}
+
+/// Cheap, lock-free snapshot of the Arc-backed pieces long-running pipelines
+/// need (audit 2026-10-25 A2).
+///
+/// IPC 命令必须在进入分钟级安装/启动前释放 `AppState.core` 的读锁——
+/// tokio RwLock 是公平锁：只要有一个写者（`settings_set` 等）排队，后续
+/// 读请求也会排在写者后面，整包下载期间几乎所有 IPC 都会卡死。命令层的
+/// 正确姿势是 `let handle = { let core = state.core.read().await; core.handle() };`
+/// 然后全程使用 handle。
+///
+/// `config` 是取快照时的克隆：安装期间改设置不会影响已开始的安装
+/// （原先长读锁的语义是"安装期间 settings_set 阻塞"，快照语义是"立即
+/// 生效于下一次安装"——后者才是可用的行为）。
+#[derive(Clone)]
+pub struct CoreHandle {
+    /// 配置快照（游戏根、并发数、事件节流等）。
+    pub config: rmccc_config::AppConfig,
+    /// 实际使用的数据目录（同 [`CoreContext::data_dir`]）。
+    pub data_dir: PathBuf,
+    /// 共享 HTTP 客户端（连接池复用）。
+    pub http_client: reqwest::Client,
+    /// 下载引擎。
+    pub download_manager: Arc<dyn rmccc_download::DownloadManager>,
+    /// 本地版本仓库（自带内部 RwLock）。
+    pub game_repository: Arc<std::sync::RwLock<rmccc_version::DefaultGameRepository>>,
+    /// 版本元数据 provider。
+    pub version_provider: Arc<dyn rmccc_version::VersionProvider>,
+    /// 镜像 provider。
+    pub download_provider: Arc<dyn rmccc_download::provider::DownloadProvider>,
+    /// 认证 provider（Microsoft OAuth）。
+    pub auth_provider: Arc<dyn rmccc_auth::AuthProvider>,
+    /// 账户仓库（凭据唯一持有者）。
+    pub account_repo: Arc<rmccc_auth::AccountRepository>,
+    /// Profile 仓库。
+    pub profile_store: Arc<rmccc_profile::ProfileStore>,
+    /// 平台适配层（进程终止 / Java 探测 / 描述符）。
+    pub platform: Arc<rmccc_platform::Platform>,
+}
+
+impl CoreContext {
+    /// Take a lock-free [`CoreHandle`] snapshot for long-running work.
+    ///
+    /// 代价是一次 `AppConfig` 克隆 + 若干 Arc 引用计数，微秒级；换来的
+    /// 是调用方可以立即释放 IPC 层的 core 读锁。
+    pub fn handle(&self) -> CoreHandle {
+        CoreHandle {
+            config: self.config.clone(),
+            data_dir: self.data_dir.clone(),
+            http_client: self.http_client.clone(),
+            download_manager: self.download_manager.clone(),
+            game_repository: self.game_repository.clone(),
+            version_provider: self.version_provider.clone(),
+            download_provider: self.download_provider.clone(),
+            auth_provider: self.auth_provider.clone(),
+            account_repo: self.account_repo.clone(),
+            profile_store: self.profile_store.clone(),
+            platform: self.platform.clone(),
+        }
+    }
 }
 
 impl CoreContext {
@@ -157,7 +220,7 @@ impl CoreContext {
 
         let profiles_dir = data_dir.join("profiles");
         std::fs::create_dir_all(&profiles_dir)?;
-        let profile_store = rmccc_profile::ProfileStore::new(profiles_dir);
+        let profile_store = std::sync::Arc::new(rmccc_profile::ProfileStore::new(profiles_dir));
 
         // Local game repository rooted at the resolved game root (the `.minecraft`
         // equivalent). A failed initial scan must not block startup — it is
@@ -177,22 +240,22 @@ impl CoreContext {
         }
         let game_repository = std::sync::Arc::new(std::sync::RwLock::new(game_repository));
 
-        let version_provider = Box::new(rmccc_version::MojangVersionProvider::new(
+        let version_provider = std::sync::Arc::new(rmccc_version::MojangVersionProvider::new(
             http_client.clone(),
         ));
 
-        let download_provider: Box<dyn rmccc_download::provider::DownloadProvider> =
+        let download_provider: std::sync::Arc<dyn rmccc_download::provider::DownloadProvider> =
             if let Some(ref mirror) = config.mirror_url {
                 match mirror.as_str() {
                     "bmclapi" | "https://bmclapi2.bangbang93.com" => {
-                        Box::new(rmccc_download::provider::BmclApiDownloadProvider::new(
+                        std::sync::Arc::new(rmccc_download::provider::BmclApiDownloadProvider::new(
                             "https://bmclapi2.bangbang93.com",
                         ))
                     }
-                    _ => Box::new(rmccc_download::provider::MojangDownloadProvider),
+                    _ => std::sync::Arc::new(rmccc_download::provider::MojangDownloadProvider),
                 }
             } else {
-                Box::new(rmccc_download::provider::MojangDownloadProvider)
+                std::sync::Arc::new(rmccc_download::provider::MojangDownloadProvider)
             };
 
         // P4：延迟写入 FileSaver —— 命令层配置/状态写盘统一走它（防抖合并）。
@@ -299,13 +362,7 @@ impl CoreContext {
         &self,
         session: &rmccc_auth::AuthSession,
     ) -> rmccc_error::Result<rmccc_auth::AuthSession> {
-        let account = self
-            .account_repo
-            .load_account(&session.account_id)?
-            .ok_or_else(|| RmcccError::ProfileNotFound(session.account_id.clone()))?;
-        account.log_in().await?;
-        self.account_repo.save_account(account.as_ref())?;
-        Ok(account.to_session())
+        refresh_session(self.account_repo.as_ref(), session).await
     }
 
     /// 静默登录当前 active 账户，返回启动用 [`rmccc_auth::AuthInfo`]。
@@ -313,13 +370,7 @@ impl CoreContext {
     /// 无 active 账户时返回 `None`（调用方按需走离线回退）。凭证失效 /
     /// 刷新换号 / 网络错误会原样传播，调用方据此引导用户。
     pub async fn log_in_active_account(&self) -> rmccc_error::Result<Option<rmccc_auth::AuthInfo>> {
-        let account = match self.account_repo.load_active_account()? {
-            Some(a) => a,
-            None => return Ok(None),
-        };
-        let info = account.log_in().await?;
-        self.account_repo.save_account(account.as_ref())?;
-        Ok(Some(info))
+        log_in_active_account(self.account_repo.as_ref()).await
     }
 
     /// Flushes all pending debounced writes to disk (process exit hook).
@@ -328,6 +379,51 @@ impl CoreContext {
     pub fn flush_pending_writes(&self) {
         self.file_saver.wait_for_all_saves();
     }
+}
+
+impl CoreHandle {
+    /// 静默登录/刷新账户（同 [`CoreContext::refresh_session_if_needed`]，
+    /// 供已释放 core 读锁的 IPC 调用方使用，审计 A1）。
+    pub async fn refresh_session(
+        &self,
+        session: &rmccc_auth::AuthSession,
+    ) -> rmccc_error::Result<rmccc_auth::AuthSession> {
+        refresh_session(self.account_repo.as_ref(), session).await
+    }
+
+    /// 静默登录当前 active 账户（同 [`CoreContext::log_in_active_account`]，
+    /// 供启动链路经 [`CoreHandle`] 调用）。
+    pub async fn log_in_active_account(&self) -> rmccc_error::Result<Option<rmccc_auth::AuthInfo>> {
+        log_in_active_account(self.account_repo.as_ref()).await
+    }
+}
+
+/// `refresh_session` 的共享实现：只依赖 `account_repo`，因此 IPC 层可以在
+/// 短锁克隆 `Arc<AccountRepository>` 后立即释放 core 读锁再调用
+/// （审计 A1：嵌套读锁死锁的根治）。
+pub async fn refresh_session(
+    account_repo: &rmccc_auth::AccountRepository,
+    session: &rmccc_auth::AuthSession,
+) -> rmccc_error::Result<rmccc_auth::AuthSession> {
+    let account = account_repo
+        .load_account(&session.account_id)?
+        .ok_or_else(|| RmcccError::ProfileNotFound(session.account_id.clone()))?;
+    account.log_in().await?;
+    account_repo.save_account(account.as_ref())?;
+    Ok(account.to_session())
+}
+
+/// `log_in_active_account` 的共享实现（同上，仅依赖 `account_repo`）。
+async fn log_in_active_account(
+    account_repo: &rmccc_auth::AccountRepository,
+) -> rmccc_error::Result<Option<rmccc_auth::AuthInfo>> {
+    let account = match account_repo.load_active_account()? {
+        Some(a) => a,
+        None => return Ok(None),
+    };
+    let info = account.log_in().await?;
+    account_repo.save_account(account.as_ref())?;
+    Ok(Some(info))
 }
 
 /// Moves instance data written by the pre-shared-root layout into the shared

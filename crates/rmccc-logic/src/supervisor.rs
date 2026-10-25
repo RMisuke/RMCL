@@ -122,6 +122,18 @@ impl LogicHost {
         &self.executable
     }
 
+    /// PID of the helper while it is considered alive, for lock-free
+    /// cancellation (audit 2026-10-25 A-batch: a cancel must be able to kill
+    /// the helper without waiting on the runner mutex a 30s call holds).
+    pub fn pid(&self) -> Option<u32> {
+        // std::process::Child::id() 返回 u32（进程被收割前始终有效）。
+        if self.alive {
+            Some(self.child.id())
+        } else {
+            None
+        }
+    }
+
     /// Whether the helper is still running.
     pub fn is_alive(&mut self) -> bool {
         if !self.alive {

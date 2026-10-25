@@ -86,6 +86,25 @@ impl LogicRunner {
         }
     }
 
+    /// Spawn (if needed) and load the plugin's module.
+    ///
+    /// Split out of [`Self::invoke`] so callers can publish the helper PID
+    /// between load and call — the app layer uses it to cancel an in-flight
+    /// call without waiting on this runner's mutex (audit 2026-10-25).
+    pub fn load(
+        &mut self,
+        plugin_id: &str,
+        wasm_path: &Path,
+        limits: LogicLimits,
+    ) -> Result<(), LogicError> {
+        self.ensure_loaded(plugin_id, wasm_path, limits)
+    }
+
+    /// PID of the plugin's live helper, if any (read-only peek for cancellers).
+    pub fn host_pid(&self, plugin_id: &str) -> Option<u32> {
+        self.hosts.get(plugin_id).and_then(|host| host.pid())
+    }
+
     /// Kill the plugin's helper (best-effort task cancellation).
     ///
     /// The in-flight call, if any, fails with `internal`; the next call respawns.

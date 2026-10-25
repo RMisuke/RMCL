@@ -46,7 +46,7 @@ pub struct MissingFileInfo {
 ///
 /// 先按 profile id 查（UI 传的就是它），命中则用该实例的 `game_version`；
 /// 未命中再当作版本 id 直接查仓库；两者都不存在才报 `ProfileNotFound`。
-async fn resolve_version_id(core: &rmccc_core::CoreContext, id: &str) -> Result<String, IpcError> {
+async fn resolve_version_id(core: &rmccc_core::CoreHandle, id: &str) -> Result<String, IpcError> {
     if let Some(profile) = core.profile_store.get(id)? {
         return Ok(profile.game_version);
     }
@@ -263,7 +263,11 @@ pub async fn instance_check_completion(
     state: tauri::State<'_, AppState>,
     id: String,
 ) -> Result<Vec<MissingFileInfo>, IpcError> {
-    let core = state.core.read().await;
+    // A2 同款：handle 快照，不持 core 读锁（completion 检查含全量哈希读盘）。
+    let core = {
+        let core = state.core.read().await;
+        core.handle()
+    };
     let version_id = resolve_version_id(&core, &id).await?;
 
     let repo = core.game_repository.read().map_err(|_| locked_error())?;
@@ -297,7 +301,11 @@ pub async fn instance_repair(
 ) -> Result<usize, IpcError> {
     // P1-3：修复编排收归 `pipeline::repair_instance`（与 CLI 的
     // `resource repair`、启动前的 `ensure_launch_ready` 同一份实现）。
-    let core = state.core.read().await;
+    // A2：修复含分钟级下载——短锁取 handle 快照后立即释放，全程无 core 锁。
+    let core = {
+        let core = state.core.read().await;
+        core.handle()
+    };
     let version_id = resolve_version_id(&core, &id).await?;
     let report = rmccc_core::pipeline::repair_instance(
         &core,

@@ -10,6 +10,15 @@
 
 ## 0. 更新记录
 
+**2026-10-25（审计整改批次 2 `fix/ipc-lock-discipline`：IPC 锁纪律重构）**：
+
+- **CoreHandle 快照（A2 根治）**：`CoreContext` 的 `version_provider`/`download_provider` Box→Arc、`profile_store`→Arc；新增 `CoreHandle`（Arc 快照 + config 克隆）与 `core.handle()`；pipeline 7 个编排函数与 core::modloader 3 个函数签名改 `&CoreHandle`，CLI/Tauri 调用方全部跟进。`version_install`/`launch_start`/`instance_repair`/`instance_check_completion`/`modloader_install`/`version_list` 改为"短锁取快照 → 长操作全程无锁"——整包下载 / Forge installer 运行 / Java 探测期间 `settings_set` 等写命令不再被阻塞（此前 tokio 公平 RwLock 下新读请求也排队，几乎所有 IPC 卡死）。
+- **auth 嵌套读锁死锁（A1 根治）**：`refresh_session` 抽为公共函数（仅依赖 `account_repo`）；`auth_get_session`/`auth_refresh_token` 先释放守卫再刷新；Microsoft/离线登录短锁克隆 `Arc<AccountRepository>` 后，设备码流（分钟级等用户授权）全程不持 core 锁。
+- **逻辑插件并发（审计 02 P2）**：`state.logic` 由全局 `Mutex<LogicRunner>` 改为 per-plugin `LogicSlot`（runner 独占锁 + helper PID 发布槽）；rmccc-logic 新增 `LogicHost::pid` / `LogicRunner::load` / `host_pid`；`plugin_logic_cancel` 快路径 `try_lock` 干净取消，慢路径按 PID 经平台层杀进程组——不再被在途调用锁住最长 30s。新增槽位独立性契约测试。
+- 复核修正：`plugin_inspect`/`plugin_config_get` 的写锁**有意保留**（config_get 成功时清除 `config_error` 粘滞位，`&mut self` 是类型要求而非误用），已加注释说明。
+- 顺带 clippy 清零（is_ascii_hexdigit ×2、`json_looks_like_version_manifest` 移到 tests 前）。
+- 门禁：`cargo test --workspace` 42 套件 0 失败、`cargo clippy --workspace --all-targets` 0 警告、fmt 干净、`pnpm typecheck` 0 错误。
+
 **2026-10-25（审计整改批次 1 `fix/panic-guards`：输入校验止血 + 未完成加载器下架）**：
 
 - 后端五项修复（对应 [`audits/BACKEND_AUDIT_2026-10-25`](audits/BACKEND_AUDIT_2026-10-25/) 05 文档 A 批的止血子集）：

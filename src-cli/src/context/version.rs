@@ -50,7 +50,8 @@ impl CliContext {
     ) -> Result<()> {
         let profile = self.get_profile(profile_id).await?;
         let core = self.core.read().await;
-        let report = pipeline::install_game(&core, &profile, version, progress).await?;
+        let handle = core.handle();
+        let report = pipeline::install_game(&handle, &profile, version, progress).await?;
         if !report.is_complete() {
             return Err(RmcccError::DownloadFailed {
                 url: version.to_string(),
@@ -61,7 +62,7 @@ impl CliContext {
             });
         }
         // 提交（写 game_version + 刷新索引）与 GUI 共用同一路径。
-        pipeline::commit_install(&core, profile_id, version)?;
+        pipeline::commit_install(&handle, profile_id, version)?;
         tracing::info!(profile_id = %profile_id, version = %version, "Version installed");
         Ok(())
     }

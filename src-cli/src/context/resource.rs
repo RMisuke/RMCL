@@ -15,7 +15,7 @@ impl CliContext {
     ) -> Result<()> {
         let profile = self.get_profile(profile_id).await?;
         let core = self.core.read().await;
-        let report = pipeline::install_game(&core, &profile, version, progress).await?;
+        let report = pipeline::install_game(&core.handle(), &profile, version, progress).await?;
         if !report.is_complete() {
             return Err(RmcccError::DownloadFailed {
                 url: version.to_string(),
@@ -26,7 +26,7 @@ impl CliContext {
             });
         }
         // Refresh the local index so the new files are observed.
-        pipeline::refresh_repository(&core)?;
+        pipeline::refresh_repository(&core.handle())?;
         Ok(())
     }
 
@@ -81,7 +81,7 @@ impl CliContext {
         let core = self.core.read().await;
         // 显式修复命令：全量 SHA1 复核（ensure_launch_ready 的启动路径只用 Size 级）。
         let report = pipeline::repair_instance(
-            &core,
+            &core.handle(),
             &profile.game_version,
             progress,
             rmccc_version::completion::CompletionVerify::Hash,

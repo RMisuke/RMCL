@@ -120,18 +120,50 @@ pub async fn plugin_logic_invoke(
         (path, limits.clamped())
     };
 
-    let runner = state.logic.clone();
+    // 审计批次 2：per-plugin 槽位——慢调用只锁自己的 runner，不再串行化
+    // 其它插件；pid 槽让 cancel 无需等这把锁（见 plugin_logic_cancel）。
+    let slot = state
+        .logic
+        .entry(plugin_id.clone())
+        .or_insert_with(|| {
+            std::sync::Arc::new(crate::state::LogicSlot {
+                runner: std::sync::Mutex::new(rmccc_logic::LogicRunner::new()),
+                pid: std::sync::Mutex::new(None),
+            })
+        })
+        .clone();
+
     let result: Result<Value, LogicError> = tauri::async_runtime::spawn_blocking(move || {
-        let mut runner = runner
+        let mut runner = slot
+            .runner
             .lock()
             .map_err(|_| LogicError::new(LogicErrorCode::Internal, "logic runner lock poisoned"))?;
-        runner.invoke(
+        let publish_pid = |pid: Option<u32>| -> Result<(), LogicError> {
+            match slot.pid.lock() {
+                Ok(mut guard) => {
+                    *guard = pid;
+                    Ok(())
+                }
+                // pid 槽只影响 cancel 的慢路径判定位，毒化不中止调用本身。
+                Err(_) => {
+                    tracing::warn!(plugin_id = %plugin_id, "logic pid slot poisoned");
+                    Ok(())
+                }
+            }
+        };
+        // 显式 load → 发布 PID → call：invoke 内部的 ensure_loaded 此时是
+        // no-op，语义与直接 invoke 完全一致。
+        runner.load(&plugin_id, &wasm_path, limits)?;
+        publish_pid(runner.host_pid(&plugin_id))?;
+        let result = runner.invoke(
             &plugin_id,
             &wasm_path,
             &call,
             input.unwrap_or(Value::Null),
             limits,
-        )
+        );
+        publish_pid(None)?;
+        result
     })
     .await
     .map_err(|e| internal(format!("logic task failed: {e}")))?;
@@ -140,19 +172,38 @@ pub async fn plugin_logic_invoke(
 }
 
 /// Kill the plugin's helper, aborting any in-flight call (best-effort cancel).
+///
+/// 审计批次 2：cancel 不再与 invoke 争同一把全局锁——
+/// - runner 空闲（try_lock 成功）：干净地 cancel（杀进程 + 移除 host）；
+/// - 调用进行中（try_lock 失败）：按发布中的 PID 经平台层杀进程组，
+///   阻塞中的 `request()` 因管道关闭立即返回，下一次调用自动重生 helper。
 #[tauri::command]
 pub async fn plugin_logic_cancel(
     state: tauri::State<'_, AppState>,
     plugin_id: String,
 ) -> Result<bool, IpcError> {
-    let runner = state.logic.clone();
-    let cancelled = tauri::async_runtime::spawn_blocking(move || {
-        runner
-            .lock()
-            .map(|mut runner| runner.cancel(&plugin_id))
-            .unwrap_or(false)
-    })
-    .await
-    .map_err(|e| internal(format!("cancel task failed: {e}")))?;
-    Ok(cancelled)
+    let Some(slot) = state.logic.get(&plugin_id).map(|e| e.value().clone()) else {
+        return Ok(false);
+    };
+
+    // 快路径：runner 空闲。
+    if let Ok(mut runner) = slot.runner.try_lock() {
+        return Ok(runner.cancel(&plugin_id));
+    }
+
+    // 慢路径：调用进行中，按 PID 杀（不等锁）。
+    let pid = slot.pid.lock().ok().and_then(|p| *p);
+    let Some(pid) = pid else {
+        // runner 被锁但 PID 未发布（load 阶段）：load 很快，交给下一轮取消。
+        return Ok(false);
+    };
+    tracing::info!(plugin_id = %plugin_id, pid, "Cancelling in-flight logic call by pid");
+    match state.platform.process.terminate_tree(pid) {
+        Ok(()) => Ok(true),
+        Err(e) => {
+            // ESRCH（进程已退出）按成功处理；其余错误上报。
+            tracing::warn!(plugin_id = %plugin_id, pid, error = ?e, "terminate_tree failed");
+            Ok(false)
+        }
+    }
 }

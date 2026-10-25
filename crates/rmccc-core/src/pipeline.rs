@@ -12,7 +12,7 @@
 //! | 修复资源 | [`repair_instance`] / [`ensure_launch_ready`] | `instance_repair`（Tauri）、`resource repair`（CLI） |
 //! | 启动游戏 | [`launch_game`] | `launch_start`（Tauri/CLI） |
 
-use crate::CoreContext;
+use crate::CoreHandle;
 use rmccc_auth::Account;
 use rmccc_error::{Result, RmcccError};
 use rmccc_launch::{ManagedProcess, ProcessListener};
@@ -141,7 +141,7 @@ fn inject_candidates(
 /// 解析游戏版本：优先本地 patched JSON（含 `inheritsFrom` 继承链合并），
 /// 否则走 Mojang API（复用 `core.version_provider`，P2-01 一致性）。
 pub async fn resolve_version(
-    core: &CoreContext,
+    core: &CoreHandle,
     game_version_id: &str,
     game_dir: &Path,
 ) -> Result<rmccc_version::GameVersion> {
@@ -206,7 +206,7 @@ pub async fn resolve_version(
 /// 只负责"让文件落盘 + 暴露结果"，不碰 profile：安装成功后的提交由
 /// [`commit_install`] 完成（CLI 与 Tauri 共用同一条提交路径）。
 pub async fn install_game(
-    core: &CoreContext,
+    core: &CoreHandle,
     profile: &rmccc_profile::Profile,
     version_id: &str,
     progress: Option<&ProgressCb>,
@@ -303,7 +303,7 @@ pub async fn install_game(
 ///
 /// 重新从 store 读取 profile（而不是复用安装开始时的快照），避免用几秒前的
 /// 旧数据覆盖用户在下载期间改过的设置。
-pub fn commit_install(core: &CoreContext, profile_id: &str, version_id: &str) -> Result<()> {
+pub fn commit_install(core: &CoreHandle, profile_id: &str, version_id: &str) -> Result<()> {
     let mut profile = core
         .profile_store
         .get(profile_id)?
@@ -314,7 +314,7 @@ pub fn commit_install(core: &CoreContext, profile_id: &str, version_id: &str) ->
 }
 
 /// 重新扫描本地版本索引（安装 / 修复后调用，让新文件被观察到）。
-pub fn refresh_repository(core: &CoreContext) -> Result<()> {
+pub fn refresh_repository(core: &CoreHandle) -> Result<()> {
     core.game_repository
         .write()
         .map_err(|_| repo_lock_error())?
@@ -396,7 +396,7 @@ fn library_items(
 
 /// 资源文件下载项（资源索引缺失时会先拉索引）。
 async fn asset_items(
-    core: &CoreContext,
+    core: &CoreHandle,
     version: &rmccc_version::GameVersion,
     game_dir: &Path,
 ) -> Result<Vec<rmccc_download::DownloadItem>> {
@@ -447,7 +447,7 @@ fn extract_natives(
 /// `verify` 决定"文件是否缺失"的校验强度：启动前路径传 `Size`（stat 级，
 /// 每次 launch 都跑），显式修复命令传 `Hash`（全量 SHA1 复核）。
 pub async fn repair_instance(
-    core: &CoreContext,
+    core: &CoreHandle,
     version_id: &str,
     progress: Option<&ProgressCb>,
     verify: rmccc_version::completion::CompletionVerify,
@@ -509,7 +509,7 @@ pub async fn repair_instance(
 ///
 /// [`repair_instance`] 的 profile 视图：用 profile 当前指向的版本做修复。
 pub async fn ensure_launch_ready(
-    core: &CoreContext,
+    core: &CoreHandle,
     profile: &rmccc_profile::Profile,
     progress: Option<&ProgressCb>,
 ) -> Result<SetupReport> {
@@ -532,7 +532,7 @@ pub async fn ensure_launch_ready(
 /// 自定义路径不存在时返回 [`RmcccError::JavaNotFound`]——此前 CLI 检查而
 /// Tauri 只检查"路径形态"，于是填了个错路径仍会走到 spawn 才失败。
 fn detect_launch_java(
-    core: &CoreContext,
+    core: &CoreHandle,
     profile: &rmccc_profile::Profile,
     game_version: &rmccc_version::GameVersion,
 ) -> Result<rmccc_launch::JavaInstallation> {
@@ -569,7 +569,7 @@ fn detect_launch_java(
 /// 有 active 账户时经 [`CoreContext::log_in_active_account`] 静默刷新并返回
 /// `AuthInfo`（token 生命周期由 Account 内部承担）；无账户时回退到默认离线账户，
 /// 对齐 HMCL：`user_type=msa` + 随机 token。
-async fn resolve_launch_auth(core: &CoreContext) -> Result<(String, String, String, String)> {
+async fn resolve_launch_auth(core: &CoreHandle) -> Result<(String, String, String, String)> {
     match core.log_in_active_account().await? {
         Some(info) => Ok((info.username, info.uuid, info.access_token, info.user_type)),
         None => {
@@ -586,7 +586,7 @@ async fn resolve_launch_auth(core: &CoreContext) -> Result<(String, String, Stri
 /// 等，Tauri 直接返回给前端并由监听器上报退出事件）。启动成功后更新
 /// `last_played`。
 pub async fn launch_game(
-    core: &CoreContext,
+    core: &CoreHandle,
     profile: &rmccc_profile::Profile,
     listener: Arc<dyn ProcessListener>,
     progress: Option<&ProgressCb>,
@@ -816,7 +816,7 @@ mod tests {
         seed_version(&core, "1.20.4");
         let profile = seed_profile(&core, "p-install", "1.20.4");
 
-        let report = install_game(&core, &profile, "1.20.4", None)
+        let report = install_game(&core.handle(), &profile, "1.20.4", None)
             .await
             .expect("install_game");
 
@@ -838,10 +838,10 @@ mod tests {
     async fn test_repair_instance_noop_when_nothing_downloadable() {
         let (dir, core) = test_env("repair-noop");
         seed_version(&core, "1.20.4");
-        refresh_repository(&core).expect("refresh");
+        refresh_repository(&core.handle()).expect("refresh");
 
         let report = repair_instance(
-            &core,
+            &core.handle(),
             "1.20.4",
             None,
             rmccc_version::completion::CompletionVerify::Hash,
@@ -859,10 +859,10 @@ mod tests {
     async fn test_ensure_launch_ready_delegates_to_repair() {
         let (dir, core) = test_env("ensure-ready");
         seed_version(&core, "1.20.4");
-        refresh_repository(&core).expect("refresh");
+        refresh_repository(&core.handle()).expect("refresh");
         let profile = seed_profile(&core, "p-ensure", "1.20.4");
 
-        let report = ensure_launch_ready(&core, &profile, None)
+        let report = ensure_launch_ready(&core.handle(), &profile, None)
             .await
             .expect("ensure_launch_ready");
 
@@ -877,7 +877,7 @@ mod tests {
         seed_version(&core, "1.20.4");
         let profile = seed_profile(&core, "p-commit", "0.0.0-nonexistent");
 
-        commit_install(&core, "p-commit", "1.20.4").expect("commit_install");
+        commit_install(&core.handle(), "p-commit", "1.20.4").expect("commit_install");
 
         let updated = core
             .profile_store
@@ -895,7 +895,7 @@ mod tests {
     #[test]
     fn test_commit_install_rejects_unknown_profile() {
         let (dir, core) = test_env("commit-missing");
-        let err = commit_install(&core, "nope", "1.20.4").expect_err("must fail");
+        let err = commit_install(&core.handle(), "nope", "1.20.4").expect_err("must fail");
         assert!(matches!(err, RmcccError::ProfileNotFound(_)));
         let _ = std::fs::remove_dir_all(&dir);
     }

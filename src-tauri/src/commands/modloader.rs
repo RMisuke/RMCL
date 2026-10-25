@@ -98,10 +98,14 @@ pub async fn modloader_install(
 
     // 统一入口（P1-4）：installer-JAR 与 patch 两条路径的分流已在
     // `rmccc_modloader` 内部，Tauri/CLI 不再各自 match。
-    let installed = {
+    // A2：Forge/NeoForge 安装要运行官方 installer JAR（分钟级）——handle
+    // 快照后立即释放读锁，全程不持 core 锁。
+    let core = {
         let core = state.core.read().await;
-        rmccc_core::modloader::install_loader(&core, &profile, &lt, &loader_version).await?
+        core.handle()
     };
+    let installed =
+        rmccc_core::modloader::install_loader(&core, &profile, &lt, &loader_version).await?;
     tracing::info!(
         profile_id = %profile_id,
         loader = %loader_type,

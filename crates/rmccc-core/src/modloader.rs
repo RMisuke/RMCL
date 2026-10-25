@@ -8,7 +8,7 @@
 //! 分流本身也下沉到了 [`rmccc_modloader::DependencyManager::install_loader`]：
 //! Forge / NeoForge 走官方 installer JAR，其余 6 种打 `GameInstancePatch`。
 
-use crate::CoreContext;
+use crate::CoreHandle;
 use rmccc_error::{Result, RmcccError};
 use rmccc_modloader::{DependencyManager, LoaderInstallOutcome, ModLoaderType};
 
@@ -30,7 +30,7 @@ pub struct InstalledLoader {
 /// 4. patch 型 loader 写**增量**版本 JSON（`inheritsFrom` + `patches`）；
 /// 5. 更新 profile（`mod_loader` + `game_version`）并刷新本地索引。
 pub async fn install_loader(
-    core: &CoreContext,
+    core: &CoreHandle,
     profile: &rmccc_profile::Profile,
     loader_type: &ModLoaderType,
     loader_version: &str,
@@ -126,7 +126,7 @@ pub async fn install_loader(
 ///
 /// 基础版本 JSON 保持不动，因此回滚 = 删除这个目录，多层 loader 可叠加。
 fn write_incremental_version_json(
-    core: &CoreContext,
+    core: &CoreHandle,
     game_dir: &std::path::Path,
     version_id: &str,
     parent_id: &str,
@@ -155,7 +155,7 @@ fn write_incremental_version_json(
 
 /// 更新 profile 的 loader 记录与 `game_version`，并重扫本地索引。
 fn commit_loader(
-    core: &CoreContext,
+    core: &CoreHandle,
     profile_id: &str,
     loader_type: &ModLoaderType,
     loader_version: &str,
@@ -180,7 +180,7 @@ fn commit_loader(
 mod tests {
     use super::*;
 
-    fn test_env(tag: &str) -> (std::path::PathBuf, CoreContext) {
+    fn test_env(tag: &str) -> (std::path::PathBuf, crate::CoreContext) {
         let nanos = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_nanos())
@@ -189,7 +189,7 @@ mod tests {
             std::env::temp_dir().join(format!("rmccc-loader-{tag}-{}-{nanos}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).expect("data dir");
-        let core = CoreContext::new(&dir).expect("CoreContext");
+        let core = crate::CoreContext::new(&dir).expect("CoreContext");
         (dir, core)
     }
 
@@ -199,7 +199,13 @@ mod tests {
 
         // 未知 profile → 明确错误
         assert!(matches!(
-            commit_loader(&core, "nope", &ModLoaderType::Fabric, "0.15.0", "x"),
+            commit_loader(
+                &core.handle(),
+                "nope",
+                &ModLoaderType::Fabric,
+                "0.15.0",
+                "x"
+            ),
             Err(RmcccError::ProfileNotFound(_))
         ));
 
@@ -213,7 +219,7 @@ mod tests {
         };
         core.profile_store.save(&profile).expect("save");
         commit_loader(
-            &core,
+            &core.handle(),
             "p1",
             &ModLoaderType::Fabric,
             "0.15.0",

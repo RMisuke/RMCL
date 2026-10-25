@@ -28,9 +28,13 @@ impl CliContext {
         // 统一入口（P1-4）：Java 探测 / 基础版本解析 / 安装分流 / 增量 JSON
         // 写入 / profile 提交 / 索引刷新全在 `rmccc_core::modloader` 一处完成。
         let core = self.core.read().await;
-        let installed =
-            rmccc_core::modloader::install_loader(&core, &profile, loader_type, loader_version)
-                .await?;
+        let installed = rmccc_core::modloader::install_loader(
+            &core.handle(),
+            &profile,
+            loader_type,
+            loader_version,
+        )
+        .await?;
 
         tracing::info!(
             profile_id = %profile_id,

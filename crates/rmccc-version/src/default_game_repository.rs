@@ -593,6 +593,29 @@ fn copy_dir_recursive(from: &Path, to: &Path) -> Result<()> {
     Ok(())
 }
 
+/// Heuristic: does this JSON actually describe a game version?
+///
+/// Used ONLY for the mismatched-filename fallback — any of the markers below
+/// distinguishes a real manifest from mod/config files that merely share the
+/// extension.
+fn json_looks_like_version_manifest(path: &std::path::Path) -> bool {
+    let Ok(text) = std::fs::read_to_string(path) else {
+        return false;
+    };
+    let Ok(v) = serde_json::from_str::<serde_json::Value>(&text) else {
+        return false;
+    };
+    v.get("assetIndex").is_some()
+        || v.get("arguments").is_some()
+        || v.get("minecraftArguments").is_some()
+        || v.get("inheritsFrom").is_some()
+        || v.get("downloads").is_some()
+        || v.get("libraries")
+            .and_then(|l| l.as_array())
+            .map(|a| !a.is_empty())
+            .unwrap_or(false)
+}
+
 #[cfg(test)]
 mod tests {
     // ── HMCL 兼容：额外目录扫描 + 整合包配置 json 不产生实例 ──
@@ -807,27 +830,4 @@ mod tests {
         assert_eq!(resolved.launch.libraries.len(), 3); // vanilla + low + high
         let _ = std::fs::remove_dir_all(&dir);
     }
-}
-
-/// Heuristic: does this JSON actually describe a game version?
-///
-/// Used ONLY for the mismatched-filename fallback — any of the markers below
-/// distinguishes a real manifest from mod/config files that merely share the
-/// extension.
-fn json_looks_like_version_manifest(path: &std::path::Path) -> bool {
-    let Ok(text) = std::fs::read_to_string(path) else {
-        return false;
-    };
-    let Ok(v) = serde_json::from_str::<serde_json::Value>(&text) else {
-        return false;
-    };
-    v.get("assetIndex").is_some()
-        || v.get("arguments").is_some()
-        || v.get("minecraftArguments").is_some()
-        || v.get("inheritsFrom").is_some()
-        || v.get("downloads").is_some()
-        || v.get("libraries")
-            .and_then(|l| l.as_array())
-            .map(|a| !a.is_empty())
-            .unwrap_or(false)
 }

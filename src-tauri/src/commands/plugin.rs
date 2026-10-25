@@ -48,6 +48,8 @@ pub async fn plugin_inspect(
     state: tauri::State<'_, AppState>,
     id: String,
 ) -> Result<PluginDetail, IpcError> {
+    // 写锁是有意的（审计 02 复核结论）：inspect → config_get 读取成功时会
+    // 清除 plugin.config_error 粘滞位（manager 内部 &mut），非误用。
     let mut core = state.core.write().await;
     Ok(core.plugin_manager.inspect(&id)?)
 }
@@ -169,6 +171,7 @@ pub async fn plugin_config_get(
     state: tauri::State<'_, AppState>,
     id: String,
 ) -> Result<PluginConfigView, IpcError> {
+    // 写锁是有意的（同 plugin_inspect）：读取成功时清除 config_error 粘滞位。
     let mut core = state.core.write().await;
     let (config, schema) = core.plugin_manager.config_get(&id)?;
     Ok(PluginConfigView { config, schema })

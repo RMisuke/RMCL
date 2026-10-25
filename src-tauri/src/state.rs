@@ -8,6 +8,21 @@
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
+/// One plugin's logic runtime (ADR-007).
+///
+/// 审计批次 2：此前全部插件共享一把 `Mutex<LogicRunner>`——任何插件的
+/// 30s 慢调用都会串行化其它插件，且 `plugin_logic_cancel` 要等同一把锁，
+/// "中止在途调用"实际失效。现在每个插件一个槽位：runner 互斥锁只属于
+/// 该插件；`pid` 是调用方在 load 之后、call 之前发布的 helper PID，
+/// cancel 在拿不到 runner 锁（调用进行中）时直接按 PID 杀进程，
+/// 阻塞中的 `request()` 会因管道关闭立即返回。
+pub struct LogicSlot {
+    /// 该插件独占的 runner（内部 hosts 映射只会有这一个插件）。
+    pub runner: std::sync::Mutex<rmccc_logic::LogicRunner>,
+    /// 当前在途调用的 helper PID（无在途调用时为 None）。
+    pub pid: std::sync::Mutex<Option<u32>>,
+}
+
 /// Backend context — wraps CoreContext + Tauri-specific handles.
 pub struct AppState {
     /// Core orchestrator (DI container with all providers and the account repo).
@@ -27,10 +42,12 @@ pub struct AppState {
     /// Running game processes (profile_id → pid).
     pub running_games: Arc<dashmap::DashMap<String, u32>>,
 
-    /// Logic plugin helpers (ADR-007). Blocking handles live behind a std mutex
-    /// because they own child processes and pipes, and every call runs on a
-    /// blocking thread.
-    pub logic: Arc<std::sync::Mutex<rmccc_logic::LogicRunner>>,
+    /// Logic plugin helpers (ADR-007), one slot per plugin (see [`LogicSlot`]).
+    pub logic: dashmap::DashMap<String, Arc<LogicSlot>>,
+
+    /// 平台适配层句柄（从 CoreContext 克隆）：launch_kill 与逻辑插件取消
+    /// 都要按 PID 终止进程，短锁克隆后不再依赖 core RwLock。
+    pub platform: Arc<rmccc_core::rmccc_platform::Platform>,
 
     /// 进行中的 AI 日志分析（analysis_id → 取消令牌，ADR-013 S2）。
     /// 并发上限见 `commands/ai.rs`；任务结束自摘除。
@@ -68,13 +85,17 @@ impl AppState {
         )?);
         mcp.set_app(app_handle.clone());
 
+        // 平台句柄在 core 移入 RwLock 前克隆（kill 路径免等 core 锁）。
+        let platform = core.platform.clone();
+
         Ok(Self {
             core: Arc::new(RwLock::new(core)),
             http_client,
             ui_http_client,
             app_handle,
             running_games: Arc::new(dashmap::DashMap::new()),
-            logic: Arc::new(std::sync::Mutex::new(rmccc_logic::LogicRunner::new())),
+            logic: dashmap::DashMap::new(),
+            platform,
             ai_cancels: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
             mcp,
             llm_rate: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),

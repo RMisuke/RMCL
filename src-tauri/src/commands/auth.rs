@@ -29,12 +29,19 @@ fn needs_refresh(session: &AuthSession) -> bool {
 ///
 /// P2：token 生命周期由 `Account` 内部承担；刷新失败（`CredentialExpired` /
 /// `WrongAccount` / 网络错误）不再吞掉，原样传播以便前端引导用户重新登录。
+///
+/// A1：**绝不嵌套读锁**。调用方已释放自己的读守卫后才进入这里；本函数
+/// 自己的读锁只覆盖一次 Arc 克隆（微秒级），网络刷新全程不持 core 锁——
+/// 此前外层读锁 + 排队写者 + 内层 `read()` 在 tokio 公平 RwLock 下会死锁。
 async fn try_refresh_if_needed(
     state: &AppState,
     session: &AuthSession,
 ) -> Result<AuthSession, IpcError> {
-    let core = state.core.read().await;
-    Ok(core.refresh_session_if_needed(session).await?)
+    let account_repo = {
+        let core = state.core.read().await;
+        core.account_repo.clone()
+    };
+    Ok(rmccc_core::refresh_session(&account_repo, session).await?)
 }
 
 #[tauri::command]
@@ -72,17 +79,21 @@ pub async fn auth_microsoft_login(
     });
 
     // P2：经 MicrosoftAccountFactory.create 登录（统一走 Account 抽象）。
-    let session = {
+    // A2：设备码流要等用户在浏览器完成授权（分钟级）——短锁克隆 Arc 后
+    // 立即释放读锁，登录全程不持 core 锁。
+    let account_repo = {
         let core = state.core.read().await;
-        let account = core
-            .account_repo
+        core.account_repo.clone()
+    };
+    let session = {
+        let account = account_repo
             .factory("microsoft")?
             .create(CreateAccountContext {
                 additional_data: None,
                 progress: Some(progress),
             })
             .await?;
-        core.account_repo.save_account(account.as_ref())?;
+        account_repo.save_account(account.as_ref())?;
         account.to_session()
     };
 
@@ -114,17 +125,20 @@ pub async fn auth_offline_login(
     }
 
     // P2：经 OfflineAccountFactory.create 登录（离线 UUID 对齐 HMCL）。
-    let session = {
+    // A2 同款：不持 core 读锁跨 await。
+    let account_repo = {
         let core = state.core.read().await;
-        let account = core
-            .account_repo
+        core.account_repo.clone()
+    };
+    let session = {
+        let account = account_repo
             .factory("offline")?
             .create(CreateAccountContext {
                 additional_data: Some(serde_json::json!({ "username": username.trim() })),
                 progress: None,
             })
             .await?;
-        core.account_repo.save_account(account.as_ref())?;
+        account_repo.save_account(account.as_ref())?;
         account.to_session()
     };
 
@@ -219,11 +233,13 @@ pub struct SkinTextures {
 pub async fn auth_get_session(
     state: tauri::State<'_, AppState>,
 ) -> Result<Option<AuthSession>, IpcError> {
-    let core = state.core.read().await;
-    let session = core.account_repo.load_active()?;
+    let session = {
+        let core = state.core.read().await;
+        core.account_repo.load_active()?
+    };
 
     // 接近/已过期才静默刷新；凭证失效（CredentialExpired）等错误原样传播，
-    // 前端据此引导用户重新登录。
+    // 前端据此引导用户重新登录。守卫已释放——try_refresh 自己取短锁（A1）。
     if let Some(ref s) = session {
         if needs_refresh(s) {
             return Ok(Some(try_refresh_if_needed(&state, s).await?));
@@ -239,8 +255,10 @@ pub async fn auth_get_session(
 pub async fn auth_refresh_token(
     state: tauri::State<'_, AppState>,
 ) -> Result<Option<AuthSession>, IpcError> {
-    let core = state.core.read().await;
-    let session = core.account_repo.load_active()?;
+    let session = {
+        let core = state.core.read().await;
+        core.account_repo.load_active()?
+    };
 
     match session {
         Some(s) => {

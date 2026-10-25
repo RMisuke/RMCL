@@ -139,9 +139,7 @@ pub fn asset_object(game_dir: &Path, hash: &str) -> Option<PathBuf> {
 /// hashes from downloaded manifests and must reject anything that is not a
 /// plain digest before it reaches a path join.
 fn is_sha1_hex(s: &str) -> bool {
-    s.len() == 40
-        && s.bytes()
-            .all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f' | b'A'..=b'F'))
+    s.len() == 40 && s.bytes().all(|b| b.is_ascii_hexdigit())
 }
 
 /// `{game_dir}/assets/virtual/legacy` — pre-1.6 resource compatibility.

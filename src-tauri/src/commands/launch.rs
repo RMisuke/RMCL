@@ -88,8 +88,13 @@ pub async fn launch_start(
     });
 
     // ── 解析 profile → 启动前修复 → 启动（编排全在 pipeline）──
-    let pid = {
+    // A2：ensure_launch_ready 可能触发修复下载、launch_game 含 Java 探测与
+    // 进程 spawn——handle 快照后立即释放读锁，全程不持 core 锁。
+    let core = {
         let core = state.core.read().await;
+        core.handle()
+    };
+    let pid = {
         let profile = core
             .profile_store
             .get(&profile_id)?

@@ -29,7 +29,8 @@ impl CliContext {
         if !opts.no_repair {
             let core = self.core.read().await;
             let report =
-                pipeline::ensure_launch_ready(&core, &profile, opts.progress.as_ref()).await?;
+                pipeline::ensure_launch_ready(&core.handle(), &profile, opts.progress.as_ref())
+                    .await?;
             if !report.is_complete() {
                 return Err(RmcccError::DownloadFailed {
                     url: profile.game_version.clone(),
@@ -62,7 +63,8 @@ impl CliContext {
         // 启动编排（Java 探测 / 鉴权 / 命令行 / natives / spawn）全在 pipeline。
         let core = self.core.read().await;
         let managed =
-            pipeline::launch_game(&core, &profile, listener, opts.progress.as_ref()).await?;
+            pipeline::launch_game(&core.handle(), &profile, listener, opts.progress.as_ref())
+                .await?;
         let pid = managed.pid();
         self.running_games.insert(profile_id.to_string(), pid);
 

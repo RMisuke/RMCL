@@ -9,10 +9,14 @@ use tauri::Emitter;
 #[tauri::command]
 #[tracing::instrument(skip(state))]
 pub async fn version_list(state: tauri::State<'_, AppState>) -> Result<Vec<VersionInfo>, IpcError> {
-    // P2-01：走 DI 注入的 version_provider（fetch 期间持有读锁）
-    let versions = {
+    // P2-01：走 DI 注入的 version_provider。A2：短锁克隆 Arc，网络请求
+    // 期间不持 core 读锁（否则 settings_set 等写命令要等清单拉完）。
+    let provider = {
         let core = state.core.read().await;
-        match core.version_provider.fetch_versions().await {
+        core.version_provider.clone()
+    };
+    let versions = {
+        match provider.fetch_versions().await {
             Ok(versions) => versions,
             Err(e) if e.is_retryable() => {
                 tracing::warn!("Network error fetching versions, trying cache: {e}");
@@ -103,51 +107,53 @@ async fn run_install_background(
     version: String,
     profile_id: String,
 ) -> Result<(), IpcError> {
-    // ── 1. Load profile + 事件适配器（短锁）──
-    // 完整/失败事件需要真实 batch_id；它只出现在进度回调里，这里记录最后一次值。
-    let last_batch_id = Arc::new(std::sync::Mutex::new(None::<String>));
-    let (profile, progress_cb) = {
+    // ── 0. Handle 快照（A2）：此后全程不再触碰 core RwLock。
+    // 安装可持续数分钟，读锁一旦跨下载持有，公平调度会让 settings_set 等
+    // 写命令排队、后续读请求也排在写者之后——几乎所有 IPC 卡死。
+    let core = {
         let core = core.read().await;
-        let profile = core
-            .profile_store
-            .get(&profile_id)?
-            .ok_or_else(|| IpcError {
-                code: rmccc_error::ErrorCode::ProfileNotFound,
-                message: format!("Profile not found: {profile_id}"),
-                retryable: false,
-            })?;
-        let emitter = Arc::new(crate::events::ThrottledEmitter::new(
-            app_handle.clone(),
-            core.config.event_throttle_ms,
-        ));
-        let log_pid = profile_id.clone();
-        let cb_last_batch = last_batch_id.clone();
-        let progress_cb: rmccc_core::pipeline::ProgressCb =
-            Arc::new(move |msg: &rmccc_core::pipeline::ProgressMsg| match msg {
-                rmccc_core::pipeline::ProgressMsg::Download { progress, .. } => {
-                    *cb_last_batch.lock().unwrap() = Some(progress.batch_id.clone());
-                    emitter.emit_progress(&crate::events::DownloadProgressPayload {
-                        batch_id: progress.batch_id.clone(),
-                        completed_files: progress.completed_files,
-                        total_files: progress.total_files,
-                        downloaded_bytes: progress.downloaded_bytes,
-                        total_bytes: progress.total_bytes,
-                        current_file: progress.current_file.clone(),
-                    });
-                }
-                rmccc_core::pipeline::ProgressMsg::Stage(stage)
-                | rmccc_core::pipeline::ProgressMsg::StageDone(stage) => {
-                    tracing::debug!(profile_id = %log_pid, "{stage}");
-                }
-            });
-        (profile, progress_cb)
+        core.handle()
     };
 
-    // ── 2. Install（编排全部在 pipeline 内，长锁覆盖整个下载过程）──
-    let report = {
-        let core = core.read().await;
-        rmccc_core::pipeline::install_game(&core, &profile, &version, Some(&progress_cb)).await?
-    };
+    // ── 1. Load profile + 事件适配器 ──
+    // 完整/失败事件需要真实 batch_id；它只出现在进度回调里，这里记录最后一次值。
+    let last_batch_id = Arc::new(std::sync::Mutex::new(None::<String>));
+    let profile = core
+        .profile_store
+        .get(&profile_id)?
+        .ok_or_else(|| IpcError {
+            code: rmccc_error::ErrorCode::ProfileNotFound,
+            message: format!("Profile not found: {profile_id}"),
+            retryable: false,
+        })?;
+    let emitter = Arc::new(crate::events::ThrottledEmitter::new(
+        app_handle.clone(),
+        core.config.event_throttle_ms,
+    ));
+    let log_pid = profile_id.clone();
+    let cb_last_batch = last_batch_id.clone();
+    let progress_cb: rmccc_core::pipeline::ProgressCb =
+        Arc::new(move |msg: &rmccc_core::pipeline::ProgressMsg| match msg {
+            rmccc_core::pipeline::ProgressMsg::Download { progress, .. } => {
+                *cb_last_batch.lock().unwrap() = Some(progress.batch_id.clone());
+                emitter.emit_progress(&crate::events::DownloadProgressPayload {
+                    batch_id: progress.batch_id.clone(),
+                    completed_files: progress.completed_files,
+                    total_files: progress.total_files,
+                    downloaded_bytes: progress.downloaded_bytes,
+                    total_bytes: progress.total_bytes,
+                    current_file: progress.current_file.clone(),
+                });
+            }
+            rmccc_core::pipeline::ProgressMsg::Stage(stage)
+            | rmccc_core::pipeline::ProgressMsg::StageDone(stage) => {
+                tracing::debug!(profile_id = %log_pid, "{stage}");
+            }
+        });
+
+    // ── 2. Install（编排全部在 pipeline 内，无 core 锁）──
+    let report =
+        rmccc_core::pipeline::install_game(&core, &profile, &version, Some(&progress_cb)).await?;
 
     // ── 3. 有失败条目：不提交 profile，上报错误 ──
     let real_batch_id = last_batch_id.lock().unwrap().clone().unwrap_or_default();
@@ -171,10 +177,7 @@ async fn run_install_background(
     }
 
     // ── 4. 提交：profile 指向新版本 + 刷新本地索引 ──
-    {
-        let core = core.read().await;
-        rmccc_core::pipeline::commit_install(&core, &profile_id, &version)?;
-    }
+    rmccc_core::pipeline::commit_install(&core, &profile_id, &version)?;
 
     // ── 5. Emit completion event（前端据此刷新 UI）──
     let _ = app_handle.emit(

@@ -1091,3 +1091,36 @@ fn logic_plugin_runs_end_to_end_through_the_helper() {
 
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+// ────────────────────────── 11. 逻辑插件槽位独立性（审计批次 2） ──────────────────────────
+
+#[test]
+fn logic_slots_are_per_plugin() {
+    // 此前全部插件共享一把全局 Mutex<LogicRunner>：任何一个插件的 30s 慢调用
+    // 都会串行化其它插件，且 cancel 要等同一把锁。per-plugin 槽位后，插件 A
+    // 持锁调用不得阻塞插件 B 的调用/取消。
+    use crate::state::LogicSlot;
+    use std::sync::Arc;
+
+    let a = Arc::new(LogicSlot {
+        runner: std::sync::Mutex::new(rmccc_logic::LogicRunner::new()),
+        pid: std::sync::Mutex::new(None),
+    });
+    let b = Arc::new(LogicSlot {
+        runner: std::sync::Mutex::new(rmccc_logic::LogicRunner::new()),
+        pid: std::sync::Mutex::new(None),
+    });
+
+    let guard_a = a.runner.lock().expect("lock A");
+    assert!(
+        b.runner.try_lock().is_ok(),
+        "plugin B must not wait on plugin A's in-flight call"
+    );
+    // A 占用时，cancel(A) 的快路径拿不到锁——这正是走 PID 慢路径的判定位
+    // （plugin_logic_cancel），不在此阻塞。
+    assert!(a.runner.try_lock().is_err());
+    drop(guard_a);
+
+    // 空闲后快路径可用：try_lock 成功即干净 cancel。
+    assert!(a.runner.try_lock().is_ok());
+}
