@@ -9,7 +9,7 @@ import { Icon } from "./icons";
 import { RmButton, RmIconButton, RmProgress, RmTag } from "./rm/controls";
 import { downloadsStore } from "../stores/downloads";
 import { downloads } from "../ipc/api";
-import { modloadersStore } from "../stores/modloaders";
+import { modloadersStore, type LoaderInstall } from "../stores/modloaders";
 import { launchStore } from "../stores/launch";
 import { profilesStore } from "../stores/profiles";
 import { mcpStore } from "../stores/mcp";
@@ -108,19 +108,7 @@ export function TaskCenterPanel(): JSX.Element {
 
             <Show when={loaders().length > 0}>
               <div class="task-section-title">{t("tasks.sectionLoaders")}</div>
-              <For each={loaders()}>
-                {(install) => (
-                  <div class="task-row">
-                    <div class="task-row-main">
-                      <div class="task-row-title">
-                        {loaderLabel(install.loaderType)} → {profileName(install.profileId)}
-                      </div>
-                      <div class="task-row-subtitle">{install.message}</div>
-                    </div>
-                    <RmProgress value={install.percent} />
-                  </div>
-                )}
-              </For>
+              <For each={loaders()}>{(install) => <LoaderRow install={install} />}</For>
             </Show>
 
             <Show when={games().length > 0}>
@@ -153,9 +141,20 @@ export function TaskCenterPanel(): JSX.Element {
               <div class="task-center-empty">{t("tasks.empty")}</div>
             </Show>
 
-            <Show when={downloadsStore.recent().length > 0}>
+            <Show when={downloadsStore.recent().length + modloadersStore.recent().length > 0}>
               <div class="task-recent">
                 <div class="task-section-title">{t("tasks.recent")}</div>
+                <For each={modloadersStore.recent().slice(0, 3)}>
+                  {(outcome) => (
+                    <div class={`task-recent-row ${outcome.ok ? "is-ok" : "is-failed"}`}>
+                      <Icon name={outcome.ok ? "check" : "alert"} size={14} />
+                      <span class="task-recent-label">
+                        {loaderLabel(outcome.loaderType)} → {profileName(outcome.profileId)}
+                      </span>
+                      <span class="task-recent-detail">{outcome.message}</span>
+                    </div>
+                  )}
+                </For>
                 <For each={downloadsStore.recent().slice(0, 3)}>
                   {(outcome) => (
                     <div class={`task-recent-row ${outcome.ok ? "is-ok" : "is-failed"}`}>
@@ -176,6 +175,41 @@ export function TaskCenterPanel(): JSX.Element {
 
 function profileName(profileId: string): string {
   return profilesStore.items()?.find((p) => p.id === profileId)?.name ?? profileId;
+}
+
+/** Loader 安装行：进度条 + 当前阶段 + 安装器细节日志（可折叠）。 */
+function LoaderRow(props: { install: LoaderInstall }): JSX.Element {
+  const [showDetails, setShowDetails] = createSignal(false);
+  const percent = () => Math.min(100, Math.max(0, props.install.percent));
+  const indeterminate = () => props.install.percent <= 0;
+
+  return (
+    <div class="task-row is-loader">
+      <div class="task-row-main">
+        <div class="task-row-title">
+          {loaderLabel(props.install.loaderType)} → {profileName(props.install.profileId)}
+        </div>
+        <div class="task-row-subtitle">{props.install.message}</div>
+      </div>
+      <RmProgress value={percent()} determinate={!indeterminate()} />
+      <Show when={props.install.details.length > 0}>
+        <button
+          class="task-row-detail-toggle"
+          onClick={() => setShowDetails(!showDetails())}
+        >
+          <Icon name={showDetails() ? "chevron-down" : "chevron-right"} size={12} />
+          {t("tasks.loader.details", { count: String(props.install.details.length) })}
+        </button>
+        <Show when={showDetails()}>
+          <div class="task-row-detail-log">
+            <For each={props.install.details}>
+              {(line) => <div class="task-row-detail-line">{line}</div>}
+            </For>
+          </div>
+        </Show>
+      </Show>
+    </div>
+  );
 }
 
 function DownloadRow(props: { batch: { batchId: string; label: string; version: string | null; completedFiles: number; totalFiles: number; downloadedBytes: number; totalBytes: number; currentFile: string | null; speed: number; state: string; error?: string } }): JSX.Element {

@@ -18,13 +18,16 @@ import { mcpStore } from "../stores/mcp";
 import { pluginsStore } from "../stores/plugins";
 import { uiStore, toast, confirmDanger, promptText } from "../stores/ui";
 import { listThemes } from "../theme";
+import { cacheStore } from "../stores/cache";
+import { formatBytes } from "../lib/format";
 import { t } from "../i18n";
 import type { TranslationKey } from "../i18n/locales/messages";
 import { elidePath } from "../lib/format";
 
-const SECTIONS: { id: string; icon: "list" | "settings" | "download" | "bot" | "extension" | "wrench" | "info"; label: TranslationKey }[] = [
+const SECTIONS: { id: string; icon: "list" | "settings" | "download" | "bot" | "extension" | "wrench" | "info" | "sparkles"; label: TranslationKey }[] = [
   { id: "game-defaults", icon: "list", label: "settings.nav.gameDefaults" },
   { id: "general", icon: "settings" as const, label: "settings.nav.general" },
+  { id: "appearance", icon: "sparkles" as const, label: "settings.nav.appearance" },
   { id: "download", icon: "download" as const, label: "settings.nav.download" },
   { id: "ai", icon: "bot" as const, label: "settings.nav.ai" },
   { id: "plugins", icon: "extension" as const, label: "settings.nav.plugins" },
@@ -57,6 +60,7 @@ export default function Settings(): JSX.Element {
           <Switch>
             <Match when={section() === "game-defaults"}><GameDefaults /></Match>
             <Match when={section() === "general"}><General /></Match>
+            <Match when={section() === "appearance"}><Appearance /></Match>
             <Match when={section() === "download"}><DownloadSection /></Match>
             <Match when={section() === "ai"}><AiSection /></Match>
             <Match when={section() === "plugins"}><PluginsHost /></Match>
@@ -112,6 +116,23 @@ function GameDefaults(): JSX.Element {
             options={[
               { value: "", label: t("instanceDetail.settings.javaAuto") },
               ...javas().map((j) => ({ value: j.path, label: `Java ${j.major_version} · ${j.vendor}` })),
+            ]}
+          />
+        </RmFieldRow>
+      </RmCard>
+
+      <RmCard title={t("settings.game.isolation")}>
+        <RmFieldRow
+          label={t("instanceDetail.maintenance.isolation")}
+          hint={<span class="muted-line">{t("settings.game.isolationHint")}</span>}
+        >
+          <RmSelect
+            value={config()?.default_isolation ?? "modded"}
+            onChange={(v) => void patch({ default_isolation: v })}
+            options={[
+              { value: "never", label: t("instanceDetail.maintenance.isolationShared") },
+              { value: "modded", label: t("instanceDetail.maintenance.isolationModded") },
+              { value: "always", label: t("instanceDetail.maintenance.isolationIsolated") },
             ]}
           />
         </RmFieldRow>
@@ -199,16 +220,16 @@ function resolvedThemeKey(preference: string | null): string {
 function General(): JSX.Element {
   const navigate = useNavigate();
   const [locales, setLocales] = createSignal<LocaleInfo[]>([]);
-  const [themes, setThemes] = createSignal<Awaited<ReturnType<typeof listThemes>>>([]);
   const [logLines, setLogLines] = createSignal<string[]>([]);
-  const [themeJson, setThemeJson] = createSignal<string>("");
+  const [javas, setJavas] = createSignal<JavaInfo[]>([]);
+  const config = () => settingsStore.config();
 
   onMount(async () => {
     const localeRes = await userSettings.supportedLocales();
     if (localeRes.ok) setLocales(localeRes.data);
-    setThemes(await listThemes());
     const logRes = await logs.get(200);
     if (logRes.ok) setLogLines(logRes.data);
+    void settingsApi.detectJava().then((r) => r.ok && setJavas(r.data));
   });
 
   return (
@@ -226,64 +247,28 @@ function General(): JSX.Element {
         />
       </RmCard>
 
-      <RmCard title={t("settings.general.appearance")}>
-        {/* 所有主题（含跟随系统）都靠卡片手动选择，不再提供下拉 */}
-        <div class="theme-grid">
-          <button
-            class={`theme-card${settingsStore.themePreference() === null ? " is-active" : ""}`}
-            onClick={() =>
-              void settingsStore.setTheme(null).then((res) => {
-                if (!res.ok) toast({ message: res.message ?? "", tone: "error" });
-              })
-            }
-          >
-            <span class="theme-swatch is-system">
-              <span /><span /><span /><span />
-            </span>
-            <span>{t("settings.general.mode.system")}</span>
-          </button>
-          <For each={themes()}>
-            {(info) => (
-              <button
-                class={`theme-card${settingsStore.themePreference() === info.key ? " is-active" : ""}`}
-                onClick={() =>
-                  void settingsStore.setTheme(info.key).then((res) => {
-                    if (!res.ok) toast({ message: res.message ?? "", tone: "error" });
-                  })
-                }
-              >
-                <ThemeSwatch key_={info.key} />
-                <span>{info.name}</span>
-              </button>
-            )}
-          </For>
-        </div>
-        <RmAdvancedSection title={t("settings.general.themeJson")}>
-          <RmButton
-            size="sm"
-            onClick={async () => {
-              const res = await dashboard.getThemeJson(resolvedThemeKey(settingsStore.themePreference()));
-              if (res.ok) setThemeJson(JSON.stringify(res.data, null, 2));
-            }}
-          >
-            {t("common.view")}
-          </RmButton>
-          <Show when={themeJson()}>
-            <pre class="logic-result">{themeJson()}</pre>
-          </Show>
-        </RmAdvancedSection>
-      </RmCard>
-
-      <RmCard title={t("settings.general.motion")}>
+      <RmCard title={t("settings.general.debug.title")}>
         <RmFieldRow
-          label={t("settings.general.motion.toggle")}
-          hint={<span class="muted-line">{t("settings.general.motion.hint")}</span>}
+          label={t("settings.general.debug.toggle")}
+          hint={<span class="muted-line">{t("settings.general.debug.hint")}</span>}
         >
-          <RmSwitch
-            checked={settingsStore.motionEnabled()}
-            onChange={(v) => settingsStore.setMotionEnabled(v)}
-          />
+          <RmSwitch checked={settingsStore.debugMode()} onChange={(v) => settingsStore.setDebugMode(v)} />
         </RmFieldRow>
+        <Show when={settingsStore.debugMode()}>
+          <RmAdvancedSection title={t("settings.general.debug.infoTitle")}>
+            <div class="kv-grid">
+              <span>{t("settings.about.version")}</span><span>{__APP_VERSION__}</span>
+              <span>{t("settings.game.rootDir")}</span><span>{config()?.game_root_dir ?? "-"}</span>
+              <span>{t("settings.download.mirror")}</span><span>{config()?.mirror_url || "-"}</span>
+              <span>{t("settings.download.concurrency")}</span><span>{config()?.download_concurrency ?? "-"}</span>
+              <span>{t("settings.debug.isolation")}</span><span>{config()?.default_isolation ?? "-"}</span>
+              <span>{t("settings.debug.java")}</span>
+              <span>
+                <For each={javas()}>{(j) => <div class="rm-input-mono" style={{ "font-size": "11px" }}>{`Java ${j.major_version} · ${j.path}`}</div>}</For>
+              </span>
+            </div>
+          </RmAdvancedSection>
+        </Show>
       </RmCard>
 
       <RmCard title={t("settings.general.log.title")}>
@@ -334,6 +319,66 @@ function General(): JSX.Element {
   );
 }
 
+// ── Appearance（从通用拆出，2026-10-25）：配色 + 动效 ──
+
+function Appearance(): JSX.Element {
+  const [themes, setThemes] = createSignal<Awaited<ReturnType<typeof listThemes>>>([]);
+  const [themeJson, setThemeJson] = createSignal<string>("");
+
+  onMount(async () => setThemes(await listThemes()));
+
+  return (
+    <div class="tab-stack narrow">
+      <RmCard title={t("settings.general.appearance")}>
+        {/* 「跟随系统」已按需求移除：只保留显式选择的主题卡片 */}
+        <div class="theme-grid">
+          <For each={themes()}>
+            {(info) => (
+              <button
+                class={`theme-card${settingsStore.themePreference() === info.key ? " is-active" : ""}`}
+                onClick={() =>
+                  void settingsStore.setTheme(info.key).then((res) => {
+                    if (!res.ok) toast({ message: res.message ?? "", tone: "error" });
+                  })
+                }
+              >
+                <ThemeSwatch key_={info.key} />
+                <span>{info.name}</span>
+              </button>
+            )}
+          </For>
+        </div>
+        <RmAdvancedSection title={t("settings.general.themeJson")}>
+          <RmButton
+            size="sm"
+            onClick={async () => {
+              const res = await dashboard.getThemeJson(resolvedThemeKey(settingsStore.themePreference()));
+              if (res.ok) setThemeJson(JSON.stringify(res.data, null, 2));
+            }}
+          >
+            {t("common.view")}
+          </RmButton>
+          <Show when={themeJson()}>
+            <pre class="logic-result">{themeJson()}</pre>
+          </Show>
+        </RmAdvancedSection>
+      </RmCard>
+
+      <RmCard title={t("settings.general.motion")}>
+        <RmFieldRow
+          label={t("settings.general.motion.toggle")}
+          hint={<span class="muted-line">{t("settings.general.motion.hint")}</span>}
+        >
+          <RmSwitch
+            checked={settingsStore.motionEnabled()}
+            onChange={(v) => settingsStore.setMotionEnabled(v)}
+          />
+        </RmFieldRow>
+      </RmCard>
+    </div>
+  );
+}
+
 /** 4-color palette strip from `dashboard_get_theme_tokens` (ui-design 01 §3). */
 function ThemeSwatch(props: { key_: string }): JSX.Element {
   const [tokens, setTokens] = createSignal<{ background: string; surface: string; accent: string; text: string } | null>(null);
@@ -369,6 +414,7 @@ function DownloadSection(): JSX.Element {
       <RmCard title={t("settings.download.mirror")}>
         <For
           each={[
+            { value: "auto", title: t("settings.download.mirror.auto"), hint: t("settings.download.mirror.autoHint") },
             { value: "", title: t("settings.download.mirror.official"), hint: t("settings.download.mirror.officialHint") },
             { value: "https://bmclapi2.bangbang93.com", title: t("settings.download.mirror.bmclapi"), hint: t("settings.download.mirror.bmclapiHint") },
           ]}
@@ -393,6 +439,9 @@ function DownloadSection(): JSX.Element {
           )}
         </For>
       </RmCard>
+      <RmCard title={t("cache.title")}>
+        <CacheManagerCard />
+      </RmCard>
       <RmCard title={t("settings.download.concurrency")}>
         <div class="btn-row">
           <input
@@ -408,6 +457,69 @@ function DownloadSection(): JSX.Element {
         </div>
       </RmCard>
     </div>
+  );
+}
+
+// ── 图标缓存（从下载页缓存 Tab 迁入，2026-10-25）──
+
+function CacheManagerCard(): JSX.Element {
+  onMount(() => void cacheStore.refreshStats());
+  const stats = () => cacheStore.stats();
+  const [maxMiB, setMaxMiB] = createSignal(1024);
+  createEffect(() => {
+    if (stats()) setMaxMiB(Math.round(stats()!.maxBytes / 1024 / 1024));
+  });
+
+  async function saveConfig(next: { enabled?: boolean; maxBytes?: number }): Promise<void> {
+    const ok = await cacheStore.setConfig(next);
+    if (!ok) toast({ message: t("cache.saveFailed"), tone: "error" });
+  }
+
+  async function clearCache(): Promise<void> {
+    const allowed = await confirmDanger({
+      title: t("cache.clear"),
+      body: t("cache.clearBody"),
+      confirmLabel: t("common.delete"),
+    });
+    if (!allowed) return;
+    if (await cacheStore.clearAll()) {
+      toast({ message: t("cache.cleared"), tone: "success" });
+    }
+  }
+
+  return (
+    <>
+      <RmFieldRow label={t("cache.toggle")} hint={<span class="muted-line">{t("cache.tips")}</span>}>
+        <RmSwitch checked={stats()?.enabled ?? true} onChange={(v) => void saveConfig({ enabled: v })} />
+      </RmFieldRow>
+      <RmFieldRow label={t("cache.maxSize")}>
+        <div class="btn-row">
+          <input
+            class="rm-input"
+            type="number"
+            min={64}
+            style={{ width: "130px" }}
+            value={maxMiB()}
+            onInput={(e) => setMaxMiB(Number(e.currentTarget.value))}
+          />
+          <span class="muted-line">MiB</span>
+          <RmButton size="sm" onClick={() => void saveConfig({ maxBytes: Math.max(64, maxMiB()) * 1024 * 1024 })}>
+            {t("common.save")}
+          </RmButton>
+        </div>
+      </RmFieldRow>
+      <RmFieldRow label={t("cache.currentSize")}>
+        <div class="btn-row">
+          <span>
+            {formatBytes(stats()?.totalBytes ?? 0)} · {t("cache.entries", { n: stats()?.entries ?? 0 })}
+          </span>
+          <RmButton size="sm" variant="danger" icon="trash" onClick={() => void clearCache()}>
+            {t("cache.clear")}
+          </RmButton>
+        </div>
+      </RmFieldRow>
+      <div class="info-note">{t("cache.strategyNote")}</div>
+    </>
   );
 }
 

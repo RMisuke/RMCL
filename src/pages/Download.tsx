@@ -10,7 +10,8 @@ import { PageHeader } from "../components/PageHeader";
 import { RmButton, RmIconButton, RmInput, RmSelect, RmTag, RmProgress, RmSwitch } from "../components/rm/controls";
 import { RmDialog } from "../components/rm/overlays";
 import { RmSideTabs, RmListRow, RmEmptyState, RmErrorState, RmCard, RmFieldRow } from "../components/rm/surfaces";
-import { versions, profiles, modLoader, mods, instances, external } from "../ipc/api";
+import { VirtualList } from "../components/rm/VirtualList";
+import { versions, profiles, modLoader, mods, external } from "../ipc/api";
 import type {
   VersionInfo,
   ReleaseType,
@@ -22,19 +23,20 @@ import type {
   Profile,
 } from "../ipc/types";
 import { profilesStore } from "../stores/profiles";
+import * as versionCache from "../stores/versionCache";
 import { cacheStore } from "../stores/cache";
 import { downloadsStore } from "../stores/downloads";
 import { uiStore, toast, confirmDanger } from "../stores/ui";
 import { t } from "../i18n";
 import type { TranslationKey } from "../i18n/locales/messages";
 import { abbreviateCount, formatDate, initialOf, formatBytes } from "../lib/format";
+import { versionTypeIcon, loaderIcon } from "../lib/mcIcons";
 import { loaderLabel } from "../lib/loaders";
 
-const TABS: { id: string; icon: "download" | "package" | "layers" | "wrench"; label: TranslationKey }[] = [
+const TABS: { id: string; icon: "download" | "package" | "layers"; label: TranslationKey }[] = [
   { id: "install", icon: "download", label: "download.tab.install" },
   { id: "mods", icon: "package" as const, label: "download.tab.mods" },
   { id: "modpack", icon: "layers" as const, label: "download.tab.modpack" },
-  { id: "cache", icon: "wrench" as const, label: "download.tab.cache" },
 ];
 
 export default function Download(): JSX.Element {
@@ -63,7 +65,6 @@ export default function Download(): JSX.Element {
                 hint={t("download.modpack.hint")}
               />
             </Match>
-            <Match when={tab() === "cache"}><CacheManager /></Match>
           </Switch>
         </div>
       </div>
@@ -85,8 +86,8 @@ function InstallWizard(): JSX.Element {
   const [selectedVersion, setSelectedVersion] = createSignal<string | null>(
     searchParams.version ? String(searchParams.version) : null
   );
-  const [localVersions, setLocalVersions] = createSignal<InstanceInfo[]>([]);
-  const [bindLocalOpen, setBindLocalOpen] = createSignal(false);
+  // Fabric API 附加下载（Modloader 步可选，装完实例后自动安装）。
+  const [fabricApi, setFabricApi] = createSignal(false);
 
   // Step 2
   const [loaderType, setLoaderType] = createSignal<string | null>(
@@ -95,6 +96,8 @@ function InstallWizard(): JSX.Element {
   const [loaderVersions, setLoaderVersions] = createSignal<LoaderVersion[]>([]);
   const [loaderVersion, setLoaderVersion] = createSignal("");
   const [loaderDialog, setLoaderDialog] = createSignal<string | null>(null);
+  /** loader 版本加载代际：快速连点不同 loader 时，晚到的旧结果不得覆盖新结果。 */
+  let loaderGen = 0;
 
   // Step 3
   const [name, setName] = createSignal("");
@@ -110,12 +113,11 @@ function InstallWizard(): JSX.Element {
   };
 
   onMount(async () => {
-    const res = await versions.list();
-    if (res.ok) setVersions_(res.data);
-    else setError(res.error.message);
-    const local = await instances.list();
-    if (local.ok) setLocalVersions(local.data);
-    if (loaderType()) void pickLoader(loaderType()!);
+    // 先回缓存（秒开；启动时 initStores 已刷新过一次 manifest），再对齐最新值。
+    setVersions_(versionCache.gameVersionsWithRefresh());
+    void versionCache.refreshGameVersions().then((list) => {
+      if (list) setVersions_(list);
+    });
   });
 
   const filtered = createMemo(() => {
@@ -133,16 +135,32 @@ function InstallWizard(): JSX.Element {
     () => new Set((profilesStore.items() ?? []).map((p) => p.game_version))
   );
 
-  async function pickLoader(type: string): Promise<void> {
+  // 游戏版本变化时，已选 loader 的版本列表同步重载（缓存 + 代际保护防错乱）。
+  createEffect(() => {
+    const lt = loaderType();
+    const gv = selectedVersion();
+    if (lt) void pickLoader(lt, gv ?? "");
+  });
+
+  async function pickLoader(type: string, gameVersion?: string): Promise<void> {
     setLoaderType(type);
-    const res = await modLoader.list(type, selectedVersion() ?? "");
-    if (res.ok) {
-      setLoaderVersions(res.data);
-      setLoaderVersion(res.data.find((v) => v.stable)?.version ?? res.data[0]?.version ?? "");
-    } else {
-      setLoaderVersions([]);
-      setLoaderVersion("");
-    }
+    const gen = ++loaderGen;
+    const gv = gameVersion ?? selectedVersion() ?? "";
+    // 先回缓存秒显，再后台刷新（用户打开 Modloader 页即触发一次更新）。
+    const cached = versionCache.cachedLoaderVersions(type, gv);
+    if (cached) applyLoaderVersions(cached);
+    const fresh = await versionCache.refreshLoaderVersions(type, gv);
+    if (gen !== loaderGen) return; // 已切到其他 loader/版本，丢弃过期结果
+    applyLoaderVersions(fresh);
+  }
+
+  function applyLoaderVersions(list: LoaderVersion[]): void {
+    setLoaderVersions(list);
+    setLoaderVersion((current) => {
+      // 保留现有选择版本号（仍存在时），否则回落到最新稳定版。
+      if (current && list.some((v) => v.version === current)) return current;
+      return list.find((v) => v.stable)?.version ?? list[0]?.version ?? "";
+    });
   }
 
   function validateName(): boolean {
@@ -194,9 +212,43 @@ function InstallWizard(): JSX.Element {
       const loaderRes = await modLoader.install(profile.id, loaderType()!, loaderVersion());
       if (!loaderRes.ok) toast({ message: loaderRes.error.message, tone: "error" });
     }
+    if (fabricApi()) void installFabricApi(profile.id, selectedVersion()!);
     setInstalling(false);
     setStep(5);
     void profilesStore.refresh(true);
+  }
+
+  /** 从 Modrinth 拉取与游戏版本匹配的 Fabric API 并装入实例（附加选项）。 */
+  async function installFabricApi(profileId: string, gameVersion: string): Promise<void> {
+    const loader = loaderType();
+    if (loader !== "fabric" && loader !== "quilt") {
+      toast({ message: t("download.wizard.fabricApi.skipped"), tone: "info" });
+      return;
+    }
+    const search = await mods.search("fabric-api", gameVersion, "fabric", 1, 10);
+    const hit = search.ok
+      ? (search.data.hits.find((h) => h.slug === "fabric-api") ?? search.data.hits[0])
+      : null;
+    if (!hit) {
+      toast({ message: t("download.wizard.fabricApi.notFound"), tone: "error" });
+      return;
+    }
+    const vers = await mods.getVersions(hit.id);
+    const list = vers.ok ? vers.data : [];
+    const mv =
+      list.find((v) => v.game_versions.includes(gameVersion) && v.loaders.includes("fabric")) ??
+      list[0];
+    if (!mv) {
+      toast({ message: t("download.wizard.fabricApi.notFound"), tone: "error" });
+      return;
+    }
+    const inst = await mods.install(profileId, mv);
+    toast({
+      message: inst.ok
+        ? t("download.wizard.fabricApi.installed", { version: mv.version_number })
+        : inst.error.message,
+      tone: inst.ok ? "success" : "error",
+    });
   }
 
   const defaultName = createMemo(() => {
@@ -219,7 +271,8 @@ function InstallWizard(): JSX.Element {
       <Switch>
         {/* Step 1: version */}
         <Match when={step() === 1}>
-          <div class="toolbar">
+          <div class="wizard-body">
+          <div class="toolbar wizard-toolbar">
             <RmInput value={search()} onInput={setSearch} placeholder={t("download.wizard.searchVersion")} />
             <RmSelect
               value={typeFilter()}
@@ -231,12 +284,17 @@ function InstallWizard(): JSX.Element {
                 { value: "all", label: t("download.wizard.type.all") },
               ]}
             />
-            <RmButton size="sm" icon="refresh" onClick={() => void versions.list().then((r) => r.ok && setVersions_(r.data))} />
+            <RmButton size="sm" icon="refresh" onClick={() => void versionCache.refreshGameVersions().then((l) => l && setVersions_(l))} />
           </div>
-          <Show when={error()} fallback={<div class="version-list">{
-            <For each={filtered().slice(0, 100)}>
-              {(version) => (
+          <Show when={error()} fallback={
+            <VirtualList
+              items={filtered()}
+              itemHeight={48}
+              height="fill"
+              class="version-list"
+              renderItem={(version) => (
                 <RmListRow
+                  icon={<img class="mc-icon" src={versionTypeIcon(version.release_type)} alt="" loading="lazy" />}
                   title={version.id}
                   selected={selectedVersion() === version.id}
                   onClick={() => setSelectedVersion(version.id)}
@@ -255,46 +313,58 @@ function InstallWizard(): JSX.Element {
                   }
                 />
               )}
-            </For>
-          }</div>}>
+            />
+          }>
             <RmErrorState message={error()!} />
           </Show>
           <div class="wizard-actions">
-            <RmButton variant="ghost" onClick={() => setBindLocalOpen(true)}>{t("download.wizard.bindLocal")}</RmButton>
+            <span />
             <RmButton variant="primary" disabled={!selectedVersion()} onClick={() => setStep(2)}>
               {t("common.next")}
             </RmButton>
           </div>
-          <RmDialog open={bindLocalOpen()} title={t("download.wizard.bindLocal")} onClose={() => setBindLocalOpen(false)}>
-            <div class="rm-list">
-              <For each={localVersions()}>
-                {(local) => (
-                  <RmListRow
-                    title={local.id}
-                    subtitle={`${local.game_version}${local.modded ? " · modded" : ""}`}
-                    trailing={<RmTag tone={local.missing_count === 0 ? "success" : "warning"}>{local.missing_count === 0 ? t("download.wizard.localComplete") : `${local.missing_count} missing`}</RmTag>}
-                    onClick={() => {
-                      setSelectedVersion(local.id);
-                      setBindLocalOpen(false);
-                    }}
-                  />
-                )}
-              </For>
-            </div>
-          </RmDialog>
+          </div>
         </Match>
 
         {/* Step 2: loader */}
         <Match when={step() === 2}>
+          <div class="wizard-body">
           <div class="loader-grid">
             <div class={`loader-card${loaderType() === null ? " is-current" : ""}`} onClick={() => setLoaderType(null)}>
               <div class="loader-card-name">{t("download.wizard.loader.skip")}</div>
               <RmTag>{t("download.wizard.loader.vanilla")}</RmTag>
             </div>
-            <For each={["fabric", "neo_forge", "forge", "quilt", "opti_fine", "lite_loader", "cleanroom", "legacy_fabric"]}>
+            <div
+              class={`loader-card${loaderType() === "fabric" ? " is-current" : ""}`}
+              onClick={() => void pickLoader("fabric")}
+            >
+              <div class="loader-card-head">
+                <img class="loader-card-icon" src={loaderIcon("fabric") ?? ""} alt="" loading="lazy" />
+                <div class="loader-card-name">{loaderLabel("fabric")}</div>
+              </div>
+              <Show when={loaderType() === "fabric" && loaderVersion()}>
+                <RmTag tone="accent">{loaderVersion()}</RmTag>
+              </Show>
+            </div>
+            <div
+              class={`loader-card${fabricApi() ? " is-current" : ""}`}
+              onClick={() => setFabricApi((v) => !v)}
+            >
+              <div class="loader-card-head">
+                <img class="loader-card-icon" src={loaderIcon("fabric") ?? ""} alt="" loading="lazy" />
+                <div class="loader-card-name">Fabric API</div>
+              </div>
+              <Show when={fabricApi()} fallback={<RmTag>{t("download.wizard.fabricApi.optional")}</RmTag>}>
+                <RmTag tone="accent">{t("download.wizard.fabricApi.added")}</RmTag>
+              </Show>
+            </div>
+            <For each={["neo_forge", "forge", "quilt", "opti_fine", "lite_loader"]}>
               {(type) => (
                 <div class={`loader-card${loaderType() === type ? " is-current" : ""}`} onClick={() => void pickLoader(type)}>
-                  <div class="loader-card-name">{loaderLabel(type)}</div>
+                  <div class="loader-card-head">
+                    <img class="loader-card-icon" src={loaderIcon(type) ?? ""} alt="" loading="lazy" />
+                    <div class="loader-card-name">{loaderLabel(type)}</div>
+                  </div>
                   <Show when={loaderType() === type && loaderVersion()}>
                     <RmTag tone="accent">{loaderVersion()}</RmTag>
                   </Show>
@@ -302,34 +372,37 @@ function InstallWizard(): JSX.Element {
               )}
             </For>
           </div>
-          <Show when={loaderType() === "fabric" || loaderType() === "quilt"}>
-            <div class="warning-note">{t("download.wizard.loader.apiHint")}</div>
-          </Show>
+          {/* Fabric 提示移到底部操作行（压缩纵向空间），不再单独占一行 */}
           {/* 选中加载器后弹出具体版本列表：左版本号，右状态 */}
           <Show when={loaderType() && loaderVersions().length > 0}>
             <div class="loader-version-pick">
-              <div class="rm-field-label">{t("download.wizard.loaderVersion")}</div>
-              <div class="version-list">
-                <For each={loaderVersions()}>
-                  {(loader) => (
-                    <RmListRow
-                      title={loader.version}
-                      selected={loaderVersion() === loader.version}
-                      onClick={() => setLoaderVersion(loader.version)}
-                      trailing={
-                        <Show when={loader.stable}>
-                          <RmTag tone="success">{t("download.wizard.loaderStable")}</RmTag>
-                        </Show>
-                      }
-                    />
-                  )}
-                </For>
-              </div>
+              <VirtualList
+                items={loaderVersions()}
+                itemHeight={48}
+                height="fill"
+                class="version-list"
+                renderItem={(loader) => (
+                  <RmListRow
+                    title={loader.version}
+                    selected={loaderVersion() === loader.version}
+                    onClick={() => setLoaderVersion(loader.version)}
+                    trailing={
+                      <Show when={loader.stable}>
+                        <RmTag tone="success">{t("download.wizard.loaderStable")}</RmTag>
+                      </Show>
+                    }
+                  />
+                )}
+              />
             </div>
           </Show>
           <div class="wizard-actions">
             <RmButton variant="ghost" onClick={() => setStep(1)}>{t("common.back")}</RmButton>
+            <Show when={loaderType() === "fabric" || loaderType() === "quilt"}>
+              <div class="wizard-actions-note">{t("download.wizard.loader.apiHint")}</div>
+            </Show>
             <RmButton variant="primary" onClick={() => setStep(3)}>{t("common.next")}</RmButton>
+          </div>
           </div>
         </Match>
 
@@ -793,69 +866,5 @@ function ModIcon(props: { url: string | null; name: string }): JSX.Element {
         />
       )}
     </Show>
-  );
-}
-
-/** 缓存管理（下载页第四个 Tab）：开关 + 容量上限 + 当前大小/清理。 */
-function CacheManager(): JSX.Element {
-  onMount(() => void cacheStore.refreshStats());
-  const stats = () => cacheStore.stats();
-  const [maxMiB, setMaxMiB] = createSignal(1024);
-  createEffect(() => {
-    if (stats()) setMaxMiB(Math.round(stats()!.maxBytes / 1024 / 1024));
-  });
-
-  async function saveConfig(next: { enabled?: boolean; maxBytes?: number }): Promise<void> {
-    const ok = await cacheStore.setConfig(next);
-    if (!ok) toast({ message: t("cache.saveFailed"), tone: "error" });
-  }
-
-  async function clearCache(): Promise<void> {
-    const allowed = await confirmDanger({
-      title: t("cache.clear"),
-      body: t("cache.clearBody"),
-      confirmLabel: t("common.delete"),
-    });
-    if (!allowed) return;
-    if (await cacheStore.clearAll()) {
-      toast({ message: t("cache.cleared"), tone: "success" });
-    }
-  }
-
-  return (
-    <div class="tab-stack">
-      <RmCard title={t("cache.title")}>
-        <RmFieldRow label={t("cache.toggle")} hint={<span class="muted-line">{t("cache.tips")}</span>}>
-          <RmSwitch checked={stats()?.enabled ?? true} onChange={(v) => void saveConfig({ enabled: v })} />
-        </RmFieldRow>
-        <RmFieldRow label={t("cache.maxSize")}>
-          <div class="btn-row">
-            <input
-              class="rm-input"
-              type="number"
-              min={64}
-              style={{ width: "130px" }}
-              value={maxMiB()}
-              onInput={(e) => setMaxMiB(Number(e.currentTarget.value))}
-            />
-            <span class="muted-line">MiB</span>
-            <RmButton size="sm" onClick={() => void saveConfig({ maxBytes: Math.max(64, maxMiB()) * 1024 * 1024 })}>
-              {t("common.save")}
-            </RmButton>
-          </div>
-        </RmFieldRow>
-        <RmFieldRow label={t("cache.currentSize")}>
-          <div class="btn-row">
-            <span>
-              {formatBytes(stats()?.totalBytes ?? 0)} · {t("cache.entries", { n: stats()?.entries ?? 0 })}
-            </span>
-            <RmButton size="sm" variant="danger" icon="trash" onClick={() => void clearCache()}>
-              {t("cache.clear")}
-            </RmButton>
-          </div>
-        </RmFieldRow>
-        <div class="info-note">{t("cache.strategyNote")}</div>
-      </RmCard>
-    </div>
   );
 }

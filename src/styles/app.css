@@ -416,6 +416,7 @@ html[data-motion="on"] .rm-dialog {
   flex-shrink: 0;
 }
 .rm-icon-btn:hover:not(:disabled) { background: var(--rmccc-hover); color: var(--rmccc-text); }
+.rm-icon-btn.is-active { background: var(--rmccc-accent-soft); color: var(--rmccc-accent); }
 .rm-icon-btn.is-danger:hover:not(:disabled) { background: var(--rmccc-danger-soft); color: var(--rmccc-danger); }
 .rm-icon-btn:disabled { opacity: 0.4; cursor: not-allowed; }
 
@@ -1008,6 +1009,20 @@ html[data-motion="on"] .toast {
 .toolbar .rm-input-wrap { flex: 1 1 220px; min-width: 160px; }
 .toolbar { margin-bottom: var(--rmccc-space-4); }
 .view-toggle { display: flex; gap: 4px; }
+
+/* 实例页单行工具栏：搜索自适应，两个下拉定宽，右侧图标簇（视图/刷新/目录） */
+.instances-toolbar { flex-wrap: nowrap; margin-bottom: var(--rmccc-space-4); }
+.instances-toolbar .rm-input-wrap { flex: 1; min-width: 160px; }
+.instances-toolbar .instances-root-select { width: 220px; flex-shrink: 0; }
+.instances-toolbar .instances-sort-select { width: 150px; flex-shrink: 0; }
+.toolbar-divider {
+  width: 1px;
+  height: 20px;
+  background: var(--rmccc-border);
+  flex-shrink: 0;
+  margin: 0 2px;
+}
+.instances-toolbar .view-toggle { gap: 2px; margin-left: auto; }
 .instance-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: var(--rmccc-space-4); }
 .instance-card {
   position: relative;
@@ -1062,18 +1077,56 @@ html[data-motion="on"] .toast {
 .dot-running { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--rmccc-success); margin-right: 6px; }
 .dot-error { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--rmccc-danger); }
 
-.loader-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: var(--rmccc-space-3); }
+/* 向导工具栏：搜索 + 类型下拉 + 刷新一行排布 */
+.wizard-toolbar { flex-wrap: nowrap; margin-bottom: 0; flex-shrink: 0; }
+.wizard-toolbar .rm-input-wrap { flex: 1; min-width: 0; }
+.wizard-toolbar .rm-select { width: 180px; flex-shrink: 0; }
+.wizard-toolbar .rm-btn { flex-shrink: 0; }
+
+.loader-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: var(--rmccc-space-3); flex-shrink: 0; }
 .loader-card {
   display: flex;
   flex-direction: column;
-  gap: var(--rmccc-space-2);
-  padding: var(--rmccc-space-3);
+  gap: 4px;
+  padding: 8px 12px;
   border: 1px solid var(--rmccc-border);
   border-radius: var(--rmccc-radius-card);
   background: var(--rmccc-surface);
   cursor: pointer;
   text-align: center;
   align-items: center;
+  /* 4+4 网格统一紧凑高度（含标签），为下方版本列表省空间 */
+  min-height: 84px;
+  justify-content: center;
+}
+
+/* 彩色图标（icon resource 入库）：固定宽高 + contain，按比例缩放不失真 */
+.mc-icon {
+  width: 26px;
+  height: 26px;
+  object-fit: contain;
+  flex-shrink: 0;
+  display: block;
+}
+.loader-card-head {
+  display: flex;
+  align-items: center;
+  gap: var(--rmccc-space-2);
+  justify-content: center;
+}
+.loader-card-icon {
+  width: 26px;
+  height: 26px;
+  object-fit: contain;
+  flex-shrink: 0;
+  display: block;
+}
+.toast-bell {
+  width: 18px;
+  height: 18px;
+  object-fit: contain;
+  flex-shrink: 0;
+  display: block;
 }
 .loader-card:hover { border-color: var(--rmccc-accent); }
 .loader-card.is-current { border-color: var(--rmccc-accent); background: var(--rmccc-accent-soft); }
@@ -1090,8 +1143,18 @@ html[data-motion="on"] .toast {
 
 /* ── Wizard ────────────────────────────────────────────────── */
 
-.wizard { display: flex; flex-direction: column; gap: var(--rmccc-space-4); max-width: 860px; }
-.wizard-steps { display: flex; gap: var(--rmccc-space-2); }
+.wizard { display: flex; flex-direction: column; gap: var(--rmccc-space-4); height: 100%; min-height: 0; }
+/* 步骤内容区：flex 撑满剩余高度（版本/loader 列表 fill 到底，底部按钮常驻可见）。
+   overflow hidden：内容超限时裁剪而非与按钮重叠。 */
+.wizard-body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--rmccc-space-4);
+  overflow: hidden;
+}
+.wizard-steps { display: flex; gap: var(--rmccc-space-2); flex-shrink: 0; }
 .wizard-step {
   height: 30px;
   padding: 0 14px;
@@ -1102,8 +1165,29 @@ html[data-motion="on"] .toast {
 }
 .wizard-step.is-active { border-color: var(--rmccc-accent); color: var(--rmccc-accent); background: var(--rmccc-accent-soft); font-weight: 600; }
 .wizard-step.is-done { color: var(--rmccc-success); border-color: var(--rmccc-success); }
-.version-list { max-height: 420px; overflow-y: auto; border: 1px solid var(--rmccc-border); border-radius: var(--rmccc-radius-card); }
-.wizard-actions { display: flex; justify-content: space-between; gap: var(--rmccc-space-2); }
+.version-list { overflow-y: auto; border: 1px solid var(--rmccc-border); border-radius: var(--rmccc-radius-card); }
+
+/* 虚拟滚动列表：行高固定（与 itemHeight 对齐），窗口平移定位 */
+.vlist { overflow-y: auto; overscroll-behavior: contain; }
+.vlist-spacer { position: relative; }
+.vlist-window { position: absolute; top: 0; left: 0; right: 0; will-change: transform; }
+.vlist .rm-row { height: 44px; min-height: 44px; }
+/* fill 模式：由父级 flex 决定高度（ResizeObserver 实测滚动窗口） */
+.vlist-fill { flex: 1; min-height: 240px; max-height: none; }
+/* loader 版本选择区：填满剩余高度 */
+.loader-version-pick { flex: 1; min-height: 120px; display: flex; flex-direction: column; gap: var(--rmccc-space-2); }
+.loader-version-pick .vlist-fill { min-height: 120px; }
+/* 版本列表行统一 48px（与 itemHeight 对齐，容纳 26px 图标） */
+.vlist.version-list .rm-row { height: 48px; min-height: 48px; }
+.wizard-actions { display: flex; justify-content: space-between; align-items: center; gap: var(--rmccc-space-2); flex-shrink: 0; }
+/* 操作行内嵌提示（Fabric API tips）：贴右、小巧不占独立行 */
+.wizard-actions-note {
+  margin-left: auto;
+  margin-right: var(--rmccc-space-3);
+  color: var(--rmccc-warning);
+  font-size: 12px;
+  text-align: right;
+}
 .wizard-form { display: flex; flex-direction: column; gap: var(--rmccc-space-3); max-width: 480px; }
 .wizard-execute { display: flex; flex-direction: column; gap: var(--rmccc-space-3); align-items: flex-start; }
 .wizard-execute-summary { display: flex; gap: var(--rmccc-space-2); align-items: center; }
@@ -1349,6 +1433,37 @@ html[data-motion="on"] .toast {
 }
 .task-row-speed { color: var(--rmccc-accent); font-weight: 500; }
 .task-row-file.is-error { color: var(--rmccc-danger, var(--color-red)); }
+/* Loader 安装细节（Task Center，2026-10-25）：折叠切换 + 单色日志框 */
+.task-row-detail-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11.5px;
+  color: var(--rmccc-text-muted);
+  background: none;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+  align-self: flex-start;
+}
+.task-row-detail-toggle:hover { color: var(--rmccc-text); }
+.task-row-detail-log {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  max-height: 132px;
+  overflow-y: auto;
+  padding: 6px 8px;
+  border-radius: 8px;
+  background: var(--rmccc-surface-sunken);
+  border: 1px solid var(--rmccc-border);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--rmccc-text-muted);
+  word-break: break-all;
+}
+.task-row-detail-line { white-space: pre-wrap; }
 .task-recent { border-top: 1px solid var(--rmccc-border); padding-top: var(--rmccc-space-2); }
 .task-recent-row { display: flex; align-items: center; gap: var(--rmccc-space-2); font-size: 12px; padding: 2px 0; }
 .task-recent-row.is-ok { color: var(--rmccc-success); }
@@ -1592,6 +1707,368 @@ html[data-motion="off"] .hero-flow-blob { display: none; }
   50%  { transform: translate3d(26%, -16%, 0) scale(1.2); }
   100% { transform: translate3d(-18%, 10%, 0) scale(0.86); }
 }
+/* ── 主题化环境粒子（2026-10-25）：每套内置主题一组意象动效 ──────
+   林间=叶落 / 樱吹雪=花瓣 / 深海=气泡 / 熔岩=火星 / 靛夜=星辰 /
+   晴空=流云 / 纸墨=淡尘。纯 CSS transform/opacity；受 data-motion 闸门。
+   通用位移关键帧：下落 / 上升 / 闪烁 / 漂移 / 横移，粒子经 CSS 变量
+   （--sway 摆幅、--spin 转角、--drift 漂移距）参数化，单条关键帧全局复用。 */
+.hero-particles {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  pointer-events: none;
+}
+.hero-particles i {
+  position: absolute;
+  display: block;
+  will-change: transform, opacity;
+  animation-play-state: paused;
+  animation-iteration-count: infinite;
+  animation-timing-function: linear;
+}
+html[data-motion="on"] .hero-particles i { animation-play-state: running; }
+html[data-motion="off"] .hero-particles { display: none; }
+
+/* 下落（叶 / 花瓣）：左右摇摆 + 旋转 */
+@keyframes p-fall-kf {
+  0%   { transform: translate(0, -8vh) rotate(0deg); }
+  50%  { transform: translate(var(--sway, 40px), 48vh) rotate(calc(var(--spin, 300deg) / 2)); }
+  100% { transform: translate(calc(var(--sway, 40px) * -0.4), 108vh) rotate(var(--spin, 300deg)); }
+}
+/* 上升（气泡 / 火星）：小幅蛇形 */
+@keyframes p-rise-kf {
+  0%   { transform: translate(0, 0) scale(1); }
+  50%  { transform: translate(var(--sway, 30px), -52vh) scale(1.06); }
+  100% { transform: translate(calc(var(--sway, 30px) * -0.5), -110vh) scale(0.9); }
+}
+/* 闪烁（星辰）：透明度呼吸 + 轻微缩放 */
+@keyframes p-twinkle-kf {
+  0%, 100% { opacity: 0.12; transform: scale(0.85); }
+  50%      { opacity: 0.95; transform: scale(1.15); }
+}
+/* 漂移（纸墨浮尘）：极慢往返 */
+@keyframes p-drift-kf {
+  0%   { transform: translate(0, 0); }
+  50%  { transform: translate(var(--sway, 26px), calc(var(--sway, 26px) * -0.6)); }
+  100% { transform: translate(0, 0); }
+}
+/* 横移（晴空流云） */
+@keyframes p-cloud-kf {
+  0%   { transform: translateX(-30vw); }
+  100% { transform: translateX(130vw); }
+}
+
+/* ── 林间：叶形（对角圆角），三种绿色 ── */
+.p-leaf {
+  border-radius: 4% 100% 4% 100%;
+  animation-name: p-fall-kf;
+}
+.p-forest .p-leaf:nth-child(3n + 1) { background: #3f9e6b; opacity: 0.5; }
+.p-forest .p-leaf:nth-child(3n + 2) { background: #6cc794; opacity: 0.42; }
+.p-forest .p-leaf:nth-child(3n)     { background: #2a7a52; opacity: 0.46; }
+
+/* ── 樱吹雪：花瓣（缺口圆），三种粉 ── */
+.p-petal {
+  border-radius: 100% 0 100% 0;
+  background: #f6aec6;
+  opacity: 0.55;
+  animation-name: p-fall-kf;
+  animation-timing-function: ease-in-out;
+}
+.p-sakura .p-petal:nth-child(3n + 2) { background: #fbd7e3; }
+.p-sakura .p-petal:nth-child(3n)     { background: #ef8fb0; opacity: 0.5; }
+
+/* ── 深海：描边气泡，上浮中渐显渐隐 ── */
+.p-bubble {
+  border-radius: 50%;
+  border: 1.5px solid rgba(127, 178, 214, 0.4);
+  background: radial-gradient(circle at 32% 30%, rgba(160, 210, 240, 0.22), transparent 62%);
+  animation-name: p-rise-kf;
+}
+.p-ocean .p-bubble:nth-child(2n) { border-color: rgba(96, 158, 200, 0.32); }
+
+/* ── 熔岩：发光火星，上浮渐隐（末段透明度由 scale 收缩暗示）── */
+.p-ember-dot {
+  border-radius: 50%;
+  background: radial-gradient(circle, #ffc27a 0%, #ef7d3a 55%, rgba(239, 125, 58, 0) 78%);
+  box-shadow: 0 0 10px 2px rgba(239, 125, 58, 0.35);
+  animation-name: p-rise-kf;
+  animation-timing-function: ease-in;
+}
+.p-ember .p-ember-dot:nth-child(3n + 2) {
+  background: radial-gradient(circle, #ffe0b0 0%, #f09b4e 55%, rgba(240, 155, 78, 0) 78%);
+  box-shadow: 0 0 8px 2px rgba(240, 155, 78, 0.3);
+}
+
+/* ── 靛夜：星辰（白点闪烁，偶有蓝白）── */
+.p-star {
+  border-radius: 50%;
+  background: #dfe7ff;
+  animation-name: p-twinkle-kf;
+  animation-timing-function: ease-in-out;
+  box-shadow: 0 0 6px 1px rgba(190, 205, 255, 0.35);
+}
+.p-dark .p-star:nth-child(4n + 3) {
+  background: #ffd9a0;
+  box-shadow: 0 0 6px 1px rgba(255, 217, 160, 0.3);
+}
+
+/* ── 晴空：流云（大椭圆柔边，双层叠出体积感）── */
+.p-cloud {
+  border-radius: 50%;
+  background: radial-gradient(ellipse at 42% 48%,
+    rgba(255, 255, 255, 0.85) 0%,
+    rgba(255, 255, 255, 0.5) 52%,
+    rgba(255, 255, 255, 0) 78%);
+  filter: blur(6px);
+  animation-name: p-cloud-kf;
+  animation-timing-function: linear;
+}
+
+/* ── 纸墨：淡墨尘点 ── */
+.p-dust {
+  border-radius: 50%;
+  background: rgba(96, 84, 52, 0.16);
+  animation-name: p-drift-kf;
+  animation-timing-function: ease-in-out;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .hero-particles { display: none; }
+}
+
+/* ── 主题专属光斑构图（2026-10-25）：每套主题自己的背景流动设计 ──
+   不再共用三团光斑版式：林间=树隙光柱+雾 / 深海=水面光+上升光柱 /
+   熔岩=底部岩浆辉光 / 樱吹雪=粉霞白雾 / 晴空=太阳辉光+云带 /
+   纸墨=纸面晕染 / 靛夜与晨白=令牌驱动的三团光斑（它们各自的招牌）。
+   .hero-glow 与 .hero-flow 同几何（inset 0，overflow hidden）。 */
+.hero-glow {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  pointer-events: none;
+}
+.hero-glow > i {
+  position: absolute;
+  display: block;
+  will-change: transform, opacity;
+  animation-play-state: paused;
+  animation-iteration-count: infinite;
+  animation-timing-function: ease-in-out;
+}
+html[data-motion="on"] .hero-glow > i { animation-play-state: running; }
+html[data-motion="off"] .hero-glow { display: none; }
+
+/* 共享关键帧：呼吸 / 摆动光柱 / 横移 / 上升光柱 */
+@keyframes g-breathe-kf {
+  0%, 100% { opacity: 0.55; transform: scale(1); }
+  50%      { opacity: 0.95; transform: scale(1.12); }
+}
+@keyframes g-beam-kf {
+  0%, 100% { opacity: 0.4; transform: rotate(var(--tilt, 20deg)) translateX(0); }
+  50%      { opacity: 0.85; transform: rotate(var(--tilt, 20deg)) translateX(2.5vw); }
+}
+@keyframes g-drift-x-kf {
+  0%, 100% { transform: translateX(-3vw); }
+  50%      { transform: translateX(6vw); }
+}
+@keyframes g-shaft-kf {
+  0%   { opacity: 0.1; transform: translateY(9vh); }
+  55%  { opacity: 0.5; transform: translateY(-3vh); }
+  100% { opacity: 0.05; transform: translateY(-16vh); }
+}
+
+/* ── 林间：树隙光柱（细长斜向柔光条）+ 苔绿雾 ── */
+.g-beam {
+  top: -30%;
+  width: 13vw;
+  height: 170%;
+  background: linear-gradient(to bottom,
+    rgba(163, 226, 187, 0) 0%,
+    rgba(163, 226, 187, 0.2) 30%,
+    rgba(163, 226, 187, 0.08) 68%,
+    rgba(163, 226, 187, 0) 100%);
+  filter: blur(10px);
+  animation-name: g-beam-kf;
+  animation-duration: 13s;
+}
+.g-forest .g-beam.is-a { left: 14%; --tilt: 22deg; }
+.g-forest .g-beam.is-b { left: 52%; --tilt: -16deg; animation-duration: 17s; animation-delay: -6s; }
+.g-fog {
+  left: -12%;
+  bottom: -34%;
+  width: 92%;
+  height: 62%;
+  background: radial-gradient(ellipse at 50% 62%,
+    rgba(67, 199, 131, 0.24) 0%,
+    rgba(67, 199, 131, 0.1) 48%,
+    transparent 74%);
+  filter: blur(14px);
+  animation: g-breathe-kf 11s ease-in-out infinite;
+}
+
+/* ── 樱吹雪：右上粉霞 + 左下白雾（大而软，长周期） ── */
+.g-haze {
+  right: -18%;
+  top: -26%;
+  width: 78%;
+  height: 74%;
+  background: radial-gradient(ellipse at 62% 36%,
+    rgba(246, 174, 198, 0.34) 0%,
+    rgba(246, 174, 198, 0.14) 52%,
+    transparent 76%);
+  filter: blur(16px);
+  animation: g-breathe-kf 14s ease-in-out infinite;
+}
+.g-mist {
+  left: -14%;
+  bottom: -30%;
+  width: 68%;
+  height: 62%;
+  background: radial-gradient(ellipse at 40% 60%,
+    rgba(255, 255, 255, 0.55) 0%,
+    rgba(255, 240, 246, 0.24) 50%,
+    transparent 76%);
+  filter: blur(18px);
+  animation: g-breathe-kf 19s ease-in-out infinite;
+  animation-delay: -8s;
+}
+
+/* ── 深海：水面光（顶部大椭圆晃动）+ 两条上升光柱 + 深渊压边 ── */
+.g-surface {
+  left: 8%;
+  top: -34%;
+  width: 84%;
+  height: 62%;
+  background: radial-gradient(ellipse at 50% 78%,
+    rgba(114, 190, 232, 0.3) 0%,
+    rgba(114, 190, 232, 0.12) 52%,
+    transparent 76%);
+  filter: blur(14px);
+  animation: g-breathe-kf 12s ease-in-out infinite;
+}
+.g-shaft {
+  bottom: -22%;
+  width: 9vw;
+  height: 130%;
+  background: linear-gradient(to top,
+    rgba(114, 190, 232, 0.16) 0%,
+    rgba(114, 190, 232, 0.05) 55%,
+    transparent 100%);
+  filter: blur(9px);
+  animation-name: g-shaft-kf;
+  animation-duration: 14s;
+  animation-timing-function: ease-in-out;
+}
+.g-ocean .g-shaft.is-a { left: 22%; }
+.g-ocean .g-shaft.is-b { left: 63%; animation-duration: 18s; animation-delay: -8s; }
+.g-abyss {
+  left: -10%;
+  bottom: -42%;
+  width: 120%;
+  height: 55%;
+  background: radial-gradient(ellipse at 50% 90%,
+    rgba(4, 16, 28, 0.55) 0%,
+    rgba(4, 16, 28, 0.2) 55%,
+    transparent 80%);
+  animation: g-breathe-kf 21s ease-in-out infinite;
+}
+
+/* ── 熔岩：底部双团岩浆辉光（异相呼吸）+ 热浪层横移 ── */
+.g-magma {
+  bottom: -38%;
+  width: 58%;
+  height: 66%;
+  border-radius: 50%;
+  filter: blur(18px);
+  animation-name: g-breathe-kf;
+  animation-duration: 9s;
+}
+.g-ember .g-magma.is-a {
+  left: 2%;
+  background: radial-gradient(ellipse at 50% 74%,
+    rgba(239, 125, 58, 0.34) 0%,
+    rgba(239, 125, 58, 0.14) 50%,
+    transparent 76%);
+}
+.g-ember .g-magma.is-b {
+  right: -8%;
+  background: radial-gradient(ellipse at 50% 78%,
+    rgba(194, 54, 22, 0.3) 0%,
+    rgba(194, 54, 22, 0.12) 50%,
+    transparent 76%);
+  animation-duration: 13s;
+  animation-delay: -6s;
+}
+.g-heat {
+  left: 0;
+  top: 30%;
+  width: 130%;
+  height: 26%;
+  background: linear-gradient(to bottom,
+    transparent 0%,
+    rgba(239, 125, 58, 0.07) 45%,
+    transparent 100%);
+  filter: blur(8px);
+  animation: g-drift-x-kf 22s ease-in-out infinite;
+}
+
+/* ── 晴空：左上太阳辉光 + 两条淡云带横移（与粒子流云错峰） ── */
+.g-sun {
+  left: -8%;
+  top: -22%;
+  width: 52%;
+  height: 64%;
+  background: radial-gradient(circle at 38% 34%,
+    rgba(255, 255, 255, 0.7) 0%,
+    rgba(214, 238, 255, 0.3) 46%,
+    transparent 74%);
+  filter: blur(10px);
+  animation: g-breathe-kf 12s ease-in-out infinite;
+}
+.g-band {
+  left: -20%;
+  width: 90%;
+  height: 7vh;
+  border-radius: 50%;
+  background: radial-gradient(ellipse at 50% 50%,
+    rgba(255, 255, 255, 0.5) 0%,
+    rgba(255, 255, 255, 0) 72%);
+  filter: blur(7px);
+  animation: g-drift-x-kf 60s linear infinite;
+}
+.g-sky .g-band.is-a { top: 24%; }
+.g-sky .g-band.is-b { top: 58%; animation-duration: 85s; animation-delay: -30s; }
+
+/* ── 纸墨：暖纸晕染（26s 极慢呼吸）+ 淡金漂移（40s） ── */
+.g-wash {
+  right: -10%;
+  top: 4%;
+  width: 82%;
+  height: 84%;
+  background: radial-gradient(ellipse at 56% 44%,
+    rgba(224, 199, 150, 0.26) 0%,
+    rgba(224, 199, 150, 0.11) 52%,
+    transparent 78%);
+  filter: blur(16px);
+  animation: g-breathe-kf 26s ease-in-out infinite;
+}
+.g-gold {
+  left: -6%;
+  bottom: -14%;
+  width: 52%;
+  height: 56%;
+  background: radial-gradient(ellipse at 44% 58%,
+    rgba(165, 114, 31, 0.14) 0%,
+    rgba(165, 114, 31, 0.05) 52%,
+    transparent 76%);
+  filter: blur(12px);
+  animation: g-drift-x-kf 40s ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .hero-glow { display: none; }
+}
 @media (prefers-reduced-motion: reduce) {
   .hero-flow-blob { animation: none; }
 }
@@ -1608,6 +2085,13 @@ html[data-motion="off"] .hero-flow-blob { display: none; }
   color: var(--rmccc-text);
   border-radius: 14px;
   overflow: hidden;
+}
+/* 含下拉菜单的 hero 卡必须放开裁切：WKWebView 把 .rm-menu 渲染在页面层，
+   overflow:hidden 会把向上弹出的菜单裁掉（主页快速启动的版本选择器被切，
+   2026-10-25）。含菜单的卡片子元素均有内边距/圆角，不会出现直角溢出。 */
+.hero-card:has(.rm-menu-root),
+.hero-module:has(.rm-menu-root) {
+  overflow: visible;
 }
 .hero-card:hover { border-color: var(--rmccc-border); }
 
@@ -1827,25 +2311,85 @@ html[data-motion="off"] .hero-flow-blob { display: none; }
 .hero-account .hero-card-plus { margin-left: auto; }
 
 /* ── Hero：右下两卡等宽等高 + 启动按钮加高 ─────────────────── */
-
+/* 间距节奏统一为 12px（= hero-module 内边距 space-3）：卡间距、按钮与
+   选择器间距、卡内上下留白全部一致（卡高 88 = 内容 64 + 上下各 12）。 */
 .hero-corner .hero-card {
   width: 100%;
-  height: 104px;
+  height: 88px;
   justify-content: center;
 }
 .hero-launch { justify-content: center; gap: 0; }
 .hero-launch-main {
-  height: 60px;
+  height: 64px;
   align-items: stretch;
-  gap: var(--rmccc-space-2);
+  gap: 12px;
 }
-/* 启动按钮与右侧选择器同高（60px），撑满卡片行 */
+/* 启动按钮与左侧选择器同高（64px），撑满剩余宽度——
+   选择器 176px + gap 12 + 启动键 = 内容宽，行内左右间隙与卡内上下间隙同为 12px */
 .hero-launch-main .rm-btn-lg {
-  height: 60px;
-  padding: 0 22px;
+  height: 64px;
+  flex: 1;
+  min-width: 0;
+  justify-content: center;
   font-size: 15px;
 }
-.hero-launch-picker { height: 60px; }
+.hero-launch-picker { height: 64px; width: 100%; }
+.hero-launch-main .rm-btn-lg { flex-shrink: 0; }
+.hero-launch-main .rm-menu-root { flex: 0 0 176px; min-width: 0; display: flex; }
+/* 实例名过长换行（最多两行），固定宽度避免挤压启动按钮 */
+.hero-launch-picker-main {
+  flex: 1;
+  min-width: 0;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  word-break: break-all;
+  line-height: 1.3;
+}
+
+/* ── 运行状态卡（Account 与 Launch 之间，2026-10-25）───────────── */
+/* 折叠态：max-height 0 + 负 margin 抵消 flex gap → Account 归位；
+   展开态：Account 被顶上移，全程 CSS 过渡动画。 */
+.hero-run-slot {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  max-height: 0;
+  opacity: 0;
+  overflow: hidden;
+  transform: translateY(8px);
+  margin-top: -12px; /* 抵消 hero-corner 的 12px gap */
+  transition:
+    max-height 0.32s ease,
+    opacity 0.26s ease,
+    transform 0.32s ease,
+    margin-top 0.32s ease;
+  pointer-events: none;
+}
+.hero-run-slot.is-active {
+  max-height: 60px;
+  opacity: 1;
+  transform: none;
+  margin-top: 0;
+  pointer-events: auto;
+}
+.hero-run-card {
+  flex-direction: row;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 12px;
+}
+.hero-run-label {
+  flex: 1;
+  min-width: 0;
+  font-size: 12.5px;
+  color: var(--rmccc-success);
+  font-weight: 500;
+  white-space: nowrap;
+}
+/* 日志 + 强制关闭并排靠右；状态卡高度比按钮高 16px（上下 8px padding） */
+.hero-run-card .rm-btn { flex-shrink: 0; }
 
 /* ── AI 分析输出的 Markdown 渲染 ───────────────────────────── */
 
@@ -1893,6 +2437,24 @@ html[data-motion="off"] .hero-flow-blob { display: none; }
 }
 .ai-md hr { border: none; border-top: 1px solid var(--rmccc-border); margin: 10px 0; }
 .ai-md strong { font-weight: 700; }
+.ai-md table {
+  margin: 8px 0;
+  border-collapse: collapse;
+  width: 100%;
+  font-size: 12.5px;
+}
+.ai-md th, .ai-md td {
+  border: 1px solid var(--rmccc-border);
+  padding: 5px 9px;
+  text-align: left;
+  vertical-align: top;
+  word-break: break-word;
+}
+.ai-md th {
+  background: var(--rmccc-surface-sunken);
+  font-weight: 600;
+}
+.ai-md tbody tr:nth-child(even) { background: color-mix(in srgb, var(--rmccc-surface-sunken) 45%, transparent); }
 .ai-panel-text { display: flex; flex-direction: column; }
 
 

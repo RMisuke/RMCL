@@ -255,24 +255,33 @@ export function LogDrawer(): JSX.Element {
         </Show>
 
         {/* AI 分析展开窗：左侧大面板（可拖右缘调宽），日志抽屉保持在右侧 */}
-        <Show when={analysis() && aiExpanded()}>
-          {(_) => {
-            const state = analysis()!;
+        <Show when={aiExpanded() && analysis()}>
+          {(s) => {
+            // 注意：必须经 Show 回调参数 s() 访问最新 analysis（Solid 的
+            // Show 回调体在 untrack 中执行，`analysis() && aiExpanded()` 形式
+            // 的布尔 when + 快照解构会拿不到流式更新——点开窗后文字冻结，
+            // 收回才显示（2026-10-25 实测）。
             return (
               <div class="ai-window" ref={aiWindowEl} style={{ width: `${aiWidth()}px` }}>
                 <div class="ai-window-resize" onPointerDown={(e) => startResize(e)} />
                 <header class="ai-window-head">
                   <Icon name="bot" size={16} />
-                  <span class="ai-window-title">{t("logs.ai.doneTitle")}</span>
+                  <span class="ai-window-title">
+                    {s().state === "running"
+                      ? t("logs.ai.analyzing")
+                      : s().state === "error"
+                        ? t("logs.ai.failed")
+                        : t("logs.ai.doneTitle")}
+                  </span>
                   <span class="ai-panel-meta">
-                    {t("logs.ai.sentNote", { lines: String(state.sentLines) })}
+                    {t("logs.ai.sentNote", { lines: String(s().sentLines) })}
                   </span>
                   <div class="btn-row">
                     <RmButton
                       size="sm"
                       icon="copy"
                       onClick={() => {
-                        void navigator.clipboard.writeText(state.text);
+                        void navigator.clipboard.writeText(s().text);
                         toast({ message: t("logs.copied"), tone: "success" });
                       }}
                     >
@@ -281,7 +290,7 @@ export function LogDrawer(): JSX.Element {
                     <RmButton size="sm" icon="refresh" onClick={() => void startAnalysis()}>
                       {t("logs.ai.retry")}
                     </RmButton>
-                    <Show when={state.state === "running"}>
+                    <Show when={s().state === "running"}>
                       <RmButton size="sm" variant="ghost" onClick={() => void aiStore.cancelAnalysis()}>
                         {t("common.cancel")}
                       </RmButton>
@@ -295,11 +304,11 @@ export function LogDrawer(): JSX.Element {
                 </header>
                 <div class="ai-window-body">
                   <Show
-                    when={state.state !== "error"}
-                    fallback={<div class="ai-panel-error">{state.error}</div>}
+                    when={s().state !== "error"}
+                    fallback={<div class="ai-panel-error">{s().error}</div>}
                   >
-                    <div class="ai-md" innerHTML={renderMarkdown(state.text)} />
-                    <Show when={state.state === "running"}>
+                    <div class="ai-md" innerHTML={renderMarkdown(s().text)} />
+                    <Show when={s().state === "running"}>
                       <span class="ai-cursor">▌</span>
                     </Show>
                   </Show>

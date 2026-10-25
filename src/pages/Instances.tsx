@@ -19,6 +19,8 @@ import { initialOf, relativeTime, elidePath } from "../lib/format";
 import type { InstanceInfo } from "../ipc/types";
 import { readPref, writePref } from "../lib/prefs";
 import { Icon } from "../components/icons";
+import { DeleteInstanceDialog } from "../components/DeleteInstanceDialog";
+import type { Profile } from "../ipc/api";
 
 type SortKey = "lastPlayed" | "name" | "created";
 
@@ -132,21 +134,15 @@ export default function Instances(): JSX.Element {
     if (!res.ok) toast({ message: res.message ?? "", tone: "error" });
   }
 
-  async function remove(id: string, name: string): Promise<void> {
-    const allowed = await confirmDanger({
-      title: t("instances.delete.title"),
-      body: t("instances.delete.body", { name }),
-      confirmLabel: t("instances.delete.confirm"),
-      typeToConfirm: name,
-    });
-    if (!allowed) return;
-    const res = await profiles.delete(id);
-    if (res.ok) {
-      profilesStore.removeItem(id);
-      toast({ message: t("instances.deleted"), tone: "success" });
-    } else {
-      toast({ message: res.error.message, tone: "error" });
-    }
+  // 删除 = 删除全部游戏资源（共享组件带确认 + 5s 冷静期 + 二次点击）。
+  const [deleteTarget, setDeleteTarget] = createSignal<Profile | null>(null);
+  const [deleteOpen, setDeleteOpen] = createSignal(false);
+
+  function openDelete(id: string): void {
+    const p = profilesStore.items()?.find((x) => x.id === id);
+    if (!p) return;
+    setDeleteTarget(p);
+    setDeleteOpen(true);
   }
 
   const menuFor = (id: string, name: string) => [
@@ -154,7 +150,7 @@ export default function Instances(): JSX.Element {
     { label: t("instances.menu.detail"), icon: "settings" as const, onSelect: () => navigate(`/instances/${id}`) },
     { label: t("instances.menu.browseMods"), icon: "package" as const, onSelect: () => navigate(`/download#mods?instance=${id}`) },
     { label: t("instances.menu.rename"), icon: "edit" as const, disabled: launchStore.isRunning(id), onSelect: () => void renameDialog(id, name) },
-    { label: t("instances.menu.delete"), icon: "trash" as const, danger: true, disabled: launchStore.isRunning(id), onSelect: () => void remove(id, name) },
+    { label: t("instances.menu.delete"), icon: "trash" as const, danger: true, disabled: launchStore.isRunning(id), onSelect: () => openDelete(id) },
   ];
 
   async function renameDialog(id: string, current: string): Promise<void> {
@@ -184,26 +180,23 @@ export default function Instances(): JSX.Element {
         }
       />
       <div class="page-body">
-        <div class="toolbar">
+        {/* 单行工具栏：搜索(自适应) | 目录下拉 | 排序下拉 │ 视图切换组 · 刷新 · 目录管理（右对齐图标簇） */}
+        <div class="toolbar instances-toolbar">
           <RmInput value={search()} onInput={setSearch} placeholder={t("instances.search.placeholder")} />
           {/* 游戏目录过滤（HMCL 式）：下拉只做过滤；目录的添加/移除走管理弹窗 */}
           <RmSelect
+            class="instances-root-select"
             value={rootFilter()}
             onChange={setRootFilter}
             options={[
               { value: "", label: t("instances.root.profiles") },
               { value: "__all__", label: t("instances.root.all") },
               { value: "__primary__", label: t("instances.root.primary") },
-              ...roots().extras.map((r) => ({ value: r, label: elidePath(r, 36) })),
+              ...roots().extras.map((r) => ({ value: r, label: elidePath(r, 24) })),
             ]}
           />
-          <RmIconButton
-            icon="folder"
-            label={t("instances.root.manage")}
-            title={t("instances.root.manage")}
-            onClick={() => setManageOpen(true)}
-          />
           <RmSelect
+            class="instances-sort-select"
             value={sort()}
             onChange={(v) => {
               setSort(v as SortKey);
@@ -215,10 +208,12 @@ export default function Instances(): JSX.Element {
               { value: "created", label: t("instances.sort.created") },
             ]}
           />
+          <div class="toolbar-divider" aria-hidden="true" />
           <div class="view-toggle">
             <RmIconButton
               icon="grid"
               label={t("instances.view.cards")}
+              active={view() === "cards"}
               onClick={() => {
                 setView("cards");
                 writePref("instances.view", "cards");
@@ -227,6 +222,7 @@ export default function Instances(): JSX.Element {
             <RmIconButton
               icon="list"
               label={t("instances.view.list")}
+              active={view() === "list"}
               onClick={() => {
                 setView("list");
                 writePref("instances.view", "list");
@@ -234,6 +230,12 @@ export default function Instances(): JSX.Element {
             />
           </div>
           <RmIconButton icon="refresh" label={t("common.refresh")} onClick={() => void profilesStore.refresh(true)} />
+          <RmIconButton
+            icon="folder"
+            label={t("instances.root.manage")}
+            title={t("instances.root.manage")}
+            onClick={() => setManageOpen(true)}
+          />
         </div>
 
         <Show
@@ -431,6 +433,14 @@ export default function Instances(): JSX.Element {
           </RmButton>
         </div>
       </RmDialog>
+
+      <Show when={deleteTarget()}>
+        <DeleteInstanceDialog
+          profile={deleteTarget()!}
+          open={deleteOpen()}
+          onClose={() => setDeleteOpen(false)}
+        />
+      </Show>
     </div>
   );
 }

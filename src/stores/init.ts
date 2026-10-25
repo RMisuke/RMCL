@@ -17,6 +17,7 @@ import { modloadersStore } from "./modloaders";
 import { aiStore } from "./ai";
 import { mcpStore } from "./mcp";
 import { uiStore, toast } from "./ui";
+import * as versionCache from "./versionCache";
 
 let started = false;
 
@@ -72,4 +73,6 @@ export function initStores(): void {
   void aiStore.refreshConfig();
   void mcpStore.refreshStatus();
   void mcpStore.refreshConfirmations();
+  // 游戏版本 manifest：启动时后台刷新一次（versionCache 供下载向导/实例页秒开）。
+  void versionCache.refreshGameVersions();
 }

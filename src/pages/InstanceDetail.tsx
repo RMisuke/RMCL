@@ -4,9 +4,10 @@
  * field-level inherit locks, dependency scan + one-click apply (pure logic).
  */
 import type { JSX } from "solid-js";
-import { Show, For, createMemo, createSignal, createEffect, onMount, Switch, Match } from "solid-js";
+import { Show, For, createMemo, createSignal, createEffect, onMount, onCleanup, Switch, Match } from "solid-js";
 import { useParams, useNavigate, useLocation } from "@solidjs/router";
 import { PageHeader } from "../components/PageHeader";
+import { DeleteInstanceDialog } from "../components/DeleteInstanceDialog";
 import { Icon } from "../components/icons";
 import { RmButton, RmIconButton, RmInput, RmSelect, RmSwitch, RmTag, RmCheckbox } from "../components/rm/controls";
 import { RmDialog, RmMenu } from "../components/rm/overlays";
@@ -41,6 +42,8 @@ import { t } from "../i18n";
 import type { TranslationKey } from "../i18n/locales/messages";
 import { relativeTime, elidePath } from "../lib/format";
 import { LOADER_CARDS } from "../lib/loaders";
+import { loaderIcon } from "../lib/mcIcons";
+import * as versionCache from "../stores/versionCache";
 
 const TABS: { id: string; icon: "list" | "package" | "layers" | "sliders" | "wrench"; label: TranslationKey }[] = [
   { id: "overview", icon: "list", label: "instanceDetail.tab.overview" },
@@ -169,18 +172,22 @@ function BrowseMenu(props: { profile: Profile }): JSX.Element {
 
 function ManageMenu(props: { profile: Profile }): JSX.Element {
   const navigate = useNavigate();
+  const [deleteOpen, setDeleteOpen] = createSignal(false);
   return (
-    <RmMenu
-      // 侧栏底部按钮：向上弹出（红框位置），避免向下遮住按钮本身。
-      side="up"
-      items={[
-        { label: t("instances.menu.rename"), icon: "edit", onSelect: () => void renameProfile(props.profile) },
-        { label: t("instances.menu.browseMods"), icon: "package", onSelect: () => navigate(`/download#mods?instance=${props.profile.id}`) },
-        { label: t("instanceDetail.manage.delete"), icon: "trash", danger: true, onSelect: () => void deleteProfile(props.profile, false) },
-      ]}
-    >
-      <RmButton size="sm" icon="more-horizontal">{t("instanceDetail.manage")}</RmButton>
-    </RmMenu>
+    <>
+      <RmMenu
+        // 侧栏底部按钮：向上弹出（红框位置），避免向下遮住按钮本身。
+        side="up"
+        items={[
+          { label: t("instances.menu.rename"), icon: "edit", onSelect: () => void renameProfile(props.profile) },
+          { label: t("instances.menu.browseMods"), icon: "package", onSelect: () => navigate(`/download#mods?instance=${props.profile.id}`) },
+          { label: t("instanceDetail.manage.delete"), icon: "trash", danger: true, onSelect: () => setDeleteOpen(true) },
+        ]}
+      >
+        <RmButton size="sm" icon="more-horizontal">{t("instanceDetail.manage")}</RmButton>
+      </RmMenu>
+      <DeleteInstanceDialog profile={props.profile} open={deleteOpen()} onClose={() => setDeleteOpen(false)} />
+    </>
   );
 }
 
@@ -201,24 +208,6 @@ async function renameProfile(profile: Profile): Promise<void> {
   }
 }
 
-export async function deleteProfile(profile: Profile, alsoVersion: boolean): Promise<void> {
-  const allowed = await uiStore.confirm({
-    title: t("instances.delete.title"),
-    body: t("instances.delete.body", { name: profile.name }),
-    confirmLabel: t("instances.delete.confirm"),
-    danger: true,
-    typeToConfirm: profile.name,
-  });
-  if (!allowed) return;
-  const res = await profiles.delete(profile.id);
-  if (res.ok) {
-    profilesStore.removeItem(profile.id);
-    toast({ message: t("instances.deleted"), tone: "success" });
-  } else {
-    toast({ message: res.error.message, tone: "error" });
-  }
-  void alsoVersion;
-}
 
 // ── Tab 1 · Overview ──
 
@@ -547,15 +536,27 @@ function LoadersTab(props: { profile: Profile }): JSX.Element {
 
   async function openVersions(loaderType: string): Promise<void> {
     setVersionDialog(loaderType);
-    setLoadingVersions(true);
-    const res = await modLoader.list(loaderType, props.profile.game_version);
-    setLoadingVersions(false);
-    if (res.ok) {
-      setVersions_(res.data);
-      const firstStable = res.data.find((v) => v.stable) ?? res.data[0];
-      setSelectedVersion(firstStable?.version ?? "");
+    const gv = props.profile.game_version;
+    // 先回缓存秒显，再后台刷新（打开即视为一次更新请求）。
+    const cached = versionCache.cachedLoaderVersions(loaderType, gv);
+    if (cached) {
+      setVersions_(cached);
+      const firstCached = cached.find((v) => v.stable) ?? cached[0];
+      setSelectedVersion(firstCached?.version ?? "");
+      setLoadingVersions(false);
     } else {
-      toast({ message: res.error.message, tone: "error" });
+      setLoadingVersions(true);
+    }
+    const res = await versionCache.refreshLoaderVersions(loaderType, gv);
+    // 用户快速切换弹窗目标时，晚到的旧结果不覆盖新目标。
+    if (versionDialog() !== loaderType) return;
+    setLoadingVersions(false);
+    if (res.length > 0) {
+      setVersions_(res);
+      const firstStable = res.find((v) => v.stable) ?? res[0];
+      setSelectedVersion(firstStable?.version ?? "");
+    } else if (!cached) {
+      toast({ message: t("instanceDetail.loader.loadFailed"), tone: "error" });
     }
   }
 
@@ -580,7 +581,10 @@ function LoadersTab(props: { profile: Profile }): JSX.Element {
             const installState = () => installing().find((i) => i.loaderType === card.id);
             return (
               <div class={`loader-card${isCurrent() ? " is-current" : ""}${disabledReason() ? " is-disabled" : ""}`}>
-                <div class="loader-card-name">{card.label}</div>
+                <div class="loader-card-head">
+                  <img class="loader-card-icon" src={loaderIcon(card.id) ?? ""} alt="" loading="lazy" />
+                  <div class="loader-card-name">{card.label}</div>
+                </div>
                 <Show when={isCurrent()} fallback={<RmTag>{t("instanceDetail.loader.notInstalled")}</RmTag>}>
                   <RmTag tone="success">✓ {current()!.loader_version}</RmTag>
                 </Show>
@@ -964,6 +968,7 @@ function MaintenanceTab(props: { profile: Profile }): JSX.Element {
   const [repairing, setRepairing] = createSignal(false);
   const [isolation, setIsolation] = createSignal(props.profile.isolation ?? "never");
   const [paths, setPaths] = createSignal<InstancePaths | null>(null);
+  const [deleteOpen, setDeleteOpen] = createSignal(false);
 
   createEffect(() => {
     void instances.paths(props.profile.id).then((r) => r.ok && setPaths(r.data));
@@ -1062,11 +1067,14 @@ function MaintenanceTab(props: { profile: Profile }): JSX.Element {
           <RmButton icon="edit" onClick={() => void renameProfile(props.profile)}>
             {t("instances.menu.rename")}
           </RmButton>
-          <RmButton variant="danger" icon="trash" disabled={running()} onClick={() => void deleteProfile(props.profile, false)}>
+          <RmButton variant="danger" icon="trash" disabled={running()} onClick={() => setDeleteOpen(true)}>
             {t("instances.menu.delete")}
           </RmButton>
         </div>
       </RmCard>
+
+      <DeleteInstanceDialog profile={props.profile} open={deleteOpen()} onClose={() => setDeleteOpen(false)} />
     </div>
   );
 }
+

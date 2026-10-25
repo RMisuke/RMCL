@@ -15,6 +15,31 @@ export const settingsStore = createRoot(() => {
   // ── 动态效果开关（宿主统一发布：主题/插件动画都必须跟随此状态）──
   // 发布形式：<html data-motion="on|off"> + CSS 变量 --rmccc-motion-enabled；
   // 主题类插件/自定义主题的动画一律以该状态为闸门，宿主动效（hero 流动层等）同源。
+  // ── Debug 模式（开发排查用）：localStorage 持久化；dev 构建默认开启 ──
+  const DEBUG_KEY = "rmccc.debugMode";
+  const DEBUG_DEFAULT = import.meta.env.DEV;
+
+  function readDebug(): boolean {
+    try {
+      const raw = localStorage.getItem(DEBUG_KEY);
+      if (raw === null) return DEBUG_DEFAULT;
+      return raw === "1";
+    } catch {
+      return DEBUG_DEFAULT;
+    }
+  }
+
+  const [debugMode, setDebugMode_] = createSignal(readDebug());
+
+  function setDebugMode(enabled: boolean): void {
+    setDebugMode_(enabled);
+    try {
+      localStorage.setItem(DEBUG_KEY, enabled ? "1" : "0");
+    } catch {
+      /* 存储失败仅影响持久化 */
+    }
+  }
+
   const MOTION_KEY = "rmccc.motionEnabled";
 
   function readMotion(): boolean {
@@ -84,6 +109,8 @@ export const settingsStore = createRoot(() => {
     themePreference,
     loaded,
     motionEnabled,
+    debugMode,
+    setDebugMode,
     setMotionEnabled,
     refresh,
     update,

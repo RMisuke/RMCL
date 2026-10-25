@@ -50,12 +50,15 @@ interface IconButtonProps {
   onClick?: (e: MouseEvent) => void;
   disabled?: boolean;
   danger?: boolean;
+  /** 常驻高亮态（如视图切换的当前视图）。 */
+  active?: boolean;
+  class?: string;
 }
 
 export function RmIconButton(props: IconButtonProps): JSX.Element {
   return (
     <button
-      class={`rm-icon-btn${props.danger ? " is-danger" : ""}`}
+      class={`rm-icon-btn${props.active ? " is-active" : ""}${props.danger ? " is-danger" : ""}${props.class ? ` ${props.class}` : ""}`}
       style={{ width: `${props.size ?? 30}px`, height: `${props.size ?? 30}px` }}
       aria-label={props.label}
       title={props.title ?? props.label}
@@ -130,6 +133,7 @@ interface SelectProps {
   onChange: (value: string) => void;
   options: { value: string; label: string; disabled?: boolean }[];
   disabled?: boolean;
+  class?: string;
 }
 
 /** Native select wrapper (dropdown stays native — zero JS, themeable enough). */
@@ -145,7 +149,7 @@ export function RmSelect(props: SelectProps): JSX.Element {
   return (
     <select
       ref={el}
-      class="rm-select"
+      class={`rm-select${props.class ? ` ${props.class}` : ""}`}
       value={props.value}
       disabled={props.disabled}
       onChange={(e) => props.onChange(e.currentTarget.value)}

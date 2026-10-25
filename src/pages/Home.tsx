@@ -23,6 +23,7 @@ import { authStore } from "../stores/auth";
 import { launchStore } from "../stores/launch";
 import { downloadsStore } from "../stores/downloads";
 import { uiStore, toast, confirmDanger, promptText } from "../stores/ui";
+import { settingsStore } from "../stores/settings";
 import { t } from "../i18n";
 import type { TranslationKey } from "../i18n/locales/messages";
 import { relativeTime, formatBytes, groupDigits, formatDate } from "../lib/format";
@@ -73,7 +74,301 @@ function saveLayout(layout: HeroLayout): void {
   }
 }
 
+// ── 主题化环境动效（2026-10-25）────────────────────────────────
+// 每套内置主题配一组与名字呼应的 CSS 意象粒子：林间落叶 / 樱吹雪飘瓣 /
+// 深海气泡 / 熔岩火星 / 靛夜星辰 / 晴空流云 / 纸墨浮尘。全部纯 CSS
+// transform/opacity 动画（无 JS 每帧循环），受 data-motion 闸门控制。
+
+type ParticleSpec = {
+  left: string;      // 水平起点
+  size: number;      // 主尺寸 px
+  delay: number;     // 动画延迟（负值 = 开局即处于中段）
+  duration: number;  // 单轮时长 s
+  sway?: string;     // 水平摆动幅度
+  spin?: string;     // 旋转角
+  opacity?: number;
+};
+
+/** 伪随机粒子参数（固定种子序列，布局稳定不跳变）。 */
+function specs(count: number, salt: number): ParticleSpec[] {
+  const r = (n: number) => {
+    const x = Math.sin(n * 127.1 + salt * 311.7) * 43758.5453;
+    return x - Math.floor(x);
+  };
+  return Array.from({ length: count }, (_, i) => ({
+    left: `${Math.round(r(i + 1) * 96)}%`,
+    size: 0,
+    delay: -r(i + 31) * 24,
+    duration: 0,
+    sway: `${Math.round(20 + r(i + 51) * 70)}px`,
+    spin: `${Math.round(220 + r(i + 71) * 260)}deg`,
+    opacity: 0,
+  }));
+}
+
+function particleStyle(p: ParticleSpec, size: number, duration: [number, number]): JSX.CSSProperties {
+  return {
+    left: p.left,
+    width: `${size}px`,
+    height: `${size}px`,
+    "animation-delay": `${p.delay.toFixed(2)}s`,
+    "animation-duration": `${(duration[0] + (p.delay % 1 + 1) % 1 * (duration[1] - duration[0])).toFixed(2)}s`,
+    "--sway": p.sway,
+    "--spin": p.spin,
+    opacity: p.opacity || undefined,
+  };
+}
+
+/** 主题 key → hero-flow 容器类（光斑按主题适配的 CSS 钩子）。 */
+function ambientThemeClass(key: string): string {
+  const known = [
+    "builtin:dark",
+    "builtin:forest",
+    "builtin:ocean",
+    "builtin:ember",
+    "builtin:sakura",
+    "builtin:paper",
+    "builtin:sky",
+    "builtin:light",
+  ];
+  if (known.includes(key)) return `t-${key.replace("builtin:", "")}`;
+  return "t-dark"; // 插件主题等未知 key 沿用暗色底光
+}
+
+/** 当前生效的内置主题 key（null/跟随系统按已应用的明暗模式解析）。 */
+function useAmbientKey() {
+  return createMemo(() => {
+    const pref = settingsStore.themePreference();
+    if (pref && pref !== "system") return pref;
+    return document.documentElement.dataset.themeMode === "light"
+      ? "builtin:light"
+      : "builtin:dark";
+  });
+}
+
+function ThemeAmbient(props: { themeKey: string }): JSX.Element {
+  const key = () => props.themeKey;
+  return (
+    <Switch>
+      <Match when={key() === "builtin:forest"}><><ForestAmbient /><ForestGlow /></></Match>
+      <Match when={key() === "builtin:sakura"}><><SakuraAmbient /><SakuraGlow /></></Match>
+      <Match when={key() === "builtin:ocean"}><><OceanAmbient /><OceanGlow /></></Match>
+      <Match when={key() === "builtin:ember"}><><EmberAmbient /><EmberGlow /></></Match>
+      <Match when={key() === "builtin:dark"}><><StarAmbient /><DefaultGlow /></></Match>
+      <Match when={key() === "builtin:sky"}><><SkyAmbient /><SkyGlow /></></Match>
+      <Match when={key() === "builtin:paper"}><><PaperAmbient /><PaperGlow /></></Match>
+      {/* 晨白（light）：无粒子，只保留令牌驱动的三团光斑 */}
+      <Match when={key() === "builtin:light"}><DefaultGlow /></Match>
+    </Switch>
+  );
+}
+
+/** 令牌驱动的三团光斑（靛夜 / 晨白的专属设计：颜色随 --rmccc-* 自动适配）。 */
+function DefaultGlow(): JSX.Element {
+  return (
+    <div class="hero-glow g-default">
+      <i class="hero-flow-blob is-a" />
+      <i class="hero-flow-blob is-b" />
+      <i class="hero-flow-blob is-c" />
+    </div>
+  );
+}
+
+/** 林间：两条树隙光柱 + 底部苔绿雾光呼吸。 */
+function ForestGlow(): JSX.Element {
+  return (
+    <div class="hero-glow g-forest">
+      <i class="g-beam is-a" />
+      <i class="g-beam is-b" />
+      <i class="g-fog" />
+    </div>
+  );
+}
+
+/** 樱吹雪：右上粉霞 + 左下白雾，极慢对角呼吸。 */
+function SakuraGlow(): JSX.Element {
+  return (
+    <div class="hero-glow g-sakura">
+      <i class="g-haze" />
+      <i class="g-mist" />
+    </div>
+  );
+}
+
+/** 深海：顶部水面光 + 上升光柱 + 底部深蓝压边。 */
+function OceanGlow(): JSX.Element {
+  return (
+    <div class="hero-glow g-ocean">
+      <i class="g-surface" />
+      <i class="g-shaft is-a" />
+      <i class="g-shaft is-b" />
+      <i class="g-abyss" />
+    </div>
+  );
+}
+
+/** 熔岩：底部双团岩浆辉光交替呼吸 + 热浪层横移。 */
+function EmberGlow(): JSX.Element {
+  return (
+    <div class="hero-glow g-ember">
+      <i class="g-magma is-a" />
+      <i class="g-magma is-b" />
+      <i class="g-heat" />
+    </div>
+  );
+}
+
+/** 晴空：左上太阳辉光 + 两条淡云带缓慢横移。 */
+function SkyGlow(): JSX.Element {
+  return (
+    <div class="hero-glow g-sky">
+      <i class="g-sun" />
+      <i class="g-band is-a" />
+      <i class="g-band is-b" />
+    </div>
+  );
+}
+
+/** 纸墨：暖纸晕染 + 淡金漂移（近乎静态的纸面光影）。 */
+function PaperGlow(): JSX.Element {
+  return (
+    <div class="hero-glow g-paper">
+      <i class="g-wash" />
+      <i class="g-gold" />
+    </div>
+  );
+}
+
+/** 林间：叶形（对角圆角）旋转飘落。 */
+function ForestAmbient(): JSX.Element {
+  const leaves = specs(10, 1);
+  return (
+    <div class="hero-particles p-forest">
+      <For each={leaves}>
+        {(p, i) => (
+          <i class="p-leaf" style={{ ...particleStyle(p, 10 + (i() % 3) * 6, [9, 16]), top: "-6%" }} />
+        )}
+      </For>
+    </div>
+  );
+}
+
+/** 樱吹雪：圆缺花瓣（花瓣形 border-radius）斜向飘落。 */
+function SakuraAmbient(): JSX.Element {
+  const petals = specs(12, 2);
+  return (
+    <div class="hero-particles p-sakura">
+      <For each={petals}>
+        {(p, i) => (
+          <i class="p-petal" style={{ ...particleStyle(p, 9 + (i() % 3) * 5, [8, 15]), top: "-6%" }} />
+        )}
+      </For>
+    </div>
+  );
+}
+
+/** 深海：描边气泡自下而上漂浮。 */
+function OceanAmbient(): JSX.Element {
+  const bubbles = specs(10, 3);
+  return (
+    <div class="hero-particles p-ocean">
+      <For each={bubbles}>
+        {(p, i) => (
+          <i class="p-bubble" style={{ ...particleStyle(p, 6 + (i() % 4) * 6, [10, 18]), top: "104%" }} />
+        )}
+      </For>
+    </div>
+  );
+}
+
+/** 熔岩：发光火星上浮渐隐。 */
+function EmberAmbient(): JSX.Element {
+  const embers = specs(9, 4);
+  return (
+    <div class="hero-particles p-ember">
+      <For each={embers}>
+        {(p, i) => (
+          <i class="p-ember-dot" style={{ ...particleStyle(p, 4 + (i() % 3) * 3, [6, 12]), top: "104%" }} />
+        )}
+      </For>
+    </div>
+  );
+}
+
+/** 靛夜：星辰闪烁（不下坠，只闪 + 微移）。 */
+function StarAmbient(): JSX.Element {
+  const stars = specs(14, 5);
+  return (
+    <div class="hero-particles p-dark">
+      <For each={stars}>
+        {(p) => (
+          <i
+            class="p-star"
+            style={{
+              left: p.left,
+              top: `${Math.round(Math.abs(p.delay) * 38)}%`,
+              width: "2px",
+              height: "2px",
+              "animation-delay": `${p.delay.toFixed(2)}s`,
+              "animation-duration": `${(3 + (Math.abs(p.delay) % 3)).toFixed(2)}s`,
+            }}
+          />
+        )}
+      </For>
+    </div>
+  );
+}
+
+/** 晴空：大团流云缓慢横移。 */
+function SkyAmbient(): JSX.Element {
+  const clouds = specs(4, 6);
+  return (
+    <div class="hero-particles p-sky">
+      <For each={clouds}>
+        {(p, i) => (
+          <i
+            class="p-cloud"
+            style={{
+              left: "-20%",
+              top: `${8 + i() * 22}%`,
+              width: `${180 + i() * 90}px`,
+              height: `${54 + i() * 16}px`,
+              "animation-delay": `${(p.delay * -1.4).toFixed(2)}s`,
+              "animation-duration": `${(70 + i() * 26).toFixed(0)}s`,
+            }}
+          />
+        )}
+      </For>
+    </div>
+  );
+}
+
+/** 纸墨：淡墨尘点极缓慢漂移（几乎不可察觉的层次感）。 */
+function PaperAmbient(): JSX.Element {
+  const dust = specs(10, 7);
+  return (
+    <div class="hero-particles p-paper">
+      <For each={dust}>
+        {(p, i) => (
+          <i
+            class="p-dust"
+            style={{
+              left: p.left,
+              top: `${(Math.abs(p.delay) * 89) % 92}%`,
+              width: `${2 + (i() % 3)}px`,
+              height: `${2 + (i() % 3)}px`,
+              "animation-delay": `${p.delay.toFixed(2)}s`,
+              "animation-duration": `${(14 + Math.abs(p.delay) % 10).toFixed(1)}s`,
+            }}
+          />
+        )}
+      </For>
+    </div>
+  );
+}
+
 export default function Home(): JSX.Element {
+  const ambientKey = useAmbientKey();
   const navigate = useNavigate();
   const [layout, setLayout] = createSignal<HeroLayout>(loadLayout());
   const [editing, setEditing] = createSignal(false);
@@ -228,11 +523,9 @@ export default function Home(): JSX.Element {
 
   return (
     <div class="hero">
-      {/* 流动背景光斑（纯 CSS transform 动画，主题色；reduced-motion 下静止） */}
-      <div class="hero-flow" aria-hidden="true">
-        <i class="hero-flow-blob is-a" />
-        <i class="hero-flow-blob is-b" />
-        <i class="hero-flow-blob is-c" />
+      {/* 流动背景光斑 + 主题化环境粒子（随外观主题切换意象与配色；动效开关闸门） */}
+      <div class={`hero-flow ${ambientThemeClass(ambientKey())}`} aria-hidden="true">
+        <ThemeAmbient themeKey={ambientKey()} />
       </div>
 
       {/* 编辑模式工具条 */}
@@ -342,19 +635,30 @@ export default function Home(): JSX.Element {
           )}
         </Show>
 
+        {/** 运行状态卡：折叠时 Account 卡归位，展开时 Account 上移让位（CSS 动画） */}
+        <div class={`hero-run-slot${launchStore.isRunning(selected()?.id ?? "") ? " is-active" : ""}`}>
+          <div class="hero-card hero-module hero-run-card">
+            <span class="dot-running" />
+            <span class="hero-run-label">{t("instances.running")}</span>
+            <RmButton size="sm" icon="terminal" onClick={() => uiStore.openLogDrawer(selected()?.id ?? null)}>
+              {t("home.viewLog")}
+            </RmButton>
+            {/* 一键强制关闭：terminate_tree 整组终止，无二次确认 */}
+            <RmButton
+              size="sm"
+              variant="danger"
+              icon="square"
+              onClick={() => void launchStore.kill(selected()?.id ?? "")}
+            >
+              {t("home.forceStop")}
+            </RmButton>
+          </div>
+        </div>
+
         <div class="hero-card hero-module hero-launch">
           <div class="hero-launch-main">
-            <RmButton
-              variant="primary"
-              icon="play"
-              size="lg"
-              loading={launchStore.isStarting(selected()?.id ?? "")}
-              onClick={() => void launchCurrent()}
-            >
-              {t("home.launch")}
-            </RmButton>
             <RmMenu
-              align="right"
+              align="left"
               side="up"
               items={[
                 ...(profilesStore.items() ?? [])
@@ -371,29 +675,23 @@ export default function Home(): JSX.Element {
               ]}
             >
               <button class="hero-launch-picker">
+                {/* 只显示实例名称（过长换行，最多两行）；宽度固定，见 CSS */}
                 <span class="hero-launch-picker-main">
                   {selected()?.name ?? t("home.pickInstance")}
-                  <Show when={selected()}>
-                    {(p) => (
-                      <span class="hero-launch-picker-sub">
-                        {p().game_version}
-                        <Show when={p().mod_loader}> · {p().mod_loader!.loader_type}</Show>
-                      </span>
-                    )}
-                  </Show>
                 </span>
                 <Icon name="chevron-down" size={14} />
               </button>
             </RmMenu>
+            <RmButton
+              variant="primary"
+              icon="play"
+              size="lg"
+              loading={launchStore.isStarting(selected()?.id ?? "")}
+              onClick={() => void launchCurrent()}
+            >
+              {t("home.launch")}
+            </RmButton>
           </div>
-          <Show when={launchStore.isRunning(selected()?.id ?? "")}>
-            <div class="hero-launch-running">
-              <span class="dot-running" /> {t("instances.running")}
-              <RmButton size="sm" variant="ghost" icon="terminal" onClick={() => uiStore.openLogDrawer(selected()?.id ?? null)}>
-                {t("home.viewLog")}
-              </RmButton>
-            </div>
-          </Show>
         </div>
       </div>
 
