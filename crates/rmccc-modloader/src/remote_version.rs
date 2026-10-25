@@ -7,6 +7,7 @@
 use crate::install_task::InstallTask;
 use chrono::{DateTime, Utc};
 use rmccc_error::Result;
+use std::path::Path;
 
 /// Type classification for a remote version.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -16,6 +17,18 @@ pub enum VersionType {
     Snapshot,
     Old,
     Pending,
+}
+
+/// 单次安装的执行上下文（审计批次 4）。
+///
+/// 此前 `DependencyManager::install_with_patch` 的 `game_dir`/`java_path`
+/// 参数被整体忽略——Forge processors 任务拿不到真实 Java 与游戏目录，
+/// 只能退到 PATH `java` 与 `.`。现在随任务构造注入。
+pub struct InstallTaskContext<'a> {
+    /// 目标游戏根（`.minecraft` 等价物）。
+    pub game_dir: &'a Path,
+    /// 运行 processor/安装器的 Java 二进制。
+    pub java_path: &'a Path,
 }
 
 /// A specific modloader version available remotely.
@@ -50,5 +63,6 @@ pub trait RemoteVersion: Send + Sync {
         &self,
         dm: &super::DependencyManager,
         manifest: &rmccc_version::GameVersion,
+        ctx: &InstallTaskContext<'_>,
     ) -> Result<Box<dyn InstallTask>>;
 }

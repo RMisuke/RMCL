@@ -129,9 +129,11 @@ fn build_patch(
     // ── Build libraries ──
     let mut libraries: Vec<Library> = Vec::new();
 
-    // Parse library entries from launcherMeta.libraries.{common, server}
+    // 客户端安装取 launcherMeta.libraries.{common, client}（批次 4 修复：
+    // 此前取 common+server——server 侧库被塞进客户端 classpath、client 侧
+    // 库缺失，HMCL/官方启动器均为 common+client）。
     if let Some(libs_obj) = launcher_meta.get("libraries").and_then(|v| v.as_object()) {
-        for side in &["common", "server"] {
+        for side in &["common", "client"] {
             if let Some(arr) = libs_obj.get(*side).and_then(|v| v.as_array()) {
                 for entry in arr {
                     // Each entry is a Library JSON object with "name" field

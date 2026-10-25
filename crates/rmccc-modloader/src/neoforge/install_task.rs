@@ -8,7 +8,6 @@ use crate::install_task::InstallTask;
 use crate::patch::{GameInstancePatch, PRIORITY_LOADER};
 use rmccc_error::{Result, RmcccError};
 use std::io::Read;
-use std::path::PathBuf;
 
 pub struct NeoForgeInstallTask {
     pub game_version: String,
@@ -23,11 +22,28 @@ impl InstallTask for NeoForgeInstallTask {
     async fn execute(&mut self) -> Result<GameInstancePatch> {
         tracing::info!(game_version = %self.game_version, neo_version = %self.neo_version, "Executing NeoForge install task");
 
-        // Download installer
-        let installer_path = download_installer(&self.client, &self.installer_url).await?;
+        // 批次 4：下载走共享实现（此前固定名临时文件、无 ZIP/SHA 校验、
+        // 且执行失败路径不清理——泄漏 ~180MB）。
+        let (installer_path, _used_url) =
+            crate::installer::download_installer_file(&self.client, &[self.installer_url.clone()])
+                .await?;
+        let result = self.execute_with_installer(&installer_path).await;
+        let _ = std::fs::remove_file(&installer_path);
+        result
+    }
 
+    fn description(&self) -> &str {
+        "Installing NeoForge"
+    }
+}
+
+impl NeoForgeInstallTask {
+    async fn execute_with_installer(
+        &self,
+        installer_path: &std::path::Path,
+    ) -> Result<GameInstancePatch> {
         // Read install_profile.json to detect format
-        let profile_json = read_install_profile(&installer_path)?;
+        let profile_json = read_install_profile(installer_path)?;
         let parsed: serde_json::Value = serde_json::from_str(&profile_json)
             .map_err(|e| RmcccError::Other(format!("Invalid install_profile.json: {e}")))?;
 
@@ -37,7 +53,7 @@ impl InstallTask for NeoForgeInstallTask {
         // NeoForge 1.20.1-era installers use `profile: "forge"` but carry
         // a NEOFORGE.RSA signature file. This is HMCL's three-path routing.
         let has_neoforge_rsa = {
-            let file = std::fs::File::open(&installer_path)?;
+            let file = std::fs::File::open(installer_path)?;
             zip::ZipArchive::new(file)
                 .map(|mut a| a.by_name("META-INF/NEOFORGE.RSA").is_ok())
                 .unwrap_or(false)
@@ -64,7 +80,7 @@ impl InstallTask for NeoForgeInstallTask {
                 .map_err(|e| RmcccError::Other(format!("Failed to parse: {e}")))?;
 
             // Read version JSON from installer
-            let file = std::fs::File::open(&installer_path)?;
+            let file = std::fs::File::open(installer_path)?;
             let mut archive = zip::ZipArchive::new(file)
                 .map_err(|e| RmcccError::Other(format!("Cannot open NeoForge installer: {e}")))?;
             let json_path = profile.json.trim_start_matches('/');
@@ -91,36 +107,8 @@ impl InstallTask for NeoForgeInstallTask {
             )));
         };
 
-        // Clean up
-        let _ = std::fs::remove_file(&installer_path);
-
         Ok(patch)
     }
-
-    fn description(&self) -> &str {
-        "Installing NeoForge"
-    }
-}
-
-async fn download_installer(client: &reqwest::Client, url: &str) -> Result<PathBuf> {
-    let resp = client
-        .get(url)
-        .send()
-        .await
-        .map_err(|e| RmcccError::Network(e.to_string()))?;
-    if !resp.status().is_success() {
-        return Err(RmcccError::DownloadFailed {
-            url: url.to_string(),
-            reason: format!("HTTP {}", resp.status()),
-        });
-    }
-    let bytes = resp
-        .bytes()
-        .await
-        .map_err(|e| RmcccError::Network(e.to_string()))?;
-    let temp = std::env::temp_dir().join(format!("neoforge-installer-{}.jar", std::process::id()));
-    std::fs::write(&temp, &bytes)?;
-    Ok(temp)
 }
 
 fn read_install_profile(path: &std::path::Path) -> Result<String> {

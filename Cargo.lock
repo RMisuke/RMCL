@@ -3855,6 +3855,7 @@ dependencies = [
  "reqwest 0.12.28",
  "rmccc-download",
  "rmccc-error",
+ "rmccc-platform",
  "rmccc-version",
  "serde",
  "serde_json",

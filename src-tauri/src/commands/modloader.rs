@@ -51,7 +51,11 @@ pub async fn modloader_list(
     }
 
     // 统一走 DependencyManager（P1-02）：支持全部 8 种 loader
-    let dm = DependencyManager::new(state.http_client.clone());
+    let platform = {
+        let core = state.core.read().await;
+        core.platform.descriptor
+    };
+    let dm = DependencyManager::new(state.http_client.clone()).with_platform(platform);
     let versions = dm.list_versions(&lt, &game_version).await?;
     Ok(versions)
 }

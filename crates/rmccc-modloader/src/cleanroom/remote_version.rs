@@ -32,6 +32,7 @@ impl RemoteVersion for CleanroomRemoteVersion {
         &self,
         _dm: &super::super::DependencyManager,
         _manifest: &rmccc_version::GameVersion,
+        _ctx: &super::super::remote_version::InstallTaskContext<'_>,
     ) -> Result<Box<dyn InstallTask>> {
         Err(rmccc_error::RmcccError::Other(
             "Cleanroom install not yet implemented".into(),

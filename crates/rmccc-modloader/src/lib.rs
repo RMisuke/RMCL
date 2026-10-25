@@ -201,9 +201,11 @@ impl LoaderInstallOutcome {
 /// The manager can be wrapped in `Arc<DependencyManager>` for shared access
 /// from Tauri state or CLI context.
 pub struct DependencyManager {
-    #[allow(dead_code)]
     client: reqwest::Client,
     version_lists: HashMap<String, Arc<dyn VersionList>>,
+    /// 平台描述符（注入，批次 4）：Forge processors 的 `java -cp` 分隔符
+    /// 依赖 JVM 所在平台，必须经描述符取而不是 `MAIN_SEPARATOR`。
+    platform: rmccc_platform::PlatformDescriptor,
 }
 
 impl DependencyManager {
@@ -212,6 +214,7 @@ impl DependencyManager {
         let mut dm = Self {
             client: client.clone(),
             version_lists: HashMap::new(),
+            platform: rmccc_platform::PlatformDescriptor::current(),
         };
 
         dm.register(
@@ -252,6 +255,22 @@ impl DependencyManager {
 
     fn register(&mut self, id: &str, vl: Arc<dyn VersionList>) {
         self.version_lists.insert(id.to_string(), vl);
+    }
+
+    /// 注入平台描述符（组装层调用；默认 `current()`，测试可换 mock 平台）。
+    pub fn with_platform(mut self, platform: rmccc_platform::PlatformDescriptor) -> Self {
+        self.platform = platform;
+        self
+    }
+
+    /// 共享 HTTP 客户端（安装任务复用连接池/超时配置，不再 `Client::new()`）。
+    pub fn client_for_tasks(&self) -> reqwest::Client {
+        self.client.clone()
+    }
+
+    /// 注入的平台描述符。
+    pub fn platform_descriptor(&self) -> rmccc_platform::PlatformDescriptor {
+        self.platform
     }
 
     /// List available versions for a modloader on a Minecraft version.
@@ -369,8 +388,8 @@ impl DependencyManager {
         game_version: &str,
         base_version: &rmccc_version::GameVersion,
         loader_version: &str,
-        _game_dir: &Path,
-        _java_path: &Path,
+        game_dir: &Path,
+        java_path: &Path,
     ) -> Result<(rmccc_version::GameVersion, GameInstancePatch)> {
         let id = loader_type.library_id();
         let vl = self.get_vl(id)?;
@@ -384,88 +403,18 @@ impl DependencyManager {
                 ))
             })?;
 
+        // 批次 4：此前 `_game_dir`/`_java_path` 被整个忽略——Forge processors
+        // 任务拿不到真实 Java 与游戏目录，只能退到 PATH "java" 与 "."。
+        let ctx = crate::remote_version::InstallTaskContext {
+            game_dir,
+            java_path,
+        };
         let cleaned = self.remove_library(base_version, id);
-        let mut task = rv.create_install_task(self, &cleaned)?;
+        let mut task = rv.create_install_task(self, &cleaned, &ctx)?;
         let patch = task.execute().await?;
         let mut merged = cleaned;
         patch.merge_into(&mut merged);
         Ok((merged, patch))
-    }
-
-    /// Auto-detect installer type from a local JAR file and install.
-    pub async fn install_from_file(
-        &self,
-        base_version: &rmccc_version::GameVersion,
-        installer_path: &Path,
-    ) -> Result<rmccc_version::GameVersion> {
-        let file = std::fs::File::open(installer_path)?;
-        let mut archive = zip::ZipArchive::new(file)
-            .map_err(|e| RmcccError::Other(format!("Not a valid ZIP: {e}")))?;
-
-        // Try reading install_profile.json
-        let profile_json = {
-            let mut s = String::new();
-            if let Ok(mut entry) = archive.by_name("install_profile.json") {
-                std::io::Read::read_to_string(&mut entry, &mut s).ok();
-            }
-            s
-        };
-
-        if !profile_json.is_empty() {
-            let parsed: serde_json::Value = serde_json::from_str(&profile_json)
-                .map_err(|e| RmcccError::Other(format!("Invalid install_profile.json: {e}")))?;
-
-            // Check for Cleanroom / NeoForge / Forge
-            if parsed.get("spec").is_some() || parsed.get("install").is_some() {
-                let profile_type = parsed.get("profile").and_then(|v| v.as_str()).unwrap_or("");
-                let id = if profile_type == "neoforge" || profile_type == "NeoForge" {
-                    "neoforge"
-                } else if profile_type == "cleanroom" {
-                    "cleanroom"
-                } else {
-                    "forge"
-                };
-
-                let vl = self.get_vl(id)?;
-                let game_version = base_version.id.clone();
-                vl.load(&game_version).await?;
-
-                // Find matching version from install profile
-                let mc_ver = parsed
-                    .get("minecraft")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or(&game_version);
-                let versions = vl.get_versions(mc_ver);
-                if let Some(rv) = versions.into_iter().next() {
-                    let mut cleaned = self.remove_library(base_version, id);
-                    let mut task = rv.create_install_task(self, &cleaned)?;
-                    let patch = task.execute().await?;
-                    patch.merge_into(&mut cleaned);
-                    return Ok(cleaned);
-                }
-            }
-        }
-
-        // Try OptiFine detection (Config.class)
-        let has_config = archive.by_name("Config.class").is_ok()
-            || archive.by_name("net/optifine/Config.class").is_ok()
-            || archive.by_name("notch/net/optifine/Config.class").is_ok();
-
-        if has_config {
-            let vl = self.get_vl("optifine")?;
-            let game_version = base_version.id.clone();
-            vl.load(&game_version).await?;
-            let versions = vl.get_versions(&game_version);
-            if let Some(rv) = versions.into_iter().next() {
-                let mut cleaned = self.remove_library(base_version, "optifine");
-                let mut task = rv.create_install_task(self, &cleaned)?;
-                let patch = task.execute().await?;
-                patch.merge_into(&mut cleaned);
-                return Ok(cleaned);
-            }
-        }
-
-        Err(RmcccError::Other("Unrecognized installer file".into()))
     }
 
     /// Remove a previously installed modloader from a version.

@@ -52,17 +52,19 @@ impl RemoteVersion for ForgeRemoteVersion {
 
     fn create_install_task(
         &self,
-        _dm: &super::super::DependencyManager,
+        dm: &super::super::DependencyManager,
         _manifest: &rmccc_version::GameVersion,
+        ctx: &super::super::remote_version::InstallTaskContext<'_>,
     ) -> Result<Box<dyn InstallTask>> {
         Ok(Box::new(super::install_task::ForgeInstallTask {
             game_version: self.game_version.clone(),
             forge_version: self.forge_version.clone(),
             installer_url: self.installer_url.clone(),
             state: super::install_task::ForgeInstallState::NotStarted,
-            java_path: None,
-            game_dir: None,
-            client: reqwest::Client::new(),
+            java_path: Some(ctx.java_path.to_path_buf()),
+            game_dir: Some(ctx.game_dir.to_path_buf()),
+            client: dm.client_for_tasks(),
+            platform: dm.platform_descriptor(),
         }))
     }
 }

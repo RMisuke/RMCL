@@ -115,8 +115,9 @@ fn build_patch(loader_version: &str, info: &QuiltInfo) -> Result<GameInstancePat
 
     let mut libraries: Vec<Library> = Vec::new();
 
+    // 客户端安装取 common+client（批次 4 修复，同 fabric：此前误取 server 侧）。
     if let Some(libs_obj) = launcher_meta.get("libraries").and_then(|v| v.as_object()) {
-        for side in &["common", "server"] {
+        for side in &["common", "client"] {
             if let Some(arr) = libs_obj.get(*side).and_then(|v| v.as_array()) {
                 for entry in arr {
                     if let Some(name) = entry.get("name").and_then(|v| v.as_str()) {
@@ -130,18 +131,15 @@ fn build_patch(loader_version: &str, info: &QuiltInfo) -> Result<GameInstancePat
         }
     }
 
-    // Add intermediary mapping (if present)
-    if let Some(ref intermediary) = info.intermediary {
+    // 映射层（批次 4 修复）：hashed 存在时**取代** intermediary（HMCL 语义，
+    // 官方 meta 也声明 hashed may replace intermediary）——此前两者并存，
+    // 双映射库同 list 会产生冲突。
+    let hashed_name = info.hashed.as_ref().map(|h| h.maven.clone());
+    let intermediary_name = info.intermediary.as_ref().map(|i| i.maven.clone());
+    let mapping_name = hashed_name.or(intermediary_name);
+    if let Some(mapping) = mapping_name {
         libraries.push(Library {
-            name: intermediary.maven.clone(),
-            ..Default::default()
-        });
-    }
-
-    // Add hashed mapping (if present, may replace intermediary)
-    if let Some(ref hashed) = info.hashed {
-        libraries.push(Library {
-            name: hashed.maven.clone(),
+            name: mapping,
             ..Default::default()
         });
     }
@@ -203,13 +201,41 @@ mod tests {
             patch.main_class,
             Some("org.quiltmc.loader.impl.launch.knot.KnotClient".into())
         );
-        // common lib + intermediary + hashed + loader = 4
-        assert_eq!(patch.libraries.len(), 4);
+        // 批次 4 语义：common lib + **hashed（取代 intermediary）** + loader = 3。
+        // 此前双映射并存 = 4，会同时拉两套映射库产生冲突（HMCL 语义为
+        // hashed 存在时取代 intermediary）。
+        assert_eq!(patch.libraries.len(), 3);
         assert!(patch
             .libraries
             .iter()
             .any(|l| l.name.contains("quilt-loader")));
         assert!(patch.libraries.iter().any(|l| l.name.contains("hashed")));
+        assert!(!patch
+            .libraries
+            .iter()
+            .any(|l| l.name.contains("intermediary")));
+    }
+
+    /// 只有 intermediary、没有 hashed 时映射层退回 intermediary。
+    #[test]
+    fn test_intermediary_used_when_no_hashed() {
+        let info = QuiltInfo {
+            loader: QuiltMavenInfo {
+                maven: "org.quiltmc:quilt-loader:0.26.0".into(),
+                version: "0.26.0".into(),
+            },
+            hashed: None,
+            intermediary: Some(QuiltMavenInfo {
+                maven: "net.fabricmc:intermediary:1.21".into(),
+                version: "1.21".into(),
+            }),
+            launcher_meta: serde_json::json!({
+                "mainClass": { "client": "org.quiltmc.loader.impl.launch.knot.KnotClient" },
+                "libraries": { "common": [], "client": [] }
+            }),
+        };
+
+        let patch = build_patch("0.26.0", &info).unwrap();
         assert!(patch
             .libraries
             .iter()

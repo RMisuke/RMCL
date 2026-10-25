@@ -28,12 +28,14 @@ pub struct ForgeInstallTask {
     pub forge_version: String,
     pub installer_url: String,
     pub state: ForgeInstallState,
-    /// Path to Java binary (only needed for new format).
+    /// Path to Java binary (required for new format).
     pub java_path: Option<PathBuf>,
-    /// Game directory.
+    /// Game directory (required for new format).
     pub game_dir: Option<PathBuf>,
     /// Shared HTTP client (reused from provider).
     pub client: reqwest::Client,
+    /// 平台描述符（批次 4）：new-format processors 的 `java -cp` 分隔符。
+    pub platform: rmccc_platform::PlatformDescriptor,
 }
 
 impl ForgeInstallTask {
@@ -60,15 +62,22 @@ impl ForgeInstallTask {
         if parsed.get("spec").is_some() {
             // New format
             tracing::info!("Detected new-format Forge installer");
+            // 批次 4：java/game_dir 必须来自 InstallTaskContext（此前静默退到
+            // PATH "java" 与 "."，processors 必然在错误目录里跑）。
+            let java_path = self.java_path.clone().ok_or_else(|| {
+                RmcccError::Other("new-format Forge install requires java_path".into())
+            })?;
+            let game_dir = self.game_dir.clone().ok_or_else(|| {
+                RmcccError::Other("new-format Forge install requires game_dir".into())
+            })?;
             Ok(ForgeInstallState::New(Box::new(ForgeNewInstallTask {
                 game_version: self.game_version.clone(),
                 forge_version: self.forge_version.clone(),
                 installer_path: installer_path.to_path_buf(),
-                java_path: self
-                    .java_path
-                    .clone()
-                    .unwrap_or_else(|| PathBuf::from("java")),
-                game_dir: self.game_dir.clone().unwrap_or_else(|| PathBuf::from(".")),
+                java_path,
+                game_dir,
+                client: self.client.clone(),
+                platform: self.platform,
             })))
         } else if parsed.get("install").is_some() && parsed.get("versionInfo").is_some() {
             // Old format
@@ -87,59 +96,35 @@ impl ForgeInstallTask {
 #[async_trait::async_trait]
 impl InstallTask for ForgeInstallTask {
     async fn execute(&mut self) -> Result<GameInstancePatch> {
-        // Download the installer if needed
-        let installer_path = download_installer(&self.client, &self.installer_url).await?;
+        // 批次 4：下载走共享实现（唯一临时文件名 + ZIP 校验 + .sha1 校验；
+        // 此前固定名 `/tmp/forge-installer-{pid}.jar` 且从不删除——每次
+        // 安装泄漏 ~180MB）。
+        let (installer_path, _used_url) =
+            crate::installer::download_installer_file(&self.client, &[self.installer_url.clone()])
+                .await?;
 
-        // Detect type if not already done
-        if matches!(self.state, ForgeInstallState::NotStarted) {
-            self.state = self.detect_type(&installer_path)?;
-        }
-
-        // Execute the appropriate sub-task
-        match &mut self.state {
-            ForgeInstallState::NotStarted => {
-                unreachable!("State must be set after detection")
+        let result = async {
+            // Detect type if not already done
+            if matches!(self.state, ForgeInstallState::NotStarted) {
+                self.state = self.detect_type(&installer_path)?;
             }
-            ForgeInstallState::New(task) => task.execute().await,
-            ForgeInstallState::Old(task) => task.execute().await,
+
+            // Execute the appropriate sub-task
+            match &mut self.state {
+                ForgeInstallState::NotStarted => {
+                    unreachable!("State must be set after detection")
+                }
+                ForgeInstallState::New(task) => task.execute().await,
+                ForgeInstallState::Old(task) => task.execute().await,
+            }
         }
+        .await;
+
+        let _ = std::fs::remove_file(&installer_path);
+        result
     }
 
     fn description(&self) -> &str {
         "Installing Forge"
     }
-}
-
-/// Download the Forge installer JAR to a temp file.
-async fn download_installer(client: &reqwest::Client, url: &str) -> Result<PathBuf> {
-    tracing::info!(url = %url, "Downloading Forge installer");
-
-    let resp = client
-        .get(url)
-        .send()
-        .await
-        .map_err(|e| RmcccError::Network(e.to_string()))?;
-
-    if !resp.status().is_success() {
-        return Err(RmcccError::DownloadFailed {
-            url: url.to_string(),
-            reason: format!("HTTP {}", resp.status()),
-        });
-    }
-
-    let bytes = resp
-        .bytes()
-        .await
-        .map_err(|e| RmcccError::Network(e.to_string()))?;
-
-    let temp = std::env::temp_dir().join(format!("forge-installer-{}.jar", std::process::id()));
-    std::fs::write(&temp, &bytes)?;
-
-    // Verify ZIP integrity
-    let cursor = std::io::Cursor::new(&bytes);
-    zip::ZipArchive::new(cursor)
-        .map_err(|e| RmcccError::Other(format!("Forge installer is not a valid ZIP: {e}")))?;
-
-    tracing::info!(path = %temp.display(), "Forge installer downloaded");
-    Ok(temp)
 }

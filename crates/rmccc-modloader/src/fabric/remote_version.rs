@@ -72,6 +72,7 @@ impl RemoteVersion for FabricRemoteVersion {
         &self,
         _dm: &super::super::DependencyManager,
         _manifest: &rmccc_version::GameVersion,
+        _ctx: &super::super::remote_version::InstallTaskContext<'_>,
     ) -> Result<Box<dyn InstallTask>> {
         Ok(Box::new(super::install_task::FabricInstallTask {
             game_version: self.game_version.clone(),

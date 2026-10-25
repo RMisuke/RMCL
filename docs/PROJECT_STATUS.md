@@ -10,6 +10,19 @@
 
 ## 0. 更新记录
 
+**2026-10-25（审计整改批次 4 `fix/loader-install`：Forge processors 修复 + Fabric/Quilt 侧别修正 + installer 下载合一）**：
+
+- **installer 下载三副本合一（B3 提前）**：新增 `installer::download_installer_file` 共享实现——流式写盘（~180MB installer 不再整份进内存双倍拷贝）、唯一临时文件名（修 forge 路径 `/tmp/forge-installer-{pid}.jar` 从不删除的每次安装 ~180MB 泄漏）、ZIP 完整性早失败、`{url}.sha1` 可取时强制校验（镜像劫持/损坏即失败，取不到警告放行）。`InstallerJarRunner` 运行加 600s 超时（此前可永久挂起）；新增 `run_local` 供本地安装器文件复用同一条执行/探测路径。neoforge 的第三份副本（固定名 + 失败路径不清理）一并删除。
+- **Forge 1.13+ processors 路径修复（A5）**：
+  - classpath 分隔符改经平台描述符（`DependencyManager.with_platform` 注入；此前 `MAIN_SEPARATOR` 在 Unix/Windows 都不是 Java classpath 分隔符）；
+  - `MINECRAFT_JAR` 指向 client jar 文件（此前是 `versions/` 目录）；
+  - `[artifact]` 模板解析为 libraries 下的实际 jar 路径（此前原样返回 Maven 坐标）；`{key}` 的 data 值递归解析（artifact/嵌套 key/字面量，对齐 HMCL 数据表语义）；
+  - **补齐两步缺失**：安装器内嵌 `maven/**` 提取到 libraries/（含防穿越）+ `install_profile.libraries` 未内嵌依赖下载落盘（带 SHA1 校验）——此前 processor JAR 根本不在 classpath 路径上。
+- **Fabric/Quilt/LegacyFabric 侧别修正**：客户端安装取 `launcherMeta.libraries.{common,client}`（此前误取 common+**server**：server 库进客户端 classpath、client 库缺失）；**Quilt hashed 存在时取代 intermediary**（此前双映射并存冲突，HMCL 语义），测试更新并新增"无 hashed 退回 intermediary"用例。
+- **双轨消除**：删除零调用方的 `install_from_file`（审计 P2：它把本地 installer 路由进与 InstallerJarRunner 行为不一致的第二条 Forge 安装路径）；`RemoteVersion::create_install_task` 新增 `InstallTaskContext`（game_dir/java_path）——此前 `install_with_patch` 的这两个参数被整体忽略，Forge 任务静默退到 PATH `java` 与 `.`。
+- 门禁：`cargo test --workspace` 42 套件 0 失败、clippy 0 警告、fmt 干净、`pnpm typecheck` 0 错误。
+- **待真机验收**（本机未联网跑安装器）：Forge 1.20.x / Fabric / NeoForge 各装一次并启动成功后回填本记录。
+
 **2026-10-25（审计整改批次 3 `refactor/version-merge-unify`：inheritsFrom 合并与规则求值收敛，A7）**：
 
 - **文档先行**：ARCHITECTURE.md §3.3 新增「版本继承合并与规则求值的统一语义」定版小节

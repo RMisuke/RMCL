@@ -33,6 +33,11 @@ pub struct ForgeNewInstallTask {
     pub java_path: PathBuf,
     /// Game directory (for resolving library paths).
     pub game_dir: PathBuf,
+    /// 共享 HTTP client（批次 4）：下载 processor 依赖库，不再各任务 `Client::new()`。
+    pub client: reqwest::Client,
+    /// 平台描述符（批次 4）：processor 的 `java -cp` 分隔符按 JVM 平台取，
+    /// 不再误用文件路径分隔符 `MAIN_SEPARATOR`（Unix `/` ≠ classpath `:`）。
+    pub platform: rmccc_platform::PlatformDescriptor,
 }
 
 #[async_trait::async_trait]
@@ -47,15 +52,24 @@ impl InstallTask for ForgeNewInstallTask {
         // ── 1. Parse install_profile.json ──
         let profile = self.parse_install_profile()?;
 
-        // ── 3. Build template variables ──
-        let vars = build_template_vars(&self.game_dir, &self.installer_path);
-
+        // ── 2. 铺平 processor 的运行环境（批次 4 补齐，对齐 HMCL）──
+        // a) 安装器内嵌 `maven/**` 提取到 libraries/；
+        // b) install_profile.libraries 里未内嵌的依赖下载落盘。
+        // 此前两步都缺失：processor JAR 根本不在 classpath 路径上，
+        // `--installClient` 式整体运行之外的 processors 路径必然失败。
+        let libs_dir = self.game_dir.join("libraries");
+        let embedded = extract_embedded_maven(&self.installer_path, &self.game_dir)?;
+        download_processor_libraries(&self.client, &profile.libraries, &libs_dir).await?;
         tracing::info!(
             processor_count = profile.processors.len(),
-            library_count = profile.libraries.len(),
+            profile_library_count = profile.libraries.len(),
+            embedded_maven_entries = embedded,
             data_keys = profile.data.len(),
             "Forge install profile parsed"
         );
+
+        // ── 3. Build template variables ──
+        let vars = build_template_vars(&self.game_dir, &self.installer_path, &self.game_version);
 
         // ── 4. Read the version JSON from the installer ──
         let version_info = self.read_version_json(&profile)?;
@@ -69,7 +83,7 @@ impl InstallTask for ForgeNewInstallTask {
 
         for (i, processor) in client_processors.iter().enumerate() {
             // Check if outputs already exist and are valid (idempotency)
-            if self.all_outputs_valid(processor, &vars, &profile.data)? {
+            if self.all_outputs_valid(processor, &vars, &profile.data, &libs_dir)? {
                 tracing::info!(processor = i, "Skipping (outputs already valid)");
                 continue;
             }
@@ -149,13 +163,14 @@ impl ForgeNewInstallTask {
         processor: &Processor,
         vars: &HashMap<String, String>,
         data: &HashMap<String, super::profile::DataEntry>,
+        libs_dir: &Path,
     ) -> Result<bool> {
         if processor.outputs.is_empty() {
             return Ok(false);
         }
 
         for (key, expected_hash) in &processor.outputs {
-            let resolved_key = resolve_template(key, vars, data)?;
+            let resolved_key = resolve_template(key, vars, data, libs_dir)?;
             let path = Path::new(&resolved_key);
 
             if !path.exists() {
@@ -186,16 +201,17 @@ impl ForgeNewInstallTask {
         let args: Vec<String> = processor
             .args
             .iter()
-            .map(|arg| resolve_template(arg, vars, data))
+            .map(|arg| resolve_template(arg, vars, data, &self.game_dir.join("libraries")))
             .collect::<Result<Vec<_>>>()?;
 
         // Find the main class from the processor JAR
         let main_class = self.read_jar_main_class(&processor.jar)?;
 
-        // Execute
+        // Execute（classpath 分隔符经平台描述符，批次 4 修复：
+        // Unix 需 `:`、Windows 需 `;`，`MAIN_SEPARATOR` 两者皆错）。
         let mut cmd = tokio::process::Command::new(&self.java_path);
         cmd.arg("-cp")
-            .arg(classpath.join(std::path::MAIN_SEPARATOR_STR))
+            .arg(classpath.join(self.platform.classpath_separator()))
             .arg(&main_class)
             .args(&args)
             .stdout(std::process::Stdio::piped())
@@ -275,12 +291,23 @@ impl ForgeNewInstallTask {
 // ── Template variable resolution ──
 
 /// Build the initial template variable map.
-fn build_template_vars(game_dir: &Path, installer_path: &Path) -> HashMap<String, String> {
+fn build_template_vars(
+    game_dir: &Path,
+    installer_path: &Path,
+    game_version: &str,
+) -> HashMap<String, String> {
     let mut vars = HashMap::new();
     vars.insert("SIDE".to_string(), "client".to_string());
+    // MINECRAFT_JAR 指向 client jar **文件**（批次 4 修复：此前是 `versions/`
+    // 目录——processors 拿到目录当 jar 用，DEOBFUSCATE 类步骤必然失败）。
     vars.insert(
         "MINECRAFT_JAR".to_string(),
-        game_dir.join("versions").display().to_string(),
+        game_dir
+            .join("versions")
+            .join(game_version)
+            .join(format!("{game_version}.jar"))
+            .display()
+            .to_string(),
     );
     vars.insert("ROOT".to_string(), game_dir.display().to_string());
     vars.insert(
@@ -295,37 +322,153 @@ fn build_template_vars(game_dir: &Path, installer_path: &Path) -> HashMap<String
 }
 
 /// Resolve a template string containing `{key}`, `[artifact]`, or `'literal'`.
+///
+/// 批次 4 修复：
+/// - `[artifact]` 解析为 libraries 下的**实际 jar 路径**（此前原样返回
+///   Maven 坐标，processor 参数拿到的是无效字符串）；
+/// - `{key}` 的 data 值递归解析（data 值常为 `[artifact]` / `'literal'` /
+///   嵌套 `{key}`），与 HMCL 的数据表语义一致。
 fn resolve_template(
     template: &str,
     vars: &HashMap<String, String>,
     data: &HashMap<String, super::profile::DataEntry>,
+    libs_dir: &Path,
 ) -> Result<String> {
+    if template.starts_with('[') && template.ends_with(']') {
+        let coord = &template[1..template.len() - 1];
+        return Ok(maven_to_path(coord, libs_dir).display().to_string());
+    }
     if template.starts_with('{') && template.ends_with('}') {
         let key = &template[1..template.len() - 1];
-        vars.get(key)
-            .cloned()
-            .or_else(|| data.get(key).map(|d| d.client.clone()))
-            .or_else(|| {
-                // Try resolving the data entry value recursively
-                data.get(key).map(|d| d.client.clone())
-            })
-            .ok_or_else(|| RmcccError::Other(format!("Unknown template variable: {key}")))
-    } else if template.starts_with('[') && template.ends_with(']') {
-        // Artifact path — return as-is (caller resolves to filesystem path)
-        Ok(template[1..template.len() - 1].to_string())
-    } else if template.starts_with('\'') && template.ends_with('\'') {
-        // Literal string
-        Ok(template[1..template.len() - 1].to_string())
-    } else {
-        // Plain value — could contain nested templates
-        let mut result = template.to_string();
-        // Simple {key} replacement
-        for (key, value) in vars {
-            let placeholder = format!("{{{}}}", key);
-            result = result.replace(&placeholder, value);
+        if let Some(v) = vars.get(key) {
+            return Ok(v.clone());
         }
-        Ok(result)
+        if let Some(entry) = data.get(key) {
+            return resolve_template(&entry.client, vars, data, libs_dir);
+        }
+        return Err(RmcccError::Other(format!(
+            "Unknown template variable: {key}"
+        )));
     }
+    if template.starts_with('\'') && template.ends_with('\'') {
+        return Ok(template[1..template.len() - 1].to_string());
+    }
+    // Plain value — could contain nested templates
+    let mut result = template.to_string();
+    for (key, value) in vars {
+        let placeholder = format!("{{{}}}", key);
+        result = result.replace(&placeholder, value);
+    }
+    Ok(result)
+}
+
+/// 提取安装器内嵌的 `maven/**` 到 `{game_dir}/libraries/`（HMCL 同款）。
+///
+/// Forge 安装器把大部分 processor 依赖直接打进安装器 JAR 的 `maven/` 前缀下；
+/// 不提取它们，processor classpath 就是空中楼阁。
+fn extract_embedded_maven(installer_path: &Path, game_dir: &Path) -> Result<usize> {
+    let file = std::fs::File::open(installer_path)
+        .map_err(|e| RmcccError::Other(format!("Cannot open installer: {e}")))?;
+    let mut archive = zip::ZipArchive::new(file)
+        .map_err(|e| RmcccError::Other(format!("Installer is not a valid ZIP: {e}")))?;
+
+    let libs_dir = game_dir.join("libraries");
+    let names: Vec<String> = archive
+        .file_names()
+        .filter(|n| n.starts_with("maven/") && !n.ends_with('/'))
+        .map(|n| n.to_string())
+        .collect();
+
+    let mut extracted = 0usize;
+    for name in names {
+        let rel = name.trim_start_matches("maven/");
+        // 防穿越：嵌入名必须落在 libraries/ 之内（与 plugin 包防护同思路）。
+        if rel.is_empty() || rel.contains("..") || rel.starts_with('/') {
+            tracing::warn!(entry = %name, "skipping suspicious embedded maven entry");
+            continue;
+        }
+        let dest = libs_dir.join(rel);
+        if dest.exists() {
+            continue; // 幂等：上次安装/其他来源已铺好
+        }
+        let Ok(mut entry) = archive.by_name(&name) else {
+            continue;
+        };
+        if let Some(parent) = dest.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        let mut out = std::fs::File::create(&dest)?;
+        std::io::copy(&mut entry, &mut out)?;
+        extracted += 1;
+    }
+    Ok(extracted)
+}
+
+/// 下载 `install_profile.libraries` 中未由内嵌 `maven/` 覆盖的依赖。
+///
+/// 已存在的文件跳过（内嵌提取先行，或此前安装过）；带 sha1 的条目校验。
+async fn download_processor_libraries(
+    client: &reqwest::Client,
+    libraries: &[rmccc_version::Library],
+    libs_dir: &Path,
+) -> Result<()> {
+    for lib in libraries {
+        let Some(downloads) = &lib.downloads else {
+            continue;
+        };
+        let Some(artifact) = &downloads.artifact else {
+            continue;
+        };
+        let dest = match &artifact.path {
+            Some(p) => libs_dir.join(p),
+            None => maven_to_path(&lib.name, libs_dir),
+        };
+        if dest.exists() {
+            continue;
+        }
+        if artifact.url.is_empty() {
+            // 无 URL：期望来自内嵌提取；仍缺则 processor 启动时会给出
+            // "Processor JAR not found"（带具体路径，可定位）。
+            tracing::warn!(
+                library = %lib.name,
+                "processor dependency has no URL and was not embedded; leaving to processor startup error"
+            );
+            continue;
+        }
+        let resp = client
+            .get(&artifact.url)
+            .send()
+            .await
+            .map_err(|e| RmcccError::Network(e.to_string()))?;
+        if !resp.status().is_success() {
+            return Err(RmcccError::DownloadFailed {
+                url: artifact.url.clone(),
+                reason: format!("HTTP {}", resp.status()),
+            });
+        }
+        let bytes = resp
+            .bytes()
+            .await
+            .map_err(|e| RmcccError::Network(e.to_string()))?;
+        if !artifact.sha1.is_empty() {
+            use sha1::{Digest, Sha1};
+            let mut hasher = Sha1::new();
+            hasher.update(&bytes);
+            let actual = format!("{:x}", hasher.finalize());
+            if !actual.eq_ignore_ascii_case(&artifact.sha1) {
+                return Err(RmcccError::Other(format!(
+                    "processor dependency {} SHA-1 mismatch (expected {}, got {})",
+                    lib.name, artifact.sha1, actual
+                )));
+            }
+        }
+        if let Some(parent) = dest.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        std::fs::write(&dest, &bytes)?;
+        tracing::debug!(library = %lib.name, "downloaded processor dependency");
+    }
+    Ok(())
 }
 
 // ── Utilities ──
@@ -367,11 +510,18 @@ fn sha1_file(path: &Path) -> Result<String> {
 mod tests {
     use super::*;
 
+    fn libs() -> PathBuf {
+        PathBuf::from("/game/libraries")
+    }
+
     #[test]
     fn test_resolve_variable() {
         let vars = HashMap::from([("SIDE".to_string(), "client".to_string())]);
         let data = HashMap::new();
-        assert_eq!(resolve_template("{SIDE}", &vars, &data).unwrap(), "client");
+        assert_eq!(
+            resolve_template("{SIDE}", &vars, &data, &libs()).unwrap(),
+            "client"
+        );
     }
 
     #[test]
@@ -379,18 +529,63 @@ mod tests {
         let vars = HashMap::new();
         let data = HashMap::new();
         assert_eq!(
-            resolve_template("'hello world'", &vars, &data).unwrap(),
+            resolve_template("'hello world'", &vars, &data, &libs()).unwrap(),
             "hello world"
         );
     }
 
+    /// 批次 4：`[artifact]` 必须解析成 libraries 下的实际 jar 路径
+    /// （此前原样返回 Maven 坐标，processor 参数无效）。
     #[test]
-    fn test_resolve_artifact() {
+    fn test_resolve_artifact_to_library_path() {
         let vars = HashMap::new();
         let data = HashMap::new();
-        let result =
-            resolve_template("[net.minecraftforge:forge:1.21-49.0.50]", &vars, &data).unwrap();
-        assert_eq!(result, "net.minecraftforge:forge:1.21-49.0.50");
+        let result = resolve_template(
+            "[net.minecraftforge:forge:1.21-49.0.50]",
+            &vars,
+            &data,
+            &libs(),
+        )
+        .unwrap();
+        assert_eq!(
+            result,
+            "/game/libraries/net/minecraftforge/forge/1.21-49.0.50/forge-1.21-49.0.50.jar"
+        );
+    }
+
+    /// 批次 4：data 值（常为 `[artifact]` / 嵌套 `{key}`）必须递归解析。
+    #[test]
+    fn test_data_entry_resolves_recursively() {
+        use super::super::profile::DataEntry;
+        let vars = HashMap::from([("SIDE".to_string(), "client".to_string())]);
+        let mut data = HashMap::new();
+        data.insert(
+            "MOJMAPS".to_string(),
+            DataEntry {
+                client: "[net.minecraftforge:forge:1.21-49.0.50:map_client]".to_string(),
+            },
+        );
+        data.insert(
+            "SIDE_REF".to_string(),
+            DataEntry {
+                client: "{SIDE}".to_string(),
+            },
+        );
+        assert_eq!(
+            resolve_template("{MOJMAPS}", &vars, &data, &libs()).unwrap(),
+            "/game/libraries/net/minecraftforge/forge/1.21-49.0.50/forge-1.21-49.0.50-map_client.jar"
+        );
+        assert_eq!(
+            resolve_template("{SIDE_REF}", &vars, &data, &libs()).unwrap(),
+            "client"
+        );
+    }
+
+    /// 批次 4：MINECRAFT_JAR 指向 client jar 文件（此前是 versions/ 目录）。
+    #[test]
+    fn test_minecraft_jar_points_at_client_jar_file() {
+        let vars = build_template_vars(Path::new("/game"), Path::new("/tmp/installer.jar"), "1.21");
+        assert_eq!(vars["MINECRAFT_JAR"], "/game/versions/1.21/1.21.jar");
     }
 
     #[test]

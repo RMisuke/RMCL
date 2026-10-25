@@ -48,7 +48,9 @@ pub async fn install_loader(
     let game_dir = core.config.resolved_game_root();
 
     // ── 3. 安装（分流在 modloader crate 内部）──
-    let dm = DependencyManager::new(core.http_client.clone());
+    // 平台描述符经注入传递（批次 4：Forge processors 的 classpath 分隔符）。
+    let dm =
+        DependencyManager::new(core.http_client.clone()).with_platform(core.platform.descriptor);
     let outcome = dm
         .install_loader(
             loader_type,

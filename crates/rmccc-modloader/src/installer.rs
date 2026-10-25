@@ -40,46 +40,93 @@ impl<'a> InstallerJarRunner<'a> {
         loader_version: &str,
     ) -> Result<String> {
         let before = self.version_ids()?;
-        let (bytes, used_url) = self
-            .download_installer(loader_type, mc_version, loader_version)
-            .await?;
+        let candidates = installer_urls(loader_type, mc_version, loader_version);
+        let (installer_path, used_url) = download_installer_file(self.client, &candidates).await?;
         tracing::info!(loader = %loader_type.display_name(), url = %used_url, "Loader installer downloaded");
 
-        // 安装器要求 game_dir 下存在 launcher_profiles.json（Mojang 启动器痕迹）。
+        let result = self
+            .run_with_snapshot(
+                loader_type,
+                &installer_path,
+                mc_version,
+                loader_version,
+                before,
+            )
+            .await;
+        // 安装器 JAR 不再需要（无论成败都清理，见 download_installer_file 注释）。
+        let _ = std::fs::remove_file(&installer_path);
+        result
+    }
+
+    /// 运行**已就位**的官方安装器 JAR，返回安装器创建出的版本 id。
+    ///
+    /// `run` 的无下载版；供本地安装器文件复用同一条执行/探测路径。
+    pub async fn run_local(
+        &self,
+        loader_type: &ModLoaderType,
+        installer_path: &Path,
+        mc_version: &str,
+        loader_version: &str,
+    ) -> Result<String> {
+        let before = self.version_ids()?;
+        self.run_with_snapshot(
+            loader_type,
+            installer_path,
+            mc_version,
+            loader_version,
+            before,
+        )
+        .await
+    }
+
+    /// 安装器要求 game_dir 下存在 launcher_profiles.json（Mojang 启动器痕迹）。
+    async fn run_with_snapshot(
+        &self,
+        loader_type: &ModLoaderType,
+        installer_path: &Path,
+        mc_version: &str,
+        loader_version: &str,
+        before: Vec<String>,
+    ) -> Result<String> {
         let profiles_path = self.game_dir.join("launcher_profiles.json");
         if !profiles_path.exists() {
             std::fs::create_dir_all(self.game_dir)?;
             std::fs::write(&profiles_path, "{\"profiles\":{}}")?;
         }
 
-        let installer_path = self
-            .game_dir
-            .join(format!("{}-installer.jar", loader_type.library_id()));
-        std::fs::write(&installer_path, &bytes)?;
-
         tracing::info!(
             java = %self.java_path.display(),
             installer = %installer_path.display(),
             "Running loader installer JAR"
         );
-        let output = tokio::process::Command::new(self.java_path)
-            .arg("-jar")
-            .arg(&installer_path)
-            .arg("--installClient")
-            .arg(self.game_dir)
-            .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::piped())
-            .output()
-            .await
-            .map_err(|e| {
-                RmcccError::Other(format!(
-                    "Failed to run {} installer: {e}",
-                    loader_type.display_name()
-                ))
-            })?;
-
-        // 安装器 JAR 不再需要（它已经把库与版本 JSON 铺好）。
-        let _ = std::fs::remove_file(&installer_path);
+        // 安装器要解压大量库 + 跑 processors，慢机上可达数分钟；完全无超时
+        // 才是原状（此前挂起会永久卡住安装命令）。
+        const INSTALLER_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(600);
+        let output = tokio::time::timeout(
+            INSTALLER_TIMEOUT,
+            tokio::process::Command::new(self.java_path)
+                .arg("-jar")
+                .arg(installer_path)
+                .arg("--installClient")
+                .arg(self.game_dir)
+                .stdout(std::process::Stdio::piped())
+                .stderr(std::process::Stdio::piped())
+                .output(),
+        )
+        .await
+        .map_err(|_| {
+            RmcccError::Other(format!(
+                "{} installer timed out after {}s",
+                loader_type.display_name(),
+                INSTALLER_TIMEOUT.as_secs()
+            ))
+        })?
+        .map_err(|e| {
+            RmcccError::Other(format!(
+                "Failed to run {} installer: {e}",
+                loader_type.display_name()
+            ))
+        })?;
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
@@ -120,41 +167,6 @@ impl<'a> InstallerJarRunner<'a> {
         )))
     }
 
-    /// 按 loader 类型下载 installer JAR（NeoForge 有 `neoforge/` 与旧 `forge/` 两种 artifact）。
-    async fn download_installer(
-        &self,
-        loader_type: &ModLoaderType,
-        mc_version: &str,
-        loader_version: &str,
-    ) -> Result<(Vec<u8>, String)> {
-        let candidates = installer_urls(loader_type, mc_version, loader_version);
-        let mut last_error = String::new();
-
-        for url in &candidates {
-            match self.client.get(url).send().await {
-                Ok(resp) if resp.status().is_success() => {
-                    let bytes = resp
-                        .bytes()
-                        .await
-                        .map_err(|e| RmcccError::Network(e.to_string()))?;
-                    // 早失败：不是合法 ZIP 就不要交给 Java。
-                    if zip::ZipArchive::new(std::io::Cursor::new(&bytes)).is_err() {
-                        last_error = format!("{url} — not a valid ZIP/JAR");
-                        continue;
-                    }
-                    return Ok((bytes.to_vec(), url.clone()));
-                }
-                Ok(resp) => last_error = format!("{url} — HTTP {}", resp.status()),
-                Err(e) => last_error = format!("{url} — {e}"),
-            }
-        }
-
-        Err(RmcccError::DownloadFailed {
-            url: candidates.first().cloned().unwrap_or_default(),
-            reason: format!("All installer URLs failed. Last error: {last_error}"),
-        })
-    }
-
     /// `versions/` 下现有目录名。
     fn version_ids(&self) -> Result<Vec<String>> {
         let dir = self.game_dir.join("versions");
@@ -168,6 +180,159 @@ impl<'a> InstallerJarRunner<'a> {
         }
         Ok(ids)
     }
+}
+
+/// 下载 installer JAR 到**唯一**临时文件并校验（批次 4，三份副本合一）。
+///
+/// 此前 forge/neoforge 各自下载：installer.rs 全量入内存（~180MB 双倍拷贝）、
+/// forge/install_task.rs 固定名 `/tmp/forge-installer-{pid}.jar` 且从不删除
+/// （每次安装泄漏 ~180MB）。统一为：
+/// - 流式写入唯一临时文件（`{loader}-installer-{pid}-{nanos}.jar`）；
+/// - ZIP 完整性早失败（不是合法 ZIP 不交给 Java）；
+/// - `{url}.sha1` 可取时强制校验（镜像劫持/损坏即失败）；取不到时警告放行
+///   （部分镜像不带 .sha1）；
+/// - **调用方负责在使用后删除**（成功与失败路径都要）。
+pub async fn download_installer_file(
+    client: &reqwest::Client,
+    candidates: &[String],
+) -> Result<(PathBuf, String)> {
+    let mut last_error = String::new();
+
+    for url in candidates {
+        let fetched = fetch_installer_candidate(client, url).await;
+        match fetched {
+            Ok(path) => return Ok((path, url.clone())),
+            Err(e) => last_error = format!("{url} — {e}"),
+        }
+    }
+
+    Err(RmcccError::DownloadFailed {
+        url: candidates.first().cloned().unwrap_or_default(),
+        reason: format!("All installer URLs failed. Last error: {last_error}"),
+    })
+}
+
+/// 单候选下载 + 校验；失败时清理半成品临时文件。
+async fn fetch_installer_candidate(client: &reqwest::Client, url: &str) -> Result<PathBuf> {
+    let resp = client
+        .get(url)
+        .send()
+        .await
+        .map_err(|e| RmcccError::Network(e.to_string()))?;
+    if !resp.status().is_success() {
+        return Err(RmcccError::Network(format!("HTTP {}", resp.status())));
+    }
+
+    let temp = unique_installer_temp_path(url);
+    let result = async {
+        stream_to_file(resp, &temp).await?;
+        validate_and_verify(client, url, &temp).await
+    }
+    .await;
+    match result {
+        Ok(()) => {
+            tracing::info!(url = %url, path = %temp.display(), "Installer downloaded and validated");
+            Ok(temp)
+        }
+        Err(e) => {
+            let _ = std::fs::remove_file(&temp);
+            Err(e)
+        }
+    }
+}
+
+/// 流式写盘（chunk 循环，installer ~180MB 不再整份进内存）。
+async fn stream_to_file(mut resp: reqwest::Response, dest: &Path) -> Result<()> {
+    use tokio::io::AsyncWriteExt;
+    if let Some(parent) = dest.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let mut file = tokio::fs::File::create(dest)
+        .await
+        .map_err(RmcccError::Io)?;
+    while let Some(chunk) = resp
+        .chunk()
+        .await
+        .map_err(|e| RmcccError::Network(e.to_string()))?
+    {
+        file.write_all(&chunk).await.map_err(RmcccError::Io)?;
+    }
+    file.flush().await.map_err(RmcccError::Io)?;
+    Ok(())
+}
+
+/// ZIP 完整性 + （可取时）`.sha1` 校验。
+async fn validate_and_verify(client: &reqwest::Client, url: &str, path: &Path) -> Result<()> {
+    let file = std::fs::File::open(path)
+        .map_err(|e| RmcccError::Other(format!("installer temp file vanished: {e}")))?;
+    zip::ZipArchive::new(file)
+        .map_err(|e| RmcccError::Other(format!("installer is not a valid ZIP/JAR: {e}")))?;
+
+    match client.get(format!("{url}.sha1")).send().await {
+        Ok(resp) if resp.status().is_success() => {
+            let expected = resp
+                .text()
+                .await
+                .map_err(|e| RmcccError::Network(e.to_string()))?;
+            // Maven .sha1 文件形如 "abc123  filename.jar"，取第一段。
+            let expected = expected
+                .split_whitespace()
+                .next()
+                .unwrap_or("")
+                .to_lowercase();
+            if expected.len() != 40 {
+                tracing::warn!(url = %url, "malformed .sha1 sidecar; skipping verification");
+                return Ok(());
+            }
+            let actual = sha1_of_file(path)?;
+            if !actual.eq_ignore_ascii_case(&expected) {
+                return Err(RmcccError::Other(format!(
+                    "installer SHA-1 mismatch for {url}: expected {expected}, got {actual}"
+                )));
+            }
+            tracing::debug!(url = %url, "installer SHA-1 verified");
+            Ok(())
+        }
+        // 无 .sha1 sidecar（部分镜像）：警告放行——ZIP 结构校验仍然生效。
+        Ok(_) => {
+            tracing::warn!(url = %url, "no .sha1 sidecar available; skipping installer hash verification");
+            Ok(())
+        }
+        Err(e) => {
+            tracing::warn!(url = %url, error = %e, ".sha1 sidecar fetch failed; skipping verification");
+            Ok(())
+        }
+    }
+}
+
+fn unique_installer_temp_path(url: &str) -> PathBuf {
+    let tag = url.rsplit('/').next().unwrap_or("installer");
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    std::env::temp_dir().join(format!(
+        "rmccc-installer-{}-{}-{nanos}.jar",
+        tag,
+        std::process::id()
+    ))
+}
+
+/// 流式计算文件 SHA-1（不整份读入内存）。
+fn sha1_of_file(path: &Path) -> Result<String> {
+    use sha1::{Digest, Sha1};
+    use std::io::Read;
+    let mut file = std::fs::File::open(path)?;
+    let mut hasher = Sha1::new();
+    let mut buf = [0u8; 64 * 1024];
+    loop {
+        let n = file.read(&mut buf)?;
+        if n == 0 {
+            break;
+        }
+        hasher.update(&buf[..n]);
+    }
+    Ok(format!("{:x}", hasher.finalize()))
 }
 
 /// 该 loader 是否需要"运行官方安装器"（而不是打 patch）。

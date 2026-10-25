@@ -46,10 +46,10 @@ impl InstallTask for LegacyFabricInstallTask {
             _ => "net.fabricmc.loader.launch.knot.KnotClient".into(),
         };
 
-        // Extract libraries
+        // Extract libraries（批次 4：客户端取 common+client，此前误取 server 侧）
         let mut libraries: Vec<Library> = Vec::new();
         if let Some(libs) = json["launcherMeta"]["libraries"].as_object() {
-            for side in &["common", "server"] {
+            for side in &["common", "client"] {
                 if let Some(arr) = libs.get(*side).and_then(|v| v.as_array()) {
                     for entry in arr {
                         if let Some(name) = entry.get("name").and_then(|v| v.as_str()) {
