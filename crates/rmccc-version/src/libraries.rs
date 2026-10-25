@@ -6,50 +6,25 @@ use rmccc_download::DownloadItem;
 use rmccc_platform::PlatformDescriptor;
 use std::path::{Path, PathBuf};
 
-use super::types::Library;
+use super::types::{CompatibilityRule, Library};
 
 /// Determine if a library should be included on the given platform.
 ///
-/// Mojang rules use a last-match-wins strategy: iterate all rules, track the last
-/// applicable action. **Default when `rules` is present but nothing matches is
-/// DISALLOW** — mirrors `Library.isRulesSatisfied` /
-/// HMCL `Library.appliesToCurrentEnvironment` (which starts at `DISALLOW`).
+/// 委派到统一权威实现 [`crate::compatibility::rules_allow`]（审计批次 3 收敛，
+/// 语义定版见 ARCHITECTURE.md §3.3）：last-match-wins、无规则=适用、
+/// **有规则但未命中=不适用**——声明了 `rules` 的库，规则不命中就表示
+/// "这个库不属于当前平台"。
 ///
-/// 1.1b 修正：此前"无规则命中 → 默认 allow"是错的——它会把只声明了别的平台的
-/// 库（例如 `{allow, os:{osx}}`）也塞进 Windows 的 classpath。声明了 `rules`
-/// 的库，规则不命中就表示"这个库不属于当前平台"。
-///
-/// `os`/`arch` 判断全部经注入的 [`PlatformDescriptor`]（指南 §5.7.1 第 3 条），
-/// 本模块不再出现 `cfg!(target_os = ...)`。
+/// `os`/`arch` 判断全部经注入的 [`PlatformDescriptor`]（指南 §5.7.1 第 3 条）。
 pub fn library_applies(lib: &Library, platform: &PlatformDescriptor) -> bool {
     let Some(rules) = &lib.rules else {
         // 无 rules = 无条件适用。
         return true;
     };
 
-    // 有 rules 但一条都没命中 → disallow（Mojang 默认值）。
-    let mut allowed = false;
-
-    for rule in rules {
-        let applies = match &rule.os {
-            Some(os) => {
-                // `os.name` 缺省 = 不限制平台；`os.arch` 缺省 = 不限制架构。
-                let os_matches = match os.name.as_deref() {
-                    Some(name) => platform.matches_rule_os(name),
-                    None => true,
-                };
-                os_matches && platform.matches_rule_arch(os.arch.as_deref())
-            }
-            None => true,
-        };
-
-        if applies {
-            // last-match-wins；只有 "allow" 才是放行。
-            allowed = rule.action == "allow";
-        }
-    }
-
-    allowed
+    let converted: Vec<super::types::CompatibilityRule> =
+        rules.iter().cloned().map(CompatibilityRule::from).collect();
+    crate::compatibility::rules_allow(&converted, &std::collections::HashMap::new(), platform)
 }
 
 /// Resolve library download items for the current platform.

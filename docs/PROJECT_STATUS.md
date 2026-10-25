@@ -10,6 +10,29 @@
 
 ## 0. 更新记录
 
+**2026-10-25（审计整改批次 3 `refactor/version-merge-unify`：inheritsFrom 合并与规则求值收敛，A7）**：
+
+- **文档先行**：ARCHITECTURE.md §3.3 新增「版本继承合并与规则求值的统一语义」定版小节
+  （逐字段合并语义、规则三分支语义、禁止新增第三套实现的约束）。
+- **合并收敛**：新增 `rmccc_version::merge` 模块为唯一权威——
+  `merge_child_into_parent`（从 default_game_repository 迁入，HMCL 追加语义）+
+  `merge_partial_json_into_parent`（部分子 JSON 宽松合并，语义与 typed 完全一致）。
+  三条链路全部折叠：`repository::resolve_version`（网络链，重写为 root→child canonical
+  折叠——旧实现不继承 arguments/minecraftArguments/downloads/logging/jar）；
+  `DefaultGameRepository`（本地链，改薄委托）；`pipeline::resolve_version` 本地分支
+  （删除第三套手写合并——旧实现 arguments 整体替换且漏 4 个字段）。
+  **顺修两个 bug**：① 网络链全字段继承（Forge/Fabric 子版本不再丢父版 JVM 参数与
+  client jar 下载信息）；② 完整可解析的本地子 JSON 声明 `inheritsFrom` 时此前直接
+  返回不合并，现必须走合并。
+- **规则收敛**：`compatibility::rules_allow` 定为唯一权威（last-match-wins、
+  无规则=适用、**有规则未命中=不适用**，对齐 HMCL `appliesToCurrentEnvironment`，
+  修正此前 no-match→allow 的错误默认）；`arguments::rules_match`（旧"任意命中+
+  disallow 一票否决"违背 Mojang）与 `libraries::library_applies` 全部改为薄封装。
+  `applies_to_environment`（清单可见性，any-match 语义）保留不变。
+- 新增测试：merge 模块 4 项（typed/partial 语义一致、追加非替换、null/未知字段忽略）、
+  网络链全字段继承、`[{disallow osx},{allow}]` macOS 判定（审计跨 crate #2 案例）。
+- 门禁：`cargo test --workspace` 42 套件 0 失败、clippy 0 警告、fmt 干净、typecheck 0 错误。
+
 **2026-10-25（审计整改批次 2 `fix/ipc-lock-discipline`：IPC 锁纪律重构）**：
 
 - **CoreHandle 快照（A2 根治）**：`CoreContext` 的 `version_provider`/`download_provider` Box→Arc、`profile_store`→Arc；新增 `CoreHandle`（Arc 快照 + config 克隆）与 `core.handle()`；pipeline 7 个编排函数与 core::modloader 3 个函数签名改 `&CoreHandle`，CLI/Tauri 调用方全部跟进。`version_install`/`launch_start`/`instance_repair`/`instance_check_completion`/`modloader_install`/`version_list` 改为"短锁取快照 → 长操作全程无锁"——整包下载 / Forge installer 运行 / Java 探测期间 `settings_set` 等写命令不再被阻塞（此前 tokio 公平 RwLock 下新读请求也排队，几乎所有 IPC 卡死）。

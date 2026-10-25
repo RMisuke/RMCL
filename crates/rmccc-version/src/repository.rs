@@ -3,6 +3,10 @@
 //! Following HMCL's [`GameRepository.resolve()`](https://github.com/HMCL-dev/HMCL/blob/main/HMCLCore/src/main/java/org/jackhuang/hmcl/game/DefaultGameRepository.java)
 //! pattern: follows `inheritsFrom` links and merges libraries, arguments,
 //! and metadata from parent versions.
+//!
+//! 合并语义的唯一权威实现在 [`super::merge::merge_child_into_parent`]
+//! （审计批次 3 收敛，定版见 ARCHITECTURE.md §3.3）：本模块只负责沿链收集
+//! 清单，从根到子折叠——不再自带第三套字段合并逻辑。
 
 use rmccc_error::{Result, RmcccError};
 
@@ -10,9 +14,11 @@ use super::types::{GameVersion, VersionProvider};
 
 /// Resolve a version by following its inheritance chain.
 ///
-/// The returned `GameVersion` is fully merged: all libraries from ancestors
-/// are included, `mainClass` and `assetIndex` are inherited from the nearest
-/// ancestor that defines them, and `javaVersion` requirements are combined.
+/// The returned `GameVersion` is fully merged via
+/// [`super::merge::merge_child_into_parent`]: libraries accumulate (deduped),
+/// `arguments` append, and `mainClass`/`jar`/`assetIndex`/`javaVersion`/
+/// `minecraftArguments`/`downloads.client`/`logging` inherit from the nearest
+/// ancestor that defines them.
 ///
 /// # Errors
 ///
@@ -22,61 +28,37 @@ pub async fn resolve_version(
     version_id: &str,
     provider: &dyn VersionProvider,
 ) -> Result<GameVersion> {
-    let mut current = provider.fetch_version(version_id).await?;
-    // `resolved` 始终保存"根版本 + 已从祖先继承的字段"的结果，
-    // 避免末尾重新 fetch 导致继承结果丢失（P1-04）。
-    let mut resolved = current.clone();
-    let mut all_libraries = current.libraries.clone();
-    let mut visited = vec![version_id.to_string()];
+    // 1. Walk the chain child → root, collecting manifests (with cycle detection).
+    let mut chain: Vec<GameVersion> = Vec::new();
+    let mut visited: Vec<String> = Vec::new();
+    let mut current_id = version_id.to_string();
 
-    // Walk the inheritance chain from child to root.
-    while let Some(ref parent_id) = current.inherits_from {
-        // Cycle detection
-        if visited.contains(parent_id) {
+    loop {
+        if visited.contains(&current_id) {
             return Err(RmcccError::Other(format!(
-                "Version inheritance cycle detected: {parent_id} already visited in chain {:?}",
+                "Version inheritance cycle detected: {current_id} already visited in chain {:?}",
                 visited
             )));
         }
-        visited.push(parent_id.clone());
+        visited.push(current_id.clone());
 
-        let parent = provider.fetch_version(parent_id).await?;
-
-        // Merge libraries: parent first, then child (child overrides if duplicate names)
-        let existing_names: std::collections::HashSet<String> =
-            all_libraries.iter().map(|l| l.name.clone()).collect();
-        for lib in &parent.libraries {
-            if !existing_names.contains(&lib.name) {
-                all_libraries.push(lib.clone());
-            }
+        let manifest = provider.fetch_version(&current_id).await?;
+        let next = manifest.inherits_from.clone();
+        chain.push(manifest);
+        match next {
+            Some(parent_id) => current_id = parent_id,
+            None => break,
         }
-
-        // Inherit mainClass from the nearest ancestor that defines a non-default one
-        // (P1-04：原实现此分支为空，mainClass 永不继承)。
-        if (resolved.main_class.is_empty()
-            || resolved.main_class == "net.minecraft.client.main.Main")
-            && !parent.main_class.is_empty()
-            && parent.main_class != "net.minecraft.client.main.Main"
-        {
-            resolved.main_class = parent.main_class.clone();
-        }
-
-        // Inherit assetIndex from the nearest ancestor that has one
-        if resolved.asset_index.id.is_empty() {
-            resolved.asset_index = parent.asset_index.clone();
-        }
-
-        // Inherit java_version from the nearest ancestor that specifies one
-        if resolved.java_version.is_none() {
-            resolved.java_version = parent.java_version.clone();
-        }
-
-        // Continue up the chain
-        current = parent;
     }
 
-    // Apply merged libraries to the final result
-    resolved.libraries = all_libraries;
+    // 2. Fold root → child with the canonical merge (字段语义见 merge.rs）。
+    let mut resolved = chain
+        .pop()
+        .ok_or_else(|| RmcccError::Other(format!("Version chain empty for {version_id}")))?;
+    while let Some(child) = chain.pop() {
+        super::merge::merge_child_into_parent(&mut resolved, &child);
+    }
+    resolved.id = version_id.to_string();
     Ok(resolved)
 }
 
@@ -268,5 +250,62 @@ mod tests {
 
         let err = resolve_version("a", &provider).await.unwrap_err();
         assert!(err.to_string().contains("cycle"));
+    }
+
+    /// 审计跨 crate #1：链式解析必须继承**全部**字段——旧实现只合并
+    /// libraries/mainClass/assetIndex/javaVersion，arguments/minecraftArguments/
+    /// downloads/logging/jar 全部丢失（Forge/Fabric 子版本未重复声明时
+    /// 父版本的 JVM 参数与 client jar 下载信息随之丢失）。
+    #[tokio::test]
+    async fn test_full_field_inheritance_via_canonical_merge() {
+        let parent: GameVersion = serde_json::from_value(serde_json::json!({
+            "id": "1.12.2",
+            "type": "release",
+            "mainClass": "net.minecraft.client.main.Main",
+            "jar": "1.12.2",
+            "assetIndex": { "id": "1.12", "url": "u", "sha1": "s", "size": 1, "total_size": 2 },
+            "downloads": { "client": { "url": "https://mojang/1.12.2.jar", "sha1": "p", "size": 1 } },
+            "libraries": [ { "name": "parent:lib:1" } ],
+            "minecraftArguments": "--username ${auth_player_name}",
+            "logging": {
+                "client": {
+                    "argument": "-Dlog4j.configurationFile=${path}",
+                    "file": { "id": "l1", "sha1": "x", "size": 1, "url": "https://mojang/log.xml" },
+                    "type": "log4j2-xml"
+                }
+            }
+        }))
+        .unwrap();
+        let child: GameVersion = serde_json::from_value(serde_json::json!({
+            "id": "1.12.2-forge",
+            "type": "release",
+            "inheritsFrom": "1.12.2",
+            "mainClass": "net.minecraft.launchwrapper.Launch",
+            "assetIndex": { "id": "", "url": "", "sha1": "", "size": 0, "total_size": 0 },
+            "downloads": {},
+            "libraries": [ { "name": "forge:lib:1" } ],
+            "minecraftArguments": "--username ${auth_player_name} --tweakClass forge"
+        }))
+        .unwrap();
+        let provider = MockProvider::new(vec![parent, child]);
+
+        let resolved = resolve_version("1.12.2-forge", &provider).await.unwrap();
+
+        // mainClass：子非默认 → 覆盖；jar / downloads.client / logging：子未声明 → 继承父。
+        assert_eq!(resolved.main_class, "net.minecraft.launchwrapper.Launch");
+        assert_eq!(resolved.jar.as_deref(), Some("1.12.2"));
+        assert!(resolved.downloads.contains_key("client"));
+        assert!(resolved.logging.is_some());
+        // minecraftArguments：子覆盖（含 tweakClass）。
+        assert!(resolved
+            .minecraft_arguments
+            .as_deref()
+            .unwrap()
+            .contains("tweakClass"));
+        // libraries：父前子后去重。
+        let names: Vec<&str> = resolved.libraries.iter().map(|l| l.name.as_str()).collect();
+        assert_eq!(names, vec!["parent:lib:1", "forge:lib:1"]);
+        // 最终 id = 请求的版本 id。
+        assert_eq!(resolved.id, "1.12.2-forge");
     }
 }

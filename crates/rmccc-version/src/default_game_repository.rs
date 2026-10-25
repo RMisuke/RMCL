@@ -84,102 +84,16 @@ impl DefaultGameRepository {
 
     /// Merge a child manifest on top of an already-resolved parent.
     ///
-    /// Mirrors HMCL `GameInstanceManifest.merge(parent)`: the child's concrete
-    /// fields override the parent's; libraries accumulate (deduped by name).
+    /// 权威实现在 [`super::merge::merge_child_into_parent`]（审计批次 3 收敛，
+    /// 三条解析链路共用一份语义）；此处保留薄委托以维持本模块内调用点可读。
     fn merge_child_into_parent(parent: &mut GameVersion, child: &GameVersion) {
-        // Libraries — append child libs not already present.
-        let existing: HashSet<String> = parent.libraries.iter().map(|l| l.name.clone()).collect();
-        for lib in &child.libraries {
-            if !existing.contains(&lib.name) {
-                parent.libraries.push(lib.clone());
-            }
-        }
-
-        // mainClass — child overrides when it defines a non-default entry.
-        if !child.main_class.is_empty() && child.main_class != "net.minecraft.client.main.Main" {
-            parent.main_class = child.main_class.clone();
-        }
-
-        // jar — child overrides.
-        if let Some(jar) = &child.jar {
-            parent.jar = Some(jar.clone());
-        }
-
-        // assetIndex — child overrides when non-empty.
-        if !child.asset_index.id.is_empty() {
-            parent.asset_index = child.asset_index.clone();
-        }
-
-        // javaVersion — child overrides.
-        if let Some(jv) = &child.java_version {
-            parent.java_version = Some(jv.clone());
-        }
-
-        // arguments — merge: parent's first, child's appended (HMCL addArguments).
-        if let Some(child_args) = &child.arguments {
-            let mut merged = parent.arguments.clone().unwrap_or_default();
-            if let Some(jvm) = &child_args.jvm {
-                merged.jvm.get_or_insert_with(Vec::new).extend(jvm.clone());
-            }
-            if let Some(game) = &child_args.game {
-                merged
-                    .game
-                    .get_or_insert_with(Vec::new)
-                    .extend(game.clone());
-            }
-            parent.arguments = Some(merged);
-        }
-
-        // minecraftArguments — child overrides.
-        if let Some(ma) = &child.minecraft_arguments {
-            parent.minecraft_arguments = Some(ma.clone());
-        }
-
-        // compatibilityRules — accumulate.
-        parent
-            .compatibility_rules
-            .extend(child.compatibility_rules.clone());
-
-        // complianceLevel / root / hidden / time / releaseTime — child overrides.
-        if let Some(cl) = child.compliance_level {
-            parent.compliance_level = Some(cl);
-        }
-        if let Some(r) = child.root {
-            parent.root = Some(r);
-        }
-        if child.hidden {
-            parent.hidden = true;
-        }
-        if let Some(t) = &child.time {
-            parent.time = Some(t.clone());
-        }
-        if let Some(rt) = &child.release_time {
-            parent.release_time = Some(rt.clone());
-        }
-
-        // downloads — child's client overrides.
-        if let Some(client) = child.downloads.get("client") {
-            parent
-                .downloads
-                .insert("client".to_string(), client.clone());
-        }
-
-        // logging — child overrides.
-        if let Some(lg) = &child.logging {
-            parent.logging = Some(lg.clone());
-        }
+        super::merge::merge_child_into_parent(parent, child);
     }
 
     /// Apply a patch to a resolved manifest (HMCL `GameInstanceManifest.merge(patch)`).
     fn apply_patch(version: &mut GameVersion, patch: &GamePatch) {
         if !patch.libraries.is_empty() {
-            let existing: HashSet<String> =
-                version.libraries.iter().map(|l| l.name.clone()).collect();
-            for lib in &patch.libraries {
-                if !existing.contains(&lib.name) {
-                    version.libraries.push(lib.clone());
-                }
-            }
+            super::merge::append_libraries(version, &patch.libraries);
         }
         if let Some(mc) = &patch.main_class {
             version.main_class = mc.clone();
@@ -191,17 +105,7 @@ impl DefaultGameRepository {
             version.java_version = Some(jv.clone());
         }
         if let Some(pa) = &patch.arguments {
-            let mut merged = version.arguments.clone().unwrap_or_default();
-            if let Some(jvm) = &pa.jvm {
-                merged.jvm.get_or_insert_with(Vec::new).extend(jvm.clone());
-            }
-            if let Some(game) = &pa.game {
-                merged
-                    .game
-                    .get_or_insert_with(Vec::new)
-                    .extend(game.clone());
-            }
-            version.arguments = Some(merged);
+            super::merge::append_arguments(version, pa);
         }
         if let Some(ma) = &patch.minecraft_arguments {
             version.minecraft_arguments = Some(ma.clone());

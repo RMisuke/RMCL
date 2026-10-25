@@ -362,6 +362,44 @@ pub struct JavaRequirement {
 // 1.18 – 1.20.4 → Java 17
 // 1.20.5+     → Java 21
 
+#### 版本继承合并与规则求值的统一语义（2026-10-25 审计批次 3 定版）
+
+`inheritsFrom` 合并与 OS/features 规则求值各只有**一份权威实现**；历史上曾出现三套
+语义互斥的合并器与三套规则求值器（安装链/启动链/本地仓库对同一份 JSON 解析结果不同，
+见 `docs/audits/BACKEND_AUDIT_2026-10-25/01_CRATES_AUDIT.md` 跨 crate #1/#2），
+现收敛如下，**禁止再新增第三套**：
+
+**合并（`rmccc_version::merge`，HMCL `GameInstanceManifest.merge` 语义）**
+
+- 权威函数：`merge::merge_child_into_parent(parent, child)`（完整子版本）与
+  `merge::merge_partial_json_into_parent(parent, json)`（缺 `assetIndex` 等
+  必需字段、typed 解析失败的部分子 JSON，如安装器产物）。
+- 逐字段语义：
+  - `libraries`：父在前、子追加，按 `name` 去重；
+  - `arguments`：**追加**（父的 jvm/game 先，子的后接——HMCL addArguments），
+    不是整体替换；
+  - `minecraftArguments`：子覆盖；
+  - `mainClass`：子定义非默认值（≠ `net.minecraft.client.main.Main`）时覆盖；
+  - `jar` / `assetIndex` / `javaVersion` / `logging`：子有则覆盖；
+  - `downloads`：子的 `client` 条目覆盖（保持 HMCL 行为）；
+  - `compatibilityRules`：累计。
+- 链式解析（`repository::resolve_version` 网络链 / `DefaultGameRepository::resolve`
+  本地链 / `pipeline::resolve_version` 本地 JSON 分支）全部折叠到上述函数；
+  三条链路对同一份 JSON 的解析结果必须一致（由回归测试锁定）。
+- 可完整 typed 解析的子 JSON 若声明 `inheritsFrom`，同样必须走合并（不得直接返回）。
+
+**规则求值（`rmccc_version::compatibility::rules_allow`，HMCL `CompatibilityRule`
+.appliesToCurrentEnvironment 语义）**
+
+- 无规则 → 适用（默认放行）；
+- 有规则：**最后一条命中的规则**决定结果（`allow` → 适用，`disallow` → 不适用）；
+- 有规则但**一条都没命中 → 不适用**（例：`--XstartOnFirstThread` 规则
+  `[allow osx]` 在 Windows 上不出现；库规则 `[allow windows]` 在 macOS 上不下载）。
+- `libraries::library_applies` 与 `arguments::rules_match` 都是对该函数的薄封装，
+  不得各自实现匹配逻辑。
+- `compatibility::applies_to_environment`（清单可见性过滤）语义不同且保留：
+  任一规则命中即视为当前平台可见（用于索引里隐藏不支持平台的快照）。
+
 /// Mod metadata
 pub struct ModInfo {
     pub id: String,

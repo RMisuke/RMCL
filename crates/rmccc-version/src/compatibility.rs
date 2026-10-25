@@ -73,11 +73,16 @@ pub fn rule_applies(
     true
 }
 
-/// Evaluate a rule list with Mojang last-match-wins semantics.
+/// Evaluate a rule list with Mojang last-match-wins semantics（统一权威实现，
+/// 审计批次 3：`libraries::library_applies` 与 `arguments::rules_match` 都是
+/// 本函数的薄封装，不得再各写一套匹配逻辑）。
 ///
-/// - No rules → allowed (default).
-/// - The **last** matching rule's action decides (`allow` → true, `disallow` → false).
-/// - No rule matches → allowed (default), matching Mojang's library rules.
+/// - No rules → allowed（无条件适用）。
+/// - 有规则时：**最后一条命中的规则**决定结果（`allow` → 适用，`disallow` → 不适用）。
+/// - 有规则但一条都没命中 → **不适用**（HMCL `CompatibilityRule
+///   .appliesToCurrentEnvironment` 在无命中规则时返回 false；例：规则
+///   `[allow osx]` 的参数在 Windows 上不出现，`[allow windows]` 的库在 macOS
+///   上不下载）。
 pub fn rules_allow(
     rules: &[CompatibilityRule],
     features: &HashMap<String, bool>,
@@ -88,19 +93,12 @@ pub fn rules_allow(
     }
 
     let mut allowed = false;
-    let mut any_matched = false;
     for rule in rules {
         if rule_applies(rule, features, platform) {
             allowed = rule.action != "disallow";
-            any_matched = true;
         }
     }
-
-    if any_matched {
-        allowed
-    } else {
-        true
-    }
+    allowed
 }
 
 /// Whether a **manifest**'s compatibility rules include it on the current
@@ -165,11 +163,21 @@ mod tests {
     }
 
     #[test]
-    fn test_allow_other_os_no_match_default_allows() {
-        // Rule allows only "solaris" which never matches — no matching rule
-        // means default allow.
+    fn test_allow_other_os_no_match_excludes() {
+        // 规则只允许 "solaris"，本机永不命中 → 不适用（no-match = exclude，
+        // HMCL appliesToCurrentEnvironment 同款；此前误为 default-allow）。
         let rules = vec![rule("allow", Some("solaris"))];
-        assert!(rules_allow(&rules, &HashMap::new(), &host()));
+        assert!(!rules_allow(&rules, &HashMap::new(), &host()));
+    }
+
+    #[test]
+    fn test_disallow_then_unconditional_allow_last_wins() {
+        // 审计跨 crate #2 的判定案例：[{disallow osx},{allow}]（第二条无 os
+        // 条件、必命中）在 macOS 上最后命中者是 allow → 适用。
+        // 旧 arguments.rs 的"任意命中 + disallow 一票否决"会错判为不适用。
+        let rules = vec![rule("disallow", Some("osx")), rule("allow", None)];
+        assert!(rules_allow(&rules, &HashMap::new(), &mac()));
+        assert!(rules_allow(&rules, &HashMap::new(), &win()));
     }
 
     #[test]
@@ -202,8 +210,8 @@ mod tests {
             &HashMap::from([("has_custom_resolution".into(), true)]),
             &host()
         ));
-        // last-match-wins: no matching rule → default allow
-        assert!(rules_allow(&rules, &HashMap::new(), &host()));
+        // feature 未开启 → 规则不命中 → 不适用（no-match = exclude）。
+        assert!(!rules_allow(&rules, &HashMap::new(), &host()));
     }
 
     #[test]
@@ -231,11 +239,11 @@ mod tests {
         let rules = vec![rule("allow", Some("macos"))];
         // macOS 描述符：命中 allow。
         assert!(rules_allow(&rules, &HashMap::new(), &mac()));
-        // Windows 描述符：无规则命中 → 默认 allow（不是否定，而是不适用）。
-        assert!(rules_allow(&rules, &HashMap::new(), &win()));
-        // 关键差别在 disallow：macOS 上被拒，Windows 上默认放行。
+        // Windows 描述符：无规则命中 → 不适用（no-match = exclude）。
+        assert!(!rules_allow(&rules, &HashMap::new(), &win()));
+        // disallow：macOS 上被拒；Windows 上同样不命中 → 不适用。
         let deny = vec![rule("disallow", Some("macos"))];
         assert!(!rules_allow(&deny, &HashMap::new(), &mac()));
-        assert!(rules_allow(&deny, &HashMap::new(), &win()));
+        assert!(!rules_allow(&deny, &HashMap::new(), &win()));
     }
 }

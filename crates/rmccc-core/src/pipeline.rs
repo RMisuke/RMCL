@@ -140,6 +140,11 @@ fn inject_candidates(
 
 /// 解析游戏版本：优先本地 patched JSON（含 `inheritsFrom` 继承链合并），
 /// 否则走 Mojang API（复用 `core.version_provider`，P2-01 一致性）。
+///
+/// 合并全部经 canonical 实现 `rmccc_version::merge`（审计批次 3 收敛）：
+/// 此前这里的第三套合并逻辑 arguments 是**整体替换**、且不继承
+/// assetIndex/javaVersion/downloads/logging——与本地仓库/网络链路的解析
+/// 结果不一致。
 pub async fn resolve_version(
     core: &CoreHandle,
     game_version_id: &str,
@@ -158,39 +163,31 @@ pub async fn resolve_version(
     let content = std::fs::read_to_string(&local_json_path)
         .map_err(|e| RmcccError::Other(format!("读取本地版本 JSON 失败: {e}")))?;
 
-    // Try direct parse first (e.g. Fabric patched JSON is complete)
-    if let Ok(v) = serde_json::from_str::<rmccc_version::GameVersion>(&content) {
-        return Ok(v);
+    // 完整可解析的本地 JSON：无 inheritsFrom 直接用；**声明了 inheritsFrom
+    // 同样必须合并**——此前此分支直接返回，父版本字段全部丢失（审计批次 3
+    // 顺修的第二个 bug）。
+    if let Ok(child) = serde_json::from_str::<rmccc_version::GameVersion>(&content) {
+        return match child.inherits_from.clone() {
+            None => Ok(child),
+            Some(parent_id) => {
+                let mut resolved = rmccc_version::resolve_version(&parent_id, provider).await?;
+                rmccc_version::merge_child_into_parent(&mut resolved, &child);
+                resolved.id = game_version_id.to_string();
+                Ok(resolved)
+            }
+        };
     }
 
-    // Handle inheritsFrom-based versions (NeoForge/Forge): resolve base + merge overrides
+    // 部分字段 JSON（安装器产物，缺 assetIndex 等必需字段、typed 解析失败）：
+    // raw 解析后经 canonical 宽松合并，语义与 typed 合并完全一致。
     let raw: serde_json::Value = serde_json::from_str(&content)
         .map_err(|e| RmcccError::Other(format!("解析本地版本 JSON 失败: {e}")))?;
-
-    let parent_id = match raw.get("inheritsFrom").and_then(|v| v.as_str()) {
-        Some(id) => id.to_string(),
-        None => return rmccc_version::resolve_version(game_version_id, provider).await,
+    let Some(parent_id) = raw.get("inheritsFrom").and_then(|v| v.as_str()) else {
+        return rmccc_version::resolve_version(game_version_id, provider).await;
     };
 
-    let mut resolved = rmccc_version::resolve_version(&parent_id, provider).await?;
-
-    if let Some(mc) = raw.get("mainClass").and_then(|v| v.as_str()) {
-        resolved.main_class = mc.to_string();
-    }
-    if let Some(libs) = raw.get("libraries").and_then(|v| v.as_array()) {
-        let local_libs: Vec<rmccc_version::Library> =
-            serde_json::from_value(serde_json::Value::Array(libs.clone())).unwrap_or_default();
-        for lib in local_libs {
-            if !resolved.libraries.iter().any(|l| l.name == lib.name) {
-                resolved.libraries.push(lib);
-            }
-        }
-    }
-    if let Some(args) = raw.get("arguments") {
-        if let Ok(a) = serde_json::from_value(args.clone()) {
-            resolved.arguments = Some(a);
-        }
-    }
+    let mut resolved = rmccc_version::resolve_version(parent_id, provider).await?;
+    rmccc_version::merge_partial_json_into_parent(&mut resolved, &raw);
     resolved.id = game_version_id.to_string();
     Ok(resolved)
 }

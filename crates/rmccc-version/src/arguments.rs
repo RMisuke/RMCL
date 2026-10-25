@@ -221,81 +221,16 @@ pub fn resolve_arguments(
 
 /// Check if a set of argument rules matches the current environment.
 ///
-/// Rules use an "allow" (default) or "disallow" action. If any rule disallows,
-/// the argument is excluded. If any rule allows, the argument is included
-/// (assuming no disallow rule matched).
+/// 委派到统一权威实现 [`crate::compatibility::rules_allow`]（审计批次 3）：
+/// last-match-wins、无规则=适用、有规则未命中=不适用。此前的
+/// "任意命中 + disallow 一票否决"违背 Mojang 语义——
+/// `[{disallow osx},{allow}]` 在 macOS 上应为适用（最后命中者是 allow）。
 fn rules_match(
     rules: &[ArgumentRule],
     features: &HashMap<String, bool>,
     platform: &PlatformDescriptor,
 ) -> bool {
-    if rules.is_empty() {
-        return true;
-    }
-
-    let mut allowed = false;
-    let mut disallowed = false;
-
-    for rule in rules {
-        let matches = rule_matches(rule, features, platform);
-        if matches {
-            match rule.action.as_str() {
-                "disallow" => disallowed = true,
-                _ => allowed = true, // "allow" or any other action
-            }
-        }
-    }
-
-    // If any rule disallows, the argument is excluded
-    if disallowed {
-        return false;
-    }
-
-    // If no rule matched at all, exclude (default behavior for rule-gated args)
-    if !allowed {
-        return false;
-    }
-
-    true
-}
-
-/// Check if a single rule matches the current environment.
-fn rule_matches(
-    rule: &ArgumentRule,
-    features: &HashMap<String, bool>,
-    platform: &PlatformDescriptor,
-) -> bool {
-    // Check OS condition
-    if let Some(os) = &rule.os {
-        let matches_os = match &os.name {
-            Some(name) => {
-                if let Some(pattern) = name.strip_prefix('^') {
-                    // Regex pattern (HMCL uses simple substring matching too)
-                    platform.os.rule_name().contains(pattern)
-                } else {
-                    platform.matches_rule_os(name)
-                }
-            }
-            None => true,
-        };
-
-        let matches_arch = platform.matches_rule_arch(os.arch.as_deref());
-
-        if !matches_os || !matches_arch {
-            return false;
-        }
-    }
-
-    // Check features
-    if let Some(feat) = &rule.features {
-        for (key, required) in feat {
-            if features.get(key.as_str()) != Some(required) {
-                return false;
-            }
-        }
-    }
-
-    true
+    crate::compatibility::rules_allow(rules, features, platform)
 }
 
 /// Parse legacy `minecraftArguments` string into individual tokens.

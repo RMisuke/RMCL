@@ -18,6 +18,7 @@ pub mod game_repository;
 pub mod isolation;
 pub mod libraries;
 pub mod manifest;
+pub mod merge;
 pub mod repository;
 pub mod resolved;
 pub mod types;
@@ -29,6 +30,7 @@ pub use default_game_repository::DefaultGameRepository;
 pub use game_repository::GameRepository;
 pub use isolation::IsolationType;
 pub use manifest::MojangVersionProvider;
+pub use merge::{merge_child_into_parent, merge_partial_json_into_parent};
 pub use repository::resolve_version;
 pub use resolved::ResolvedVersion;
 pub use types::{
