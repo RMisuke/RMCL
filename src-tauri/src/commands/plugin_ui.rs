@@ -32,9 +32,9 @@ const MAX_NETWORK_REQUEST_BODY: usize = 64 * 1024;
 /// `rmcccplugin://` 方案处理器：校验来源/路径/授权后返回文件内容。
 ///
 /// 拒绝路径一律返回 403/404 + 纯文本体，不回显包内目录结构。
-pub fn serve_asset(
+pub async fn serve_asset(
     app: &tauri::AppHandle,
-    request: &tauri::http::Request<Vec<u8>>,
+    request: tauri::http::Request<Vec<u8>>,
 ) -> tauri::http::Response<Cow<'static, [u8]>> {
     use tauri::Manager as _;
 
@@ -50,7 +50,8 @@ pub fn serve_asset(
     }
 
     let state = app.state::<AppState>();
-    let core = state.core.blocking_read();
+    // 异步协议处理器：await 读锁（绝不阻塞 WKWebView 主线程）。
+    let core = state.core.read().await;
     let Some(dir) = core.plugin_manager.installed_dir(plugin_id) else {
         return text_response(404, "plugin not installed");
     };

@@ -41,8 +41,11 @@ export const authStore = createRoot(() => {
 
   /** Record "this account just launched a game" (now). */
   function recordAccountActivity(): void {
-    const accountId = session()?.account_id;
-    if (!accountId) return;
+    const current = session();
+    const accountId = current?.account_id;
+    if (!accountId || !current) return;
+    // 启动游戏时顺带重验头像：换皮肤会在这次检测中拿到新 URL 并更新缓存。
+    if (current.uuid) void import("./cache").then(({ cacheStore }) => cacheStore.warmAvatar(current.uuid));
     const next = { ...activityMap(), [accountId]: new Date().toISOString() };
     setActivityMap(next);
     try {
@@ -145,6 +148,23 @@ export const authStore = createRoot(() => {
           userCode: event.payload.user_code,
           verificationUri: event.payload.verification_uri,
         });
+        // 自动复制八位验证码：用户在浏览器里直接粘贴即可（HMCL 同款体验）。
+        void navigator.clipboard
+          .writeText(event.payload.user_code)
+          .then(() => {
+            void import("../i18n").then(({ t }) =>
+              // toast 延迟导入，避免 store ↔ ui 的初始化环。
+              import("../stores/ui").then(({ toast }) =>
+                toast({
+                  message: t("accounts.ms.codeCopiedAuto", { code: event.payload.user_code }),
+                  tone: "success",
+                })
+              )
+            );
+          })
+          .catch(() => {
+            /* 剪贴板不可用时静默——对话框里仍有手动复制按钮 */
+          });
       }
     );
   }

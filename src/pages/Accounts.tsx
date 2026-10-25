@@ -11,6 +11,7 @@ import { RmDialog } from "../components/rm/overlays";
 import { RmCard, RmListRow, RmEmptyState, RmAdvancedSection } from "../components/rm/surfaces";
 import { external } from "../ipc/api";
 import { AccountAvatar } from "../components/AccountAvatar";
+import { SkinViewer } from "../components/SkinViewer";
 import { authStore } from "../stores/auth";
 import { uiStore, toast } from "../stores/ui";
 import { t } from "../i18n";
@@ -86,9 +87,10 @@ export default function Accounts(): JSX.Element {
   }
 
   return (
-    <div class="page">
+    <div class="page accounts-page">
       <PageHeader title={t("accounts.title")} />
-      <div class="page-body narrow">
+      <div class="accounts-split">
+        <section class="accounts-main tab-stack">
         {/* Welcome state replaces the old forced /login redirect */}
         <Show when={noAccounts()}>
           <RmCard title={t("accounts.welcome.title")}>
@@ -180,7 +182,6 @@ export default function Accounts(): JSX.Element {
         <RmAdvancedSection title={t("accounts.securityNoteTitle")}>
           <div class="muted-line">{t("accounts.securityNote")}</div>
         </RmAdvancedSection>
-      </div>
 
       {/* Device-code dialog */}
       <RmDialog
@@ -243,6 +244,13 @@ export default function Accounts(): JSX.Element {
           onEnter={() => void startOffline()}
         />
       </RmDialog>
+        </section>
+
+        {/* 右侧：当前账号皮肤的 3D 模型（skinview3d, MIT） */}
+        <aside class="accounts-skin">
+          <SkinViewer />
+        </aside>
+      </div>
     </div>
   );
 }

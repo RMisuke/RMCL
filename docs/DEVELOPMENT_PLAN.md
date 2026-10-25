@@ -191,7 +191,7 @@
 >
 > 已实测（2026-10-22）：`cargo fmt --check`、两条 clippy 门禁、**617 项测试 / 0 失败**、`pnpm typecheck` 全绿；
 > GUI 手动 strip 后 **7.96 MiB**、CLI 手动 strip 4.48 MiB、逻辑 helper 2.25 MiB
-> （ADR-011 口径：主可执行 stripped < 10 MiB ✅；`strip = true` 仍失效，审计 P2-7）。
+> （当时 ADR-011 口径 < 10 MiB ✅；2026-10-24 起红线放宽为 < 20 MiB；`strip = true` 仍失效，审计 P2-7）。
 >
 > **未完成（已移交 Phase 7）**：`cargo bloat` 正式审计、前端 bundle 分析、wiremock 集成测试补全、
 > E2E 实跑（本地需 `RMCCC_RUN_E2E=1`）、三平台产物实测、updater 真实 `endpoints`

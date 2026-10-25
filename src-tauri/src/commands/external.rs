@@ -35,3 +35,37 @@ pub fn open_external_url(url: String) -> Result<(), IpcError> {
         }
     }
 }
+
+/// Native directory picker (tauri-plugin-dialog). Returns `None` on cancel.
+///
+/// Read-only browsing target for extra game roots — the picked path is only
+/// stored when the user confirms adding it in the UI.
+#[tauri::command]
+#[tracing::instrument(skip(app))]
+pub async fn dialog_pick_directory(
+    app: tauri::AppHandle,
+) -> Result<Option<String>, IpcError> {
+    use tauri_plugin_dialog::DialogExt;
+
+    let picked = tauri::async_runtime::spawn_blocking(move || {
+        app.dialog().file().blocking_pick_folder()
+    })
+    .await
+    .map_err(|e| IpcError {
+        code: rmccc_error::ErrorCode::Unknown,
+        message: format!("directory dialog failed: {e}"),
+        retryable: false,
+    })?;
+
+    match picked {
+        Some(path) => {
+            let path = path.into_path().map_err(|e| IpcError {
+                code: rmccc_error::ErrorCode::ValidationError,
+                message: format!("invalid path: {e}"),
+                retryable: false,
+            })?;
+            Ok(Some(path.display().to_string()))
+        }
+        None => Ok(None),
+    }
+}

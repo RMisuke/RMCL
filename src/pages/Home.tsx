@@ -1,120 +1,128 @@
 /**
- * Home / Dashboard (ui-design 02): quick-launch card (five-state machine),
- * built-in cards (account, quick version, downloads), plugin cards via the
- * isolated bridge, and the layout edit mode (width cycle / hide / reset).
+ * Hero home (ui/home-hero-dock 试验分支) — 只重构主页，其他页面不变。
+ *
+ * 版面：全幅主题化背景（可经 --hero-image 换壁纸）；左侧是**可编辑的卡片栈**
+ * （每个模块一张独立卡片：实例 / 版本 / 下载 / 游戏 + 插件卡片，支持隐藏、
+ * 排序、添加、重置，持久化在 localStorage）；右下是账号卡与启动卡两张独立
+ * 卡片。所有颜色走主题令牌（--rmccc-*），深浅主题自动适配。
+ *
+ * 启动链路与主分支一致：launchStore.start → 检查/补全资源 → 启动气泡。
  */
 import type { JSX } from "solid-js";
-import { Show, For, createMemo, createSignal, createEffect, onMount, Switch, Match, ErrorBoundary } from "solid-js";
+import { Show, For, createMemo, createSignal, createRoot, onMount, Switch, Match } from "solid-js";
 import { useNavigate } from "@solidjs/router";
-import { PageHeader } from "../components/PageHeader";
 import { RmButton, RmIconButton, RmInput, RmProgress, RmTag } from "../components/rm/controls";
-import { Icon } from "../components/icons";
 import { RmDialog, RmMenu } from "../components/rm/overlays";
-import { RmEmptyState, RmSkeleton } from "../components/rm/surfaces";
-import { PluginFrame } from "../plugin-ui/PluginFrame";
+import { Icon, type IconName } from "../components/icons";
 import { AccountAvatar } from "../components/AccountAvatar";
-import { dashboard, versions, downloads as downloadsApi, external } from "../ipc/api";
-import type { DashboardLayout, WidgetInstance, WidgetDescriptor, VersionInfo, GridSize } from "../ipc/types";
+import { PluginFrame } from "../plugin-ui/PluginFrame";
+import { versions, dashboard, type WidgetDescriptor } from "../ipc/api";
+import type { VersionInfo } from "../ipc/types";
 import { profilesStore } from "../stores/profiles";
 import { authStore } from "../stores/auth";
 import { launchStore } from "../stores/launch";
 import { downloadsStore } from "../stores/downloads";
 import { uiStore, toast, confirmDanger, promptText } from "../stores/ui";
 import { t } from "../i18n";
-import { relativeTime, formatBytes, groupDigits } from "../lib/format";
+import type { TranslationKey } from "../i18n/locales/messages";
+import { relativeTime, formatBytes, groupDigits, formatDate } from "../lib/format";
 
-const WIDGET_WIDTHS: number[] = [2, 3, 4, 6, 8, 12];
+/** 插件/核心卡片目录（模块级共享：Home 装载，PluginCard 读取）。 */
+const [catalog, setCatalog] = createRoot(() => createSignal<WidgetDescriptor[]>([]));
+
+// ── 可编辑卡片布局（localStorage 持久化）──
+
+type BuiltinCardId =
+  | "server"        // 服务器信息（MOTD / 延迟 / 在线玩家）
+  | "compare"       // 客户端 vs 服务端版本比对
+  | "announcements" // 服务器更新公告
+  | "instances"
+  | "versions"
+  | "downloads"
+  | "games";
+
+interface HeroLayout {
+  order: string[];
+  hidden: string[];
+}
+
+const HERO_DEFAULTS: HeroLayout = {
+  order: ["server", "compare", "announcements"],
+  hidden: ["instances", "versions", "downloads", "games"],
+};
+const HERO_LAYOUT_KEY = "rmccc.heroLayout.v2";
+
+function loadLayout(): HeroLayout {
+  try {
+    const stored = JSON.parse(localStorage.getItem(HERO_LAYOUT_KEY) ?? "{}") as Partial<HeroLayout>;
+    const order = Array.isArray(stored.order) ? stored.order : [...HERO_DEFAULTS.order];
+    const hidden = Array.isArray(stored.hidden) ? stored.hidden : [];
+    // 兜底：默认卡片丢了就补回来（新增内置卡片时自动出现）。
+    for (const id of HERO_DEFAULTS.order) if (!order.includes(id)) order.push(id);
+    return { order, hidden };
+  } catch {
+    return { ...HERO_DEFAULTS, order: [...HERO_DEFAULTS.order], hidden: [] };
+  }
+}
+
+function saveLayout(layout: HeroLayout): void {
+  try {
+    localStorage.setItem(HERO_LAYOUT_KEY, JSON.stringify(layout));
+  } catch {
+    /* localStorage 不可用时仅内存态 */
+  }
+}
 
 export default function Home(): JSX.Element {
   const navigate = useNavigate();
-  const [layout, setLayout] = createSignal<DashboardLayout | null>(null);
-  const [layoutError, setLayoutError] = createSignal<string | null>(null);
+  const [layout, setLayout] = createSignal<HeroLayout>(loadLayout());
   const [editing, setEditing] = createSignal(false);
-  const [hiddenWidgets, setHiddenWidgets] = createSignal<WidgetInstance[]>([]);
-  const [addDrawerOpen, setAddDrawerOpen] = createSignal(false);
-  const [catalog, setCatalog] = createSignal<WidgetDescriptor[]>([]);
+  const [addOpen, setAddOpen] = createSignal(false);
 
-  onMount(async () => {
+  onMount(() => {
     void profilesStore.refresh();
     void authStore.refresh();
-    const res = await dashboard.getLayout();
-    if (res.ok) setLayout(res.data);
-    else setLayoutError(res.error.message);
-    const widgets = await dashboard.listWidgets();
-    if (widgets.ok) setCatalog(widgets.data);
+    void dashboard.listWidgets().then((res) => res.ok && setCatalog(res.data));
+  });
+  // 默认选中最近游玩的实例。
+  createMemo(() => {
+    if (!profilesStore.selectedId() && (profilesStore.items() ?? []).length > 0) {
+      const latest = [...(profilesStore.items() ?? [])].sort((a, b) =>
+        (b.last_played ?? "").localeCompare(a.last_played ?? "")
+      )[0];
+      if (latest) profilesStore.setSelectedId(latest.id);
+    }
   });
 
-  const profiles = () => profilesStore.items() ?? [];
+  const selected = () => profilesStore.selected() ?? null;
   const session = () => authStore.session();
 
-  async function saveLayout(next: DashboardLayout): Promise<void> {
-    const res = await dashboard.saveLayout(next);
-    if (res.ok) {
-      setLayout(res.data.layout);
-      const corrections = res.data.corrections.length;
-      if (corrections > 0) toast({ message: t("home.layoutCorrected", { n: corrections }), tone: "info" });
-    } else {
-      toast({ message: res.error.message, tone: "error" });
-    }
+  function persist(next: HeroLayout): void {
+    setLayout(next);
+    saveLayout(next);
   }
 
-  function cycleWidth(widget: WidgetInstance): void {
-    const current = widget.size.w;
-    const index = WIDGET_WIDTHS.indexOf(current);
-    const next = WIDGET_WIDTHS[(index + 1) % WIDGET_WIDTHS.length] ?? current;
-    updateWidget(widget, { w: next });
-  }
-
-  function hideWidget(widget: WidgetInstance): void {
-    setHiddenWidgets((list) => [...list, widget]);
-    setLayout((current) =>
-      current ? { ...current, widgets: current.widgets.filter((w) => w.instanceId !== widget.instanceId) } : current
-    );
-  }
-
-  function updateWidget(widget: WidgetInstance, patch: Partial<GridSize>): void {
-    setLayout((current) => {
-      if (!current) return current;
-      const widgets = current.widgets.map((w) =>
-        w.instanceId === widget.instanceId ? { ...w, size: { ...w.size, ...patch } } : w
-      );
-      if (editing()) void dashboard.saveLayout({ ...current, widgets });
-      return { ...current, widgets };
+  function hideCard(id: string): void {
+    const current = layout();
+    persist({
+      order: current.order.filter((c) => c !== id),
+      hidden: [...current.hidden, id],
     });
   }
 
-  function addWidget(widgetId: string): void {
-    setLayout((current) => {
-      if (!current) return current;
-      const descriptor = catalog().find((w) => w.widgetId === widgetId);
-      if (!descriptor) return current;
-      const instance: WidgetInstance = {
-        instanceId: `${widgetId}-${Date.now()}`,
-        pluginId: descriptor.pluginId,
-        widgetId: descriptor.widgetId,
-        enabled: true,
-        position: { x: 0, y: 999 },
-        size: { w: descriptor.defaultSize.w, h: descriptor.defaultSize.h },
-        breakpointOverrides: { medium: null, compact: null },
-        configuration: {},
-      };
-      const widgets = [...current.widgets, instance];
-      if (editing()) void dashboard.saveLayout({ ...current, widgets });
-      return { ...current, widgets };
-    });
-    setAddDrawerOpen(false);
+  function moveCard(id: string, delta: -1 | 1): void {
+    const order = [...layout().order];
+    const index = order.indexOf(id);
+    const target = index + delta;
+    if (index < 0 || target < 0 || target >= order.length) return;
+    [order[index], order[target]] = [order[target], order[index]];
+    persist({ ...layout(), order });
   }
 
-  function restoreHidden(): void {
-    const toRestore = hiddenWidgets();
-    if (toRestore.length === 0) return;
-    setLayout((current) => {
-      if (!current) return current;
-      const widgets = [...current.widgets, ...toRestore];
-      void dashboard.saveLayout({ ...current, widgets });
-      return { ...current, widgets };
-    });
-    setHiddenWidgets([]);
+  function restoreCard(id: string): void {
+    const current = layout();
+    if (!current.hidden.includes(id)) return;
+    persist({ order: [...current.order, id], hidden: current.hidden.filter((c) => c !== id) });
   }
 
   async function resetLayout(): Promise<void> {
@@ -124,207 +132,58 @@ export default function Home(): JSX.Element {
       confirmLabel: t("home.resetLayout.confirm"),
     });
     if (!allowed) return;
-    const res = await dashboard.resetLayout();
-    if (res.ok) {
-      setLayout(res.data);
-      setHiddenWidgets([]);
+    persist({ ...HERO_DEFAULTS, order: [...HERO_DEFAULTS.order], hidden: [] });
+  }
+
+  /** 插件卡片：id 前缀区分，避免与内置卡片冲突。 */
+  const pluginPrefix = "plugin:";
+
+  function addCard(id: string): void {
+    const current = layout();
+    if (current.order.includes(id)) {
+      setAddOpen(false);
+      return;
+    }
+    persist({ order: [...current.order, id], hidden: current.hidden.filter((c) => c !== id) });
+    setAddOpen(false);
+  }
+
+  function cardTitle(id: string): string {
+    if (id.startsWith(pluginPrefix)) {
+      const pluginId = id.slice(pluginPrefix.length);
+      return catalog().find((w) => w.pluginId === pluginId)?.displayName ?? pluginId;
+    }
+    switch (id as BuiltinCardId) {
+      case "server": return t("hero.server.title");
+      case "compare": return t("hero.compare.title");
+      case "announcements": return t("hero.ann.title");
+      case "instances": return t("instances.title");
+      case "versions": return t("home.allVersions");
+      case "downloads": return t("tasks.sectionDownloads");
+      case "games": return t("tasks.sectionGames");
     }
   }
 
-  return (
-    <div class="page">
-      <PageHeader
-        title={t("nav.home")}
-        actions={
-          <div class="btn-row">
-            <Show when={editing()}>
-              <RmButton size="sm" icon="plus" onClick={() => setAddDrawerOpen(true)}>
-                {t("home.addWidget")}
-              </RmButton>
-              <RmMenu
-                align="right"
-                items={[
-                  { label: t("home.restoreHidden", { n: hiddenWidgets().length }), onSelect: () => restoreHidden(), disabled: hiddenWidgets().length === 0 },
-                  { label: t("home.resetLayout.title"), danger: true, onSelect: () => void resetLayout() },
-                ]}
-              >
-                <RmIconButton icon="more-horizontal" label={t("common.more")} />
-              </RmMenu>
-            </Show>
-            <RmButton
-              size="sm"
-              icon={editing() ? "check" : "edit"}
-              variant={editing() ? "primary" : "secondary"}
-              onClick={() => {
-                if (editing() && layout()) void saveLayout(layout()!);
-                setEditing(!editing());
-              }}
-            >
-              {editing() ? t("home.doneEditing") : t("home.editLayout")}
-            </RmButton>
-          </div>
-        }
-      />
-
-      <div class="page-body">
-        <Show when={layoutError()} fallback={<Show when={!layout()}><RmSkeleton cards /></Show>}>
-          <RmEmptyState icon="grid" title={t("home.layoutError")} hint={layoutError()!} />
-        </Show>
-
-        <Show when={layout()}>
-          {(current) => (
-            <div
-              class="dashboard-grid"
-              style={{ "--grid-cols": String(current().grid.columns) }}
-            >
-              <For each={current().widgets}>
-                {(widget) => (
-                  <div
-                    class={`dash-widget${editing() ? " is-editing" : ""}${widget.enabled ? "" : " is-disabled-widget"}`}
-                    style={{
-                      "grid-column": `${widget.position.x + 1} / span ${Math.min(widget.size.w, 12)}`,
-                      "grid-row": `${widget.position.y + 1} / span ${widget.size.h}`,
-                    }}
-                  >
-                    <ErrorBoundary
-                      fallback={(err, reset) => (
-                        <div class="dash-widget-error">
-                          <RmEmptyState icon="alert" title={t("home.card.broken")} hint={String(err)} />
-                          <div class="btn-row">
-                            <RmButton size="sm" onClick={reset}>{t("common.retry")}</RmButton>
-                            <RmButton size="sm" variant="danger" onClick={() => hideWidget(widget)}>
-                              {t("home.card.hideBroken")}
-                            </RmButton>
-                          </div>
-                        </div>
-                      )}
-                    >
-                      {renderWidget(widget, editing(), catalog(), {
-                        cycleWidth: () => cycleWidth(widget),
-                        hide: () => hideWidget(widget),
-                      })}
-                    </ErrorBoundary>
-                  </div>
-                )}
-              </For>
-            </div>
-          )}
-        </Show>
-      </div>
-
-      <RmDialog
-        open={addDrawerOpen()}
-        title={t("home.addWidget")}
-        onClose={() => setAddDrawerOpen(false)}
-      >
-        <div class="add-widget-list">
-          <For each={catalog()}>
-            {(widget) => (
-              <button class="rm-row is-clickable" onClick={() => addWidget(widget.widgetId)}>
-                <div class="rm-row-main">
-                  <div class="rm-row-title">{widget.displayName}</div>
-                  <div class="rm-row-subtitle">
-                    {widget.pluginId} · {widget.defaultSize.w}×{widget.defaultSize.h}
-                  </div>
-                </div>
-              </button>
-            )}
-          </For>
-        </div>
-      </RmDialog>
-    </div>
-  );
-}
-
-
-
-function renderWidget(
-  widget: WidgetInstance,
-  editing: boolean,
-  catalog: WidgetDescriptor[],
-  controls: { cycleWidth: () => void; hide: () => void }
-): JSX.Element {
-  const descriptor = catalog.find(
-    (d) => d.pluginId === widget.pluginId && d.widgetId === widget.widgetId
-  );
-  const editBar = (
-    <div class="dash-edit-bar">
-      <span class="dash-edit-name">{descriptor?.displayName ?? widget.widgetId}</span>
-      <div class="btn-row">
-        <RmIconButton icon="edit" label={t("home.cycleWidth")} onClick={controls.cycleWidth} />
-        <RmIconButton icon="x" label={t("common.hide")} onClick={controls.hide} />
-      </div>
-    </div>
-  );
-  if (widget.pluginId !== "org.rmccc.core-ui") {
-    const uiUrl =
-      descriptor?.uiUrl ?? `rmcccplugin://${widget.pluginId}/ui/index.html?card=${widget.widgetId}`;
-    return (
-      <div class="dash-card dash-card-plugin">
-        {editing ? editBar : null}
-        <div class="dash-plugin-frame">
-          <PluginFrame pluginId={widget.pluginId} cardId={widget.widgetId} title={descriptor?.displayName ?? widget.widgetId} uiUrl={uiUrl} />
-        </div>
-      </div>
-    );
-  }
-  return (
-    <div class="dash-card">
-      {editing ? editBar : null}
-      <div class="dash-card-content">
-        <CoreWidget widgetId={widget.widgetId} size={widget.size} />
-      </div>
-    </div>
-  );
-}
-
-// ── Built-in widgets (org.rmccc.core-ui) ──
-
-function CoreWidget(props: { widgetId: string; size: GridSize }): JSX.Element {
-  return (
-    <Switch fallback={<div class="dash-unknown-widget">{props.widgetId}</div>}>
-      <Match when={props.widgetId === "instance-launcher"}>
-        <QuickLauncher compact={props.size.h <= 2} />
-      </Match>
-      <Match when={props.widgetId === "account-card"}>
-        <AccountCard />
-      </Match>
-      <Match when={props.widgetId === "version-browser"}>
-        <QuickVersions />
-      </Match>
-      <Match when={props.widgetId === "downloads-card"}>
-        <DownloadsCard />
-      </Match>
-    </Switch>
-  );
-}
-
-/** Five-state quick launch (ui-design 02 §3.1). */
-function QuickLauncher(props: { compact: boolean }): JSX.Element {
-  const navigate = useNavigate();
-  const profiles = createMemo(() => profilesStore.items() ?? []);
-  const session = () => authStore.session();
-  const selected = createMemo(() => profilesStore.selected() ?? null);
-
-  createEffect(() => {
-    // Default selection: most recently played.
-    if (!profilesStore.selectedId() && profiles().length > 0) {
-      const latest = [...profiles()].sort(
-        (a, b) => (b.last_played ?? "").localeCompare(a.last_played ?? "")
-      )[0];
-      if (latest) profilesStore.setSelectedId(latest.id);
-    }
+  const addableCards = createMemo(() => {
+    const current = layout();
+    const builtins = HERO_DEFAULTS.order
+      .filter((id) => !current.order.includes(id) || current.hidden.includes(id))
+      .map((id) => ({ id, name: cardTitle(id), subtitle: "RMCCC" }));
+    const plugins = catalog()
+      .filter((w) => w.pluginId !== "org.rmccc.core-ui")
+      .map((w) => ({ id: `${pluginPrefix}${w.pluginId}`, name: w.displayName, subtitle: w.pluginId }))
+      .filter((c) => !current.order.includes(c.id));
+    return [...builtins, ...plugins];
   });
-
-  const running = (id: string) => launchStore.isRunning(id);
-  const starting = (id: string) => launchStore.isStarting(id);
 
   async function launchCurrent(): Promise<void> {
     const profile = selected();
-    if (!profile) return;
+    if (!profile) {
+      navigate("/download#install");
+      return;
+    }
     if (!session()) {
-      // Not logged in: offer the offline path (02 §3.1) instead of blocking.
-      // window.prompt is unsupported in WKWebView — use the prompt dialog host.
+      // WKWebView 不支持 window.prompt — 统一走 prompt 对话框。
       const username = await promptText({
         title: t("accounts.offline.title"),
         label: t("home.offlinePrompt"),
@@ -344,128 +203,6 @@ function QuickLauncher(props: { compact: boolean }): JSX.Element {
     if (!result.ok) toast({ message: result.message ?? "", tone: "error" });
   }
 
-  const recent = createMemo(() =>
-    [...profiles()]
-      .sort((a, b) => (b.last_played ?? "").localeCompare(a.last_played ?? ""))
-      .slice(0, 3)
-  );
-
-  return (
-    <div class="quick-launch">
-      <Switch>
-        <Match when={profiles().length === 0}>
-          <div class="quick-launch-body is-guide">
-            <RmButton size="lg" variant="primary" icon="download" onClick={() => navigate("/download#install")}>
-              {t("home.noInstance.cta")}
-            </RmButton>
-            <p class="quick-launch-hint">{t("home.noInstance.hint")}</p>
-          </div>
-        </Match>
-        <Match when={running(selected()?.id ?? "")}>
-          <div class="quick-launch-body">
-            <RmButton size="lg" variant="danger" icon="square" onClick={() => void launchStore.kill(selected()!.id)}>
-              {t("home.stop")}
-            </RmButton>
-            <RmButton size="lg" icon="terminal" onClick={() => uiStore.openLogDrawer(selected()?.id ?? null)}>
-              {t("home.viewLog")}
-            </RmButton>
-            <RmButton size="lg" icon="sliders" onClick={() => navigate(`/instances/${selected()!.id}#settings`)}>
-              {t("home.instanceSettings")}
-            </RmButton>
-          </div>
-        </Match>
-        <Match when={true}>
-          <div class="quick-launch-body">
-            <div class="quick-launch-main">
-              <RmButton
-                size="lg"
-                variant="primary"
-                icon="play"
-                loading={starting(selected()?.id ?? "")}
-                onClick={() => void launchCurrent()}
-              >
-                {starting(selected()?.id ?? "") ? t("home.preparing") : t("home.launch")}
-              </RmButton>
-              <Show when={selected()}>
-                {(profile) => (
-                  <RmIconButton
-                    icon="sliders"
-                    label={t("home.instanceSettings")}
-                    title={t("home.instanceSettings")}
-                    onClick={() => {
-                      // 不读 Show 访问器（detail 变化后会抛 stale read），走 store 取当前选择。
-                      const id = profilesStore.selectedId() ?? profile().id;
-                      if (id) navigate(`/instances/${id}#settings`);
-                    }}
-                  />
-                )}
-              </Show>
-              <RmMenu
-                align="right"
-                items={[
-                  ...profiles()
-                    .sort((a, b) => (b.last_played ?? "").localeCompare(a.last_played ?? ""))
-                    .map((p) => ({
-                      label: `${p.name} · ${p.game_version}`,
-                      onSelect: () => profilesStore.setSelectedId(p.id),
-                    })),
-                  ...(selected()
-                    ? [{ label: t("home.instanceSettings"), icon: "sliders" as const, onSelect: () => navigate(`/instances/${selected()!.id}#settings`) }]
-                    : []),
-                ]}
-              >
-                <button class="rm-btn rm-btn-secondary rm-btn-md">
-                  {selected()?.name ?? t("home.pickInstance")}
-                  <IconChevronDown />
-                </button>
-              </RmMenu>
-            </div>
-            <Show when={!props.compact}>
-              <div class="quick-launch-meta">
-                {selected()?.game_version}
-                <Show when={selected()?.mod_loader}>
-                  {" · "}
-                  {selected()!.mod_loader!.loader_type}
-                  {" "}
-                  {selected()!.mod_loader!.loader_version}
-                </Show>
-              </div>
-              <div class="quick-launch-recent">
-                <For each={recent()}>
-                  {(profile) => (
-                    <button
-                      class="quick-launch-recent-row"
-                      onClick={() => profilesStore.setSelectedId(profile.id)}
-                    >
-                      <span class="quick-launch-recent-name">{profile.name}</span>
-                      <span class="quick-launch-recent-time">
-                        {profile.last_played
-                          ? relativeTime(profile.last_played)
-                          : t("instances.neverPlayed")}
-                      </span>
-                    </button>
-                  )}
-                </For>
-              </div>
-            </Show>
-          </div>
-        </Match>
-      </Switch>
-    </div>
-  );
-}
-
-function IconChevronDown(): JSX.Element {
-  return <Icon name="chevron-down" size={14} />;
-}
-
-function AccountCard(): JSX.Element {
-  const navigate = useNavigate();
-  const session = () => authStore.session();
-  // Per-account last launch (launches are recorded against the active account).
-  const lastPlayedForAccount = () =>
-    session() ? authStore.lastPlayedFor(session()!.account_id) : null;
-
   async function switchAccount(accountId: string): Promise<void> {
     const res = await authStore.switchAccount(accountId);
     toast({
@@ -474,87 +211,392 @@ function AccountCard(): JSX.Element {
     });
   }
 
+  const accountMenuItems = () => [
+    ...authStore
+      .accounts()
+      .filter((a) => a.account_id !== session()?.account_id)
+      .map((a) => ({
+        label: a.profile_name,
+        icon: "person" as const,
+        onSelect: () => void switchAccount(a.account_id),
+      })),
+    { label: t("accounts.manage"), icon: "settings" as const, onSelect: () => navigate("/accounts") },
+    ...(session()
+      ? [{ label: t("accounts.logout"), icon: "log-out" as const, danger: true, onSelect: () => void authStore.logout() }]
+      : []),
+  ];
+
   return (
-    <div class="account-card">
-      <Show
-        when={session()}
-        fallback={
-          <div class="account-card-empty">
-            <p>{t("home.account.signedOut")}</p>
-            <RmButton size="sm" icon="plus" onClick={() => navigate("/accounts")}>
-              {t("home.account.add")}
-            </RmButton>
-          </div>
-        }
-      >
-        {(current) => (
-          <div class="account-card-body">
-            {/* Mojang 正版方形头像（session server 皮肤裁剪，加载失败回退首字母） */}
-            <Show
-              when={current().provider === "microsoft"}
-              fallback={<AccountAvatar name={current().username} provider={current().provider} />}
-            >
-              <AccountAvatar uuid={current().uuid} name={current().username} provider={current().provider} />
-            </Show>
-            <div class="account-card-info">
-              <div class="account-card-name">{current().username}</div>
-              <RmTag tone="accent">{current().provider}</RmTag>
-              <div class="account-card-meta">
-                {t("home.account.lastPlayed", {
-                  time: lastPlayedForAccount() ? relativeTime(lastPlayedForAccount()) : t("instances.neverPlayed"),
-                })}
-              </div>
-            </div>
-            <div class="account-card-actions">
-              <Show when={current().provider === "microsoft"}>
-                <RmIconButton
-                  icon="file"
-                  label={t("home.account.skin")}
-                  title={t("home.account.skin")}
-                  onClick={() => void external.openUrl("https://www.minecraft.net/zh-hans/msaprofile/mygames/editskin")}
-                />
+    <div class="hero">
+      {/* 流动背景光斑（纯 CSS transform 动画，主题色；reduced-motion 下静止） */}
+      <div class="hero-flow" aria-hidden="true">
+        <i class="hero-flow-blob is-a" />
+        <i class="hero-flow-blob is-b" />
+        <i class="hero-flow-blob is-c" />
+      </div>
+
+      {/* 编辑模式工具条 */}
+      <div class="hero-toolbar">
+        <Show when={editing()}>
+          <RmButton size="sm" icon="plus" onClick={() => setAddOpen(true)}>
+            {t("home.addWidget")}
+          </RmButton>
+          <RmMenu
+            align="right"
+            items={[
+              {
+                label: t("home.restoreHidden", { n: layout().hidden.length }),
+                disabled: layout().hidden.length === 0,
+                onSelect: () => restoreCard(layout().hidden[0]),
+              },
+              { label: t("home.resetLayout.title"), danger: true, onSelect: () => void resetLayout() },
+            ]}
+          >
+            <RmIconButton icon="more-horizontal" label={t("common.more")} />
+          </RmMenu>
+        </Show>
+        <RmButton
+          size="sm"
+          icon={editing() ? "check" : "edit"}
+          variant={editing() ? "primary" : "secondary"}
+          onClick={() => setEditing(!editing())}
+        >
+          {editing() ? t("home.doneEditing") : t("home.editLayout")}
+        </RmButton>
+      </div>
+
+      {/* 左侧：可编辑卡片栈 */}
+      <div class="hero-stack">
+        <For each={layout().order}>
+          {(id) => (
+            <section class="hero-card hero-module" data-card={id}>
+              <Show when={editing()}>
+                <div class="hero-module-bar">
+                  <span class="hero-module-name">{cardTitle(id)}</span>
+                  <div class="btn-row">
+                    <RmIconButton icon="chevron-up" label={t("common.moveUp")} onClick={() => moveCard(id, -1)} />
+                    <RmIconButton icon="chevron-down" label={t("common.moveDown")} onClick={() => moveCard(id, 1)} />
+                    <RmIconButton icon="x" label={t("common.hide")} onClick={() => hideCard(id)} />
+                  </div>
+                </div>
               </Show>
-              <RmMenu
-                align="right"
-                items={[
-                  ...authStore
-                    .accounts()
-                    .filter((a) => a.account_id !== current().account_id)
-                    .map((a) => ({
-                      label: a.profile_name,
-                      icon: "person" as const,
-                      onSelect: () => void switchAccount(a.account_id),
-                    })),
-                  ...(authStore.accounts().length > 1
-                    ? []
-                    : [{ label: t("accounts.add.title"), icon: "plus" as const, onSelect: () => navigate("/accounts") }]),
-                  { label: t("accounts.manage"), icon: "settings" as const, onSelect: () => navigate("/accounts") },
-                  { label: t("accounts.logout"), icon: "log-out" as const, danger: true, onSelect: () => void authStore.logout() },
-                ]}
-              >
-                <RmButton size="sm" icon="person">
-                  {t("home.account.switch")}
-                </RmButton>
-              </RmMenu>
+              <div class="hero-module-body">
+                <Switch fallback={<PluginCard pluginId={id.slice(pluginPrefix.length)} />}>
+                  <Match when={id === "server"}><ServerCard /></Match>
+                  <Match when={id === "compare"}><CompareCard /></Match>
+                  <Match when={id === "announcements"}><AnnouncementsCard /></Match>
+                  <Match when={id === "instances"}><InstancesCard /></Match>
+                  <Match when={id === "versions"}><VersionsCard /></Match>
+                  <Match when={id === "downloads"}><DownloadsCard /></Match>
+                  <Match when={id === "games"}><GamesCard /></Match>
+                </Switch>
+              </div>
+            </section>
+          )}
+        </For>
+      </div>
+
+      {/* 右下：账号卡 + 启动卡（各自独立的卡片） */}
+      <div class="hero-corner">
+        <Show
+          when={session()}
+          fallback={
+            <button class="hero-card hero-module" onClick={() => navigate("/accounts")}>
+              <span class="hero-card-icon"><Icon name="person" size={18} /></span>
+              <span class="hero-card-main">
+                <span class="hero-card-title">{t("home.account.signedOut")}</span>
+                <span class="hero-card-subtitle">{t("home.account.add")}</span>
+              </span>
+              <span class="hero-card-plus">+</span>
+            </button>
+          }
+        >
+          {(current) => (
+            <RmMenu align="right" side="up" items={accountMenuItems()}>
+              <button class="hero-card hero-module hero-account">
+                <AccountAvatar uuid={current().uuid} name={current().username} provider={current().provider} />
+                <span class="hero-card-main">
+                  <span class="hero-card-title">{current().username}</span>
+                  <span class="hero-account-meta">
+                    <RmTag tone="accent">{current().provider}</RmTag>
+                    <span class="hero-account-meta-item">
+                      {t("home.account.lastPlayed", {
+                        time: authStore.lastPlayedFor(current().account_id)
+                          ? relativeTime(authStore.lastPlayedFor(current().account_id))
+                          : t("instances.neverPlayed"),
+                      })}
+                    </span>
+                  </span>
+                  <span class="hero-account-meta">
+                    <span class="hero-account-meta-item">
+                      {t("hero.account.instances", { n: (profilesStore.items() ?? []).length })}
+                    </span>
+                    <span class="hero-account-meta-item">
+                      {t("hero.account.id", { id: current().account_id.replace(/^account:/, "").slice(0, 8) })}
+                    </span>
+                  </span>
+                </span>
+                <span class="hero-card-plus"><Icon name="chevron-down" size={14} /></span>
+              </button>
+            </RmMenu>
+          )}
+        </Show>
+
+        <div class="hero-card hero-module hero-launch">
+          <div class="hero-launch-main">
+            <RmButton
+              variant="primary"
+              icon="play"
+              size="lg"
+              loading={launchStore.isStarting(selected()?.id ?? "")}
+              onClick={() => void launchCurrent()}
+            >
+              {t("home.launch")}
+            </RmButton>
+            <RmMenu
+              align="right"
+              side="up"
+              items={[
+                ...(profilesStore.items() ?? [])
+                  .sort((a, b) => (b.last_played ?? "").localeCompare(a.last_played ?? ""))
+                  .map((p) => ({
+                    label: `${p.name} · ${p.game_version}`,
+                    icon: "gamepad" as const,
+                    onSelect: () => profilesStore.setSelectedId(p.id),
+                  })),
+                { label: t("download.wizard.bindLocal"), icon: "download" as const, onSelect: () => navigate("/download#install") },
+                ...(selected()
+                  ? [{ label: t("home.instanceSettings"), icon: "sliders" as const, onSelect: () => navigate(`/instances/${selected()!.id}#settings`) }]
+                  : []),
+              ]}
+            >
+              <button class="hero-launch-picker">
+                <span class="hero-launch-picker-main">
+                  {selected()?.name ?? t("home.pickInstance")}
+                  <Show when={selected()}>
+                    {(p) => (
+                      <span class="hero-launch-picker-sub">
+                        {p().game_version}
+                        <Show when={p().mod_loader}> · {p().mod_loader!.loader_type}</Show>
+                      </span>
+                    )}
+                  </Show>
+                </span>
+                <Icon name="chevron-down" size={14} />
+              </button>
+            </RmMenu>
+          </div>
+          <Show when={launchStore.isRunning(selected()?.id ?? "")}>
+            <div class="hero-launch-running">
+              <span class="dot-running" /> {t("instances.running")}
+              <RmButton size="sm" variant="ghost" icon="terminal" onClick={() => uiStore.openLogDrawer(selected()?.id ?? null)}>
+                {t("home.viewLog")}
+              </RmButton>
+            </div>
+          </Show>
+        </div>
+      </div>
+
+      {/* 添加卡片对话框 */}
+      <RmDialog open={addOpen()} title={t("home.addWidget")} onClose={() => setAddOpen(false)}>
+        <div class="add-widget-list">
+          <Show when={addableCards().length > 0} fallback={<div class="muted-line">{t("modStore.empty")}</div>}>
+            <For each={addableCards()}>
+              {(card) => (
+                <button class="rm-row is-clickable" onClick={() => addCard(card.id)}>
+                  <div class="rm-row-main">
+                    <div class="rm-row-title">{card.name}</div>
+                    <div class="rm-row-subtitle">{card.subtitle}</div>
+                  </div>
+                </button>
+              )}
+            </For>
+          </Show>
+        </div>
+      </RmDialog>
+    </div>
+  );
+}
+
+// ── 内置卡片内容 ──
+
+// ── 服务器信息卡（演示数据，后端未接入）──
+
+function ServerCard(): JSX.Element {
+  const [addr, setAddr] = createSignal("play.example.net");
+  const [state, setState] = createSignal<"idle" | "loading" | "online" | "offline">("idle");
+  // 模拟查询结果（接后端后由 ping 响应填充）。
+  const mock = {
+    motd: "欢迎来到 Example 生存服务器！",
+    players: { online: 42, max: 100 },
+    latencyMs: 23,
+    serverVersion: "26.2 · Fabric 0.20.1",
+  };
+
+  function connect(): void {
+    if (!addr().trim() || state() === "loading") return;
+    setState("loading");
+    setTimeout(() => {
+      // 演示：地址含 "offline" 时模拟连不上。
+      setState(addr().includes("offline") ? "offline" : "online");
+    }, 800);
+  }
+
+  return (
+    <div class="hero-server">
+      <div class="btn-row">
+        <RmInput
+          value={addr()}
+          onInput={setAddr}
+          placeholder={t("hero.server.address")}
+          onEnter={() => void connect()}
+        />
+        <RmButton size="sm" variant="primary" icon="search" loading={state() === "loading"} onClick={() => void connect()}>
+          {t("hero.server.connect")}
+        </RmButton>
+      </div>
+      <Switch
+        fallback={<div class="hero-empty">{t("hero.server.idle")}</div>}
+      >
+        <Match when={state() === "loading"}>
+          <div class="hero-empty">{t("hero.server.probing")}</div>
+        </Match>
+        <Match when={state() === "offline"}>
+          <div class="hero-empty is-error">{t("hero.server.offline")}</div>
+        </Match>
+        <Match when={state() === "online"}>
+          <div class="hero-server-info">
+            <div class="hero-server-motd">{mock.motd}</div>
+            <div class="hero-server-stats">
+              <span class="hero-server-stat"><Icon name="person" size={14} /> {t("hero.server.players", { online: mock.players.online, max: mock.players.max })}</span>
+              <span class="hero-server-stat"><Icon name="check" size={14} /> {t("hero.server.latency", { ms: mock.latencyMs })}</span>
+              <span class="hero-server-stat"><Icon name="package" size={14} /> {mock.serverVersion}</span>
             </div>
           </div>
-        )}
+        </Match>
+      </Switch>
+    </div>
+  );
+}
+
+// ── 客户端 / 服务端版本比对卡（演示数据）──
+
+function CompareCard(): JSX.Element {
+  const clientVersion = () => profilesStore.selected()?.game_version ?? "26.3";
+  // 模拟：服务端版本固定 26.2，客户端更高则无需更新。
+  const serverVersion = "26.2";
+  const needsUpdate = createMemo(() => clientVersion() < serverVersion);
+  const [asked, setAsked] = createSignal(false);
+
+  return (
+    <div class="hero-compare">
+      <div class="hero-compare-row">
+        <span class="hero-compare-label">{t("hero.compare.client")}</span>
+        <span class="hero-compare-value">{clientVersion()}</span>
+      </div>
+      <div class="hero-compare-row">
+        <span class="hero-compare-label">{t("hero.compare.server")}</span>
+        <span class="hero-compare-value">{serverVersion}</span>
+      </div>
+      <div class="hero-compare-row">
+        <span class="hero-compare-label">{t("hero.compare.status")}</span>
+        <Show
+          when={needsUpdate()}
+          fallback={<RmTag tone="success">{t("hero.compare.upToDate")}</RmTag>}
+        >
+          <RmTag tone="warning">{t("hero.compare.needsUpdate")}</RmTag>
+        </Show>
+      </div>
+      <Show when={needsUpdate()}>
+        <div class="btn-row hero-compare-actions">
+          <RmButton
+            size="sm"
+            variant="primary"
+            icon="download"
+            onClick={() => {
+              setAsked(true);
+              toast({ message: t("hero.compare.updateQueued"), tone: "info" });
+            }}
+          >
+            {t("hero.compare.update")}
+          </RmButton>
+          <RmButton size="sm" variant="ghost" onClick={() => setAsked(false)}>
+            {t("common.cancel")}
+          </RmButton>
+        </div>
+      </Show>
+      <Show when={asked()}>
+        <div class="muted-line">{t("hero.compare.queuedNote")}</div>
       </Show>
     </div>
   );
 }
 
-/** Quick-version chips (ui-design 02 §3.3) — full list lives in the wizard. */
-function QuickVersions(): JSX.Element {
+// ── 服务器更新公告卡（演示数据）──
+
+const MOCK_ANNOUNCEMENTS = [
+  { date: "2026-10-24", tag: "update", text: "服务器已升级到 26.2：新增区块加载优化，建议同步更新客户端。" },
+  { date: "2026-10-18", tag: "event", text: "周末建筑比赛报名开启，主题「四季花园」，奖金池 3000 金币。" },
+  { date: "2026-10-10", tag: "notice", text: "10 月 12 日 02:00-04:00 例行停机维护，请提前下线。" },
+];
+
+function AnnouncementsCard(): JSX.Element {
+  return (
+    <div class="hero-ann-list">
+      <For each={MOCK_ANNOUNCEMENTS}>
+        {(item) => (
+          <div class="hero-ann-item">
+            <div class="hero-ann-head">
+              <RmTag tone={item.tag === "update" ? "accent" : item.tag === "event" ? "success" : "neutral"}>
+                {t(`hero.ann.tag.${item.tag}` as TranslationKey)}
+              </RmTag>
+              <span class="hero-ann-date">{item.date}</span>
+            </div>
+            <div class="hero-ann-text">{item.text}</div>
+          </div>
+        )}
+      </For>
+    </div>
+  );
+}
+
+function InstancesCard(): JSX.Element {
+  return (
+    <div class="hero-list">
+      <For each={profilesStore.items() ?? []}>
+        {(profile) => (
+          <button
+            class={`hero-row${(profilesStore.selected()?.id ?? null) === profile.id ? " is-selected" : ""}`}
+            onClick={() => profilesStore.setSelectedId(profile.id)}
+          >
+            <span class="hero-row-icon"><Icon name="gamepad" size={16} /></span>
+            <span class="hero-row-main">
+              <span class="hero-row-title">{profile.name}</span>
+              <span class="hero-row-subtitle">
+                {profile.game_version}
+                <Show when={profile.mod_loader}> · {profile.mod_loader!.loader_type}</Show>
+              </span>
+            </span>
+            <span class="hero-row-meta">
+              {profile.last_played ? relativeTime(profile.last_played) : t("instances.neverPlayed")}
+            </span>
+          </button>
+        )}
+      </For>
+      <Show when={(profilesStore.items() ?? []).length === 0}>
+        <div class="hero-empty">{t("instances.empty.title")}</div>
+      </Show>
+    </div>
+  );
+}
+
+function VersionsCard(): JSX.Element {
   const navigate = useNavigate();
   const [versions_, setVersions_] = createSignal<VersionInfo[] | null>(null);
-  const [pasted, setPasted] = createSignal("");
-
   onMount(async () => {
     const res = await versions.list();
     if (res.ok) setVersions_(res.data.filter((v) => v.release_type === "release"));
   });
-
   const chips = createMemo(() => {
     const list = versions_() ?? [];
     const seen = new Set<string>();
@@ -564,82 +606,111 @@ function QuickVersions(): JSX.Element {
       if (seen.has(major)) continue;
       seen.add(major);
       out.push(version);
-      if (out.length >= 4) break;
+      if (out.length >= 8) break;
     }
     return out;
   });
-
   return (
-    <div class="quick-versions">
-      <div class="quick-versions-chips">
-        <For each={chips()}>
-          {(version) => (
-            <button
-              class="rm-chip"
-              onClick={() => navigate(`/download#install?version=${version.id}`)}
-            >
-              {version.id}
-            </button>
-          )}
-        </For>
-        <button class="rm-chip is-accent" onClick={() => navigate("/download#install")}>
-          {t("home.allVersions")}
-        </button>
-      </div>
-      <div class="quick-versions-paste">
-        <RmInput
-          value={pasted()}
-          onInput={setPasted}
-          placeholder={t("home.pasteVersion")}
-          onEnter={() => pasted() && navigate(`/download#install?version=${pasted()}`)}
-        />
-      </div>
+    <div class="hero-list">
+      <For each={chips()}>
+        {(version) => (
+          <button class="hero-row" onClick={() => navigate(`/download#install?version=${version.id}`)}>
+            <span class="hero-row-icon"><Icon name="package" size={16} /></span>
+            <span class="hero-row-main">
+              <span class="hero-row-title">{version.id}</span>
+              <span class="hero-row-subtitle">{formatDate(version.release_time)}</span>
+            </span>
+            <RmTag tone="accent">{t("common.install")}</RmTag>
+          </button>
+        )}
+      </For>
+      <button class="hero-row" onClick={() => navigate("/download#install")}>
+        <span class="hero-row-icon"><Icon name="download" size={16} /></span>
+        <span class="hero-row-main">
+          <span class="hero-row-title">{t("home.allVersions")}</span>
+        </span>
+      </button>
     </div>
   );
 }
 
-/** Downloads card (ui-design 02 §3.4). */
 function DownloadsCard(): JSX.Element {
-  const navigate = useNavigate();
   const batches = createMemo(() => [...downloadsStore.batches().values()]);
-
   return (
-    <div class="downloads-card">
-      <Show
-        when={batches().length > 0}
-        fallback={
-          <div class="downloads-card-empty">
-            <span>{t("home.downloads.empty")}</span>
-            <button class="rm-chip is-accent" onClick={() => navigate("/download#install")}>
-              {t("home.downloads.cta")}
-            </button>
+    <div class="hero-list">
+      <For each={batches()}>
+        {(batch) => (
+          <div class="hero-row is-static">
+            <span class="hero-row-main">
+              <span class="hero-row-title">{batch.label || batch.version}</span>
+              <span class="hero-row-subtitle">
+                {groupDigits(batch.completedFiles)}/{groupDigits(batch.totalFiles)} ·{" "}
+                {formatBytes(batch.downloadedBytes)}/{formatBytes(batch.totalBytes)}
+                <Show when={batch.speed > 0}> · {formatBytes(batch.speed)}/s</Show>
+              </span>
+            </span>
+            <RmProgress
+              value={batch.totalBytes > 0 ? (batch.downloadedBytes / batch.totalBytes) * 100 : 0}
+              determinate={batch.totalBytes > 0}
+            />
           </div>
-        }
-      >
-        <For each={batches()}>
-          {(batch) => {
-            const percent = () =>
-              batch.totalBytes > 0 ? (batch.downloadedBytes / batch.totalBytes) * 100 : 0;
-            return (
-              <div class="downloads-card-row">
-                <div class="downloads-card-info">
-                  <div class="downloads-card-title">{batch.label || batch.version}</div>
-                  <div class="downloads-card-meta">
-                    {groupDigits(batch.completedFiles)}/{groupDigits(batch.totalFiles)} ·{" "}
-                    {formatBytes(batch.downloadedBytes)}/{formatBytes(batch.totalBytes)}
-                  </div>
-                </div>
-                <RmProgress value={percent()} />
-                <RmIconButton
-                  icon="x"
-                  label={t("tasks.download.cancel")}
-                  onClick={() => void downloadsApi.cancel(batch.batchId)}
-                />
-              </div>
-            );
-          }}
-        </For>
+        )}
+      </For>
+      <Show when={batches().length === 0}>
+        <div class="hero-empty">{t("home.downloads.empty")}</div>
       </Show>
+    </div>
+  );
+}
+
+function GamesCard(): JSX.Element {
+  const navigate = useNavigate();
+  return (
+    <div class="hero-list">
+      <For each={[...launchStore.running().values()]}>
+        {(game) => (
+          <div class="hero-row is-static">
+            <span class="hero-row-icon"><span class="dot-running" /></span>
+            <span class="hero-row-main">
+              <span class="hero-row-title">
+                {profilesStore.items()?.find((p) => p.id === game.profileId)?.name ?? game.profileId}
+              </span>
+              <span class="hero-row-subtitle">{t("instances.running")}</span>
+            </span>
+            <RmIconButton icon="terminal" label={t("home.viewLog")} onClick={() => uiStore.openLogDrawer(game.profileId)} />
+            <RmIconButton icon="square" label={t("common.stop")} danger onClick={() => void launchStore.kill(game.profileId)} />
+          </div>
+        )}
+      </For>
+      <Show when={launchStore.running().size === 0}>
+        <div class="hero-empty">{t("tasks.empty")}</div>
+      </Show>
+      <Show when={launchStore.running().size > 0}>
+        <button class="hero-row" onClick={() => navigate("/instances")}>
+          <span class="hero-row-icon"><Icon name="gamepad" size={16} /></span>
+          <span class="hero-row-main">
+            <span class="hero-row-title">{t("instances.title")}</span>
+          </span>
+        </button>
+      </Show>
+    </div>
+  );
+}
+
+function PluginCard(props: { pluginId: string }): JSX.Element {
+  const descriptor = createMemo(() =>
+    catalog().find((w) => w.pluginId === props.pluginId)
+  );
+  const uiUrl = () =>
+    descriptor()?.uiUrl ?? `rmcccplugin://${props.pluginId}/ui/index.html`;
+  return (
+    <div class="hero-plugin-frame">
+      <PluginFrame
+        pluginId={props.pluginId}
+        cardId="hero"
+        title={descriptor()?.displayName ?? props.pluginId}
+        uiUrl={uiUrl()}
+      />
     </div>
   );
 }

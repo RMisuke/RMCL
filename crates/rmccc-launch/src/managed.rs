@@ -120,14 +120,18 @@ impl ManagedProcess {
             tokio::spawn(read_lines(stderr, lines, max_lines, true, listeners))
         });
 
-        // Exit waiter: wait for the process, then join the pumps.
+        // Exit waiter（HMCL ExitWaiter）。进程结束后先给日志泵一段**有界**时间
+        // 收尾（保证"最后的日志行先于退出事件"），再通知 on_exit；泵依赖管道
+        // EOF，若被仍存活的后代进程占住，2s 超时后放弃等待——绝不能让退出
+        // 事件被无限阻塞（曾导致"游戏已退出但界面仍显示运行中"）。
         let exit_status = child.wait().await;
 
+        const PUMP_JOIN_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(2);
         if let Some(h) = stdout_handle {
-            let _ = h.await;
+            let _ = tokio::time::timeout(PUMP_JOIN_TIMEOUT, h).await;
         }
         if let Some(h) = stderr_handle {
-            let _ = h.await;
+            let _ = tokio::time::timeout(PUMP_JOIN_TIMEOUT, h).await;
         }
 
         // Signal that the process has fully exited.

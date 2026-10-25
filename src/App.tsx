@@ -1,26 +1,21 @@
 /**
- * Application shell (ui-design 00 §3): TitleBar + Rail navigation + content
- * area + global overlays (task center, log drawer, toasts, confirm host).
+ * Application shell (ui/home-hero-dock 试验分支): TitleBar（含中央 Dock 导航）
+ * + content area + global overlays (task center, log drawer, launch bubble,
+ * toasts, confirm host). 左侧 Rail 已移除，导航收进标题栏 Dock。
  *
  * The window is borderless/hidden at creation; this shell owns the reveal
  * handshake (unchanged from the previous design).
  */
-import { ParentComponent, onMount, Show, For } from "solid-js";
-import { useLocation, useNavigate } from "@solidjs/router";
+import { ParentComponent, onMount } from "solid-js";
 import { availableMonitors, getCurrentWindow } from "@tauri-apps/api/window";
 import TitleBar from "./components/TitleBar";
 import { ToastContainer } from "./components/Toast";
-import { TaskCenterPanel, TaskIndicator } from "./components/TaskCenter";
+import { TaskCenterPanel } from "./components/TaskCenter";
 import { LogDrawer } from "./components/LogDrawer";
 import { LaunchBubble } from "./components/LaunchBubble";
 import { RmConfirmHost, RmPromptHost } from "./components/rm/overlays";
-import { Icon, type IconName } from "./components/icons";
 import { initStores } from "./stores/init";
-import { launchStore } from "./stores/launch";
-import { downloadsStore } from "./stores/downloads";
-import { uiStore } from "./stores/ui";
-import { initI18n, t } from "./i18n";
-import type { TranslationKey } from "./i18n/locales/messages";
+import { initI18n } from "./i18n";
 import { initTheme } from "./theme";
 import { reportFrontendMessage } from "./ipc/api";
 
@@ -47,25 +42,7 @@ async function ensureReachable(win: AppWindow): Promise<void> {
   if (!reachable) await win.center();
 }
 
-interface RailItem {
-  href: string;
-  icon: IconName;
-  label: TranslationKey;
-}
-
-const RAIL_ITEMS: RailItem[] = [
-  { href: "/", icon: "home", label: "nav.home" },
-  { href: "/instances", icon: "gamepad", label: "nav.instances" },
-  { href: "/download", icon: "download", label: "nav.download" },
-  { href: "/accounts", icon: "person", label: "nav.accounts" },
-  { href: "/plugins", icon: "extension", label: "nav.plugins" },
-  { href: "/settings", icon: "settings", label: "nav.settings" },
-];
-
 const App: ParentComponent = (props) => {
-  const location = useLocation();
-  const navigate = useNavigate();
-
   onMount(async () => {
     try {
       const win = getCurrentWindow();
@@ -81,51 +58,11 @@ const App: ParentComponent = (props) => {
     }
   });
 
-  const isActive = (href: string): boolean => {
-    if (href === "/") return location.pathname === "/";
-    return location.pathname === href || location.pathname.startsWith(`${href}/`);
-  };
-
-  const runningCount = () => launchStore.running().size;
-  const downloadCount = () => downloadsStore.batches().size;
-
   return (
     <div class="app-root">
       <TitleBar />
       <div class="app-body">
-        <nav class={`rail${uiStore.railCollapsed() ? " is-collapsed" : ""}`}>
-          <For each={RAIL_ITEMS}>
-            {(item) => (
-              <button
-                class={`rail-item${isActive(item.href) ? " is-active" : ""}`}
-                onClick={() => navigate(item.href)}
-                title={t(item.label)}
-                aria-label={t(item.label)}
-              >
-                <Icon name={item.icon} size={20} />
-                <span class="rail-item-label">{t(item.label)}</span>
-                <Show when={item.href === "/instances" && runningCount() > 0}>
-                  <span class="rail-badge">{runningCount()}</span>
-                </Show>
-                <Show when={item.href === "/download" && downloadCount() > 0}>
-                  <span class="rail-badge">{downloadCount()}</span>
-                </Show>
-              </button>
-            )}
-          </For>
-          <div class="rail-footer">
-            <TaskIndicator />
-            <button
-              class="rail-item rail-collapse"
-              onClick={() => uiStore.toggleRail()}
-              aria-label={t("nav.collapse")}
-              title={t("nav.collapse")}
-            >
-              <Icon name="chevron-left" size={18} />
-              <span class="rail-item-label">{t("nav.collapse")}</span>
-            </button>
-          </div>
-        </nav>
+        {/* 导航已上移到标题栏中央 Dock，左侧不再有 Rail */}
         <main class="app-content">{props.children}</main>
       </div>
       <TaskCenterPanel />

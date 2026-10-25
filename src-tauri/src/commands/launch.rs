@@ -129,14 +129,21 @@ pub async fn launch_kill(
     state: tauri::State<'_, AppState>,
     profile_id: String,
 ) -> Result<(), IpcError> {
-    if let Some(pid) = state.running_games.get(&profile_id) {
-        let pid = *pid;
+    // 注意：dashmap 的 get() 读守卫绝不能活到 remove() —— 同分片写锁会被
+    // 自己的读守卫挡住（自死锁），命令会永久挂起、表项删不掉（曾导致
+    // "游戏已退出但界面仍显示运行中"）。先拷贝 pid 让守卫立即释放。
+    let pid = state.running_games.get(&profile_id).map(|p| *p);
+    if let Some(pid) = pid {
         tracing::info!(profile_id = %profile_id, pid = pid, "Killing game process");
 
         // 终止方式由平台后端决定（Unix 进程组 SIGKILL；Windows 待 Job Object）。
         // 本层不再出现 `#[cfg(unix)]` / `taskkill`（指南 §5.7，P2-17）。
         let core = state.core.read().await;
-        core.platform.process.terminate_tree(pid)?;
+        if let Err(e) = core.platform.process.terminate_tree(pid) {
+            // 终止失败也不能挂住表项：进程可能已自行退出（ESRCH 已按成功处理），
+            // 其余错误记日志后仍移除，交给前端 launch_status 对账兜底。
+            tracing::warn!(profile_id = %profile_id, pid = pid, error = ?e, "terminate_tree failed; removing entry anyway");
+        }
         state.running_games.remove(&profile_id);
     }
     Ok(())

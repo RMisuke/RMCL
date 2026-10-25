@@ -161,6 +161,11 @@ pub struct AppConfig {
     /// If None, defaults to `{data_dir}/instances`.
     #[serde(default)]
     pub game_root_dir: Option<PathBuf>,
+    /// Additional game roots whose `versions/` are only *browsed* in the
+    /// instance list (read-only discovery, like HMCL's extra game dirs).
+    #[serde(default)]
+    #[ts(type = "Array<string>")]
+    pub extra_game_roots: Vec<PathBuf>,
     /// Default Java path (None = auto-detect).
     #[serde(default)]
     pub default_java_path: Option<String>,
@@ -252,6 +257,7 @@ impl Default for AppConfig {
             schema: launcher_settings_schema(),
             data_dir: None,
             game_root_dir: None,
+            extra_game_roots: Vec::new(),
             default_java_path: None,
             default_min_memory_mb: 256,
             default_max_memory_mb: 4096,

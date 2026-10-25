@@ -426,7 +426,7 @@ pub async fn call(app: &tauri::AppHandle, name: &str, args: Value) -> Result<Val
             }
         }
         "instances.list" => {
-            let list = commands::instance::instance_list(state(app)).await?;
+            let list = commands::instance::instance_list(state(app), None).await?;
             Ok(serde_json::to_value(list)?)
         }
         "versions.available" => {

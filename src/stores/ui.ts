@@ -52,7 +52,7 @@ export const uiStore = createRoot(() => {
     setToasts((list) => [...list.slice(-4), spec]);
     setTimeout(() => {
       setToasts((list) => list.filter((item) => item.id !== spec.id));
-    }, 4000);
+    }, 5000);
   }
 
   function dismissToast(id: number): void {

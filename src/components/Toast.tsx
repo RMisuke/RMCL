@@ -1,6 +1,10 @@
 /**
- * Toast layer (ui-design 10 \u00a75): bottom-right stack, 4s auto-dismiss,
+ * Toast layer (ui-design 10 §5): bottom-right stack, auto-dismiss,
  * optional follow-up action; `aria-live="polite"`.
+ *
+ * 倒计时指示为气泡底部的横向进度条（5s 从左到右填满，与自动关闭同步）；
+ * 动效开关关闭时静止显示满条。曾用 SVG 包边环——WKWebView 下描边贴边
+ * 被圆角/裁剪切得不完整，弃用。
  */
 import type { JSX } from "solid-js";
 import { For, Show } from "solid-js";
@@ -40,6 +44,7 @@ export function ToastContainer(): JSX.Element {
             >
               <Icon name="x" size={13} />
             </button>
+            <div class="toast-progress" aria-hidden="true" />
           </div>
         )}
       </For>

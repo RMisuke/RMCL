@@ -125,8 +125,57 @@ fn main() {
     let app = tauri::Builder::default()
         // 隔离插件 UI 的独立源（ADR-006）：与 `tauri://localhost` 不同 scheme+host，
         // iframe 因此拿不到宿主 DOM，也拿不到注入的 Tauri API。
-        .register_uri_scheme_protocol(rmccc_core::rmccc_plugin::ui::UI_SCHEME, |ctx, request| {
-            commands::plugin_ui::serve_asset(ctx.app_handle(), &request)
+        // 异步协议：serve_asset 在 async runtime 上执行。同步变体会让
+        // WKWebView 主线程等待 core 锁——快速 IPC（写锁排队）时直接卡死整个窗口。
+        .register_asynchronous_uri_scheme_protocol(rmccc_core::rmccc_plugin::ui::UI_SCHEME, |ctx, request, responder| {
+            let app = ctx.app_handle().clone();
+            tauri::async_runtime::spawn(async move {
+                let response = commands::plugin_ui::serve_asset(&app, request).await;
+                responder.respond(response);
+            });
+        })
+        // 图标缓存直出协议：`rmcccicon://k/<urlencoded>` → 磁盘缓存文件。
+        // 命中即返回字节（WKWebView 直接渲染，无网络、无 IPC 载荷）；未命中 404，
+        // 前端 onError 回退占位/原图。
+        .register_asynchronous_uri_scheme_protocol(commands::cache::ICON_SCHEME, |ctx, request, responder| {
+            use tauri::Manager as _;
+            let app = ctx.app_handle().clone();
+            tauri::async_runtime::spawn(async move {
+                let path = request.uri().path().to_string();
+                let lookup = match commands::cache::decode_icon_uri_path(&path) {
+                    Some(url) => {
+                        let state = app.state::<crate::state::AppState>();
+                        Some(commands::cache::lookup(&state, &url).await)
+                    }
+                    None => None,
+                };
+                let response = match lookup.flatten() {
+                    Some(icon) => tauri::http::Response::builder()
+                        .status(200)
+                        .header("Content-Type", icon.content_type)
+                        // 可缓存（5 分钟）：让 WKWebView 内存缓存去重同 URL 的
+                        // 重复加载（头像/皮肤在重渲染风暴下会反复请求同一 URL）。
+                        // 曾用 no-store —— 每次重渲染都触发一轮 scheme task
+                        // start/stop，快速切换账户时的任务竞速撞上 wry 0.55
+                        // scheme responder 的 TOCTOU 缺陷，主线程 panic 直接
+                        // abort 闪退。磁盘缓存仍是新鲜度权威，协议只直出已有
+                        // 字节；真正的刷新走 cache_icon_fetch 条件请求。
+                        .header("Cache-Control", "max-age=300")
+                        .header("X-Content-Type-Options", "nosniff")
+                        .body(icon.bytes)
+                        .unwrap_or_else(|_| {
+                            tauri::http::Response::builder()
+                                .status(500)
+                                .body(Vec::new())
+                                .expect("static response")
+                        }),
+                    None => tauri::http::Response::builder()
+                        .status(404)
+                        .body(Vec::new())
+                        .expect("static response"),
+                };
+                responder.respond(response);
+            });
         })
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_opener::init())

@@ -21,7 +21,7 @@ import type { McpConfirmationView } from "../ipc/types";
 
 // ── Rail indicator ──
 
-export function TaskIndicator(): JSX.Element {
+export function TaskIndicator(props?: { compact?: boolean }): JSX.Element {
   const activeCount = createMemo(() => {
     const downloadsCount = downloadsStore.batches().size;
     const loaders = modloadersStore.installs().size;
@@ -37,9 +37,10 @@ export function TaskIndicator(): JSX.Element {
 
   return (
     <button
-      class="rail-task-indicator"
+      class={`rail-task-indicator${props?.compact ? " is-compact" : ""}`}
       onClick={() => uiStore.toggleTaskCenter()}
       aria-label={t("tasks.title")}
+      title={t("tasks.title")}
     >
       <span class="rail-task-ring">
         <svg viewBox="0 0 24 24" width="20" height="20">
@@ -62,7 +63,9 @@ export function TaskIndicator(): JSX.Element {
           <span class="rail-task-alert" />
         </Show>
       </span>
-      <span class="rail-task-label">{t("tasks.title")}</span>
+      <Show when={!props?.compact}>
+        <span class="rail-task-label">{t("tasks.title")}</span>
+      </Show>
       <Show when={activeCount() > 0}>
         <span class="rail-task-count">{activeCount()}</span>
       </Show>

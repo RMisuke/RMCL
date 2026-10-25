@@ -32,7 +32,7 @@
 
 **B. universal binary（`lipo` 合并 arm64 + x86_64）。**
 - 优点：用户无需选择架构，一个 `.app` 通吃。
-- 缺点：**体积近乎翻倍**（与 <10 MiB 红线冲突，ADR-011 余量仅 ~3 MiB）；构建复杂度高；Intel 部分仍需在 Intel 机器/runner 上实测。
+- 缺点：**体积近乎翻倍**（ADR-011 余量在 20 MiB 阈值下约 ~11 MiB，双架构 stripped 约 16 MiB 仍在红线内但余量收窄）；构建复杂度高；Intel 部分仍需在 Intel 机器/runner 上实测。
 
 **C. 放弃 Intel，仅支持 Apple Silicon。**
 - 优点：最小维护与体积。

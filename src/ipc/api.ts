@@ -135,8 +135,9 @@ export const auth = {
     safeInvoke<AuthSession>("auth_switch_account", { accountId }),
   removeAccount: (accountId: string) =>
     safeInvoke<void>("auth_remove_account", { accountId }),
-  /** Skin texture URL via the backend session-server proxy (null = none). */
-  skinUrl: (uuid: string) => safeInvoke<string | null>("auth_skin_url", { uuid }),
+  /** Skin + cape texture URLs via the backend session-server proxy (null = none). */
+  skinUrl: (uuid: string) =>
+    safeInvoke<import("./types").SkinTextures | null>("auth_skin_url", { uuid }),
 };
 
 // ── Profiles ──
@@ -220,8 +221,10 @@ export const downloads = {
 // ── Instances（本地实例仓库 / 路径）──
 
 export const instances = {
-  /** Local version repository entries (disk `versions/` — NOT profiles). */
-  list: () => safeInvoke<InstanceInfo[]>("instance_list"),
+  /** Local version repository entries (disk `versions/` — NOT profiles).
+   *  `root` selects an extra game root; omit for the primary root. */
+  list: (root?: string) =>
+    safeInvoke<InstanceInfo[]>("instance_list", { root }),
   /** Effective on-disk locations; the run dir depends on the isolation setting. */
   paths: (id: string) => safeInvoke<InstancePaths>("instance_paths", { id }),
   refresh: () => safeInvoke<InstanceInfo[]>("instance_refresh"),
@@ -273,6 +276,25 @@ export const logs = {
 
 export const external = {
   openUrl: (url: string) => safeInvoke<void>("open_external_url", { url }),
+};
+
+// ── 图标缓存（rmcccicon:// 协议 + stale-while-revalidate）──
+
+export const cache = {
+  /** 条件刷新一个图标；返回 hit/updated/unchanged/stale/miss/disabled。 */
+  iconFetch: (url: string, kind?: string) =>
+    safeInvoke<import("./types").IconFetchStatus>("cache_icon_fetch", { url, kind }),
+  stats: () => safeInvoke<import("./types").IconCacheStats>("cache_icon_stats"),
+  setConfig: (enabled?: boolean, maxBytes?: number) =>
+    safeInvoke<import("./types").IconCacheStats>("cache_icon_set_config", { enabled, maxBytes }),
+  clear: () => safeInvoke<import("./types").IconCacheStats>("cache_icon_clear"),
+};
+
+// ── Native dialogs ──
+
+export const dialog = {
+  /** Native directory picker; null on cancel. */
+  pickDirectory: () => safeInvoke<string | null>("dialog_pick_directory"),
 };
 
 // ── Plugins（Phase 2 声明式插件）──

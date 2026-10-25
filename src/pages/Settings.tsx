@@ -227,20 +227,21 @@ function General(): JSX.Element {
       </RmCard>
 
       <RmCard title={t("settings.general.appearance")}>
-        <RmSelect
-          value={settingsStore.themePreference() ?? "system"}
-          onChange={(v) =>
-            void settingsStore.setTheme(v === "system" ? null : v).then((res) => {
-              if (!res.ok) toast({ message: res.message ?? "", tone: "error" });
-            })
-          }
-          options={[
-            { value: "system", label: t("settings.general.mode.system") },
-            { value: "light", label: t("settings.general.mode.light") },
-            { value: "dark", label: t("settings.general.mode.dark") },
-          ]}
-        />
+        {/* 所有主题（含跟随系统）都靠卡片手动选择，不再提供下拉 */}
         <div class="theme-grid">
+          <button
+            class={`theme-card${settingsStore.themePreference() === null ? " is-active" : ""}`}
+            onClick={() =>
+              void settingsStore.setTheme(null).then((res) => {
+                if (!res.ok) toast({ message: res.message ?? "", tone: "error" });
+              })
+            }
+          >
+            <span class="theme-swatch is-system">
+              <span /><span /><span /><span />
+            </span>
+            <span>{t("settings.general.mode.system")}</span>
+          </button>
           <For each={themes()}>
             {(info) => (
               <button
@@ -271,6 +272,18 @@ function General(): JSX.Element {
             <pre class="logic-result">{themeJson()}</pre>
           </Show>
         </RmAdvancedSection>
+      </RmCard>
+
+      <RmCard title={t("settings.general.motion")}>
+        <RmFieldRow
+          label={t("settings.general.motion.toggle")}
+          hint={<span class="muted-line">{t("settings.general.motion.hint")}</span>}
+        >
+          <RmSwitch
+            checked={settingsStore.motionEnabled()}
+            onChange={(v) => settingsStore.setMotionEnabled(v)}
+          />
+        </RmFieldRow>
       </RmCard>
 
       <RmCard title={t("settings.general.log.title")}>
@@ -419,6 +432,16 @@ function AiSection(): JSX.Element {
     if (models && models.length > 0 && !model()) setModel(models[0]);
   }
 
+  /** 模型下拉选项：探测列表 + 兜底包含当前已选/已存模型（自填模型不在列表时也能显示）。 */
+  const modelOptions = createMemo(() => {
+    const list = aiStore.models().map((m) => ({ value: m, label: m }));
+    const current = model().trim();
+    if (current && !list.some((o) => o.value === current)) {
+      return [{ value: current, label: `${current} (saved)` }, ...list];
+    }
+    return list;
+  });
+
   async function saveAndTest(): Promise<void> {
     const res = await aiStore.saveConfig(
       baseUrl() || undefined,
@@ -437,6 +460,7 @@ function AiSection(): JSX.Element {
 
   return (
     <div class="tab-stack">
+      <div class="settings-ai">
       <RmCard title={t("settings.ai.title")}>
         <RmFieldRow label={t("settings.ai.baseUrl")} hint={<span class="muted-line">{t("settings.ai.baseUrlHint")}</span>}>
           <div class="btn-row">
@@ -454,10 +478,10 @@ function AiSection(): JSX.Element {
         </RmFieldRow>
         <RmFieldRow label={t("settings.ai.model")}>
           <Show
-            when={aiStore.models().length > 0}
+            when={modelOptions().length > 0}
             fallback={<RmInput value={model()} onInput={setModel} placeholder={t("settings.ai.modelPlaceholder")} />}
           >
-            <RmSelect value={model()} onChange={setModel} options={aiStore.models().map((m) => ({ value: m, label: m }))} />
+            <RmSelect value={model()} onChange={setModel} options={modelOptions()} />
           </Show>
         </RmFieldRow>
         <RmFieldRow label={t("settings.ai.apiKey")} hint={<span class="muted-line">{t("settings.ai.privacyNote")}</span>}>
@@ -477,6 +501,7 @@ function AiSection(): JSX.Element {
           </Show>
         </div>
       </RmCard>
+      </div>
 
       <McpSection />
     </div>
@@ -822,6 +847,33 @@ function About(): JSX.Element {
           >
             {t("settings.about.repo")}
           </RmButton>
+        </div>
+        <div class="about-credits">
+          <div class="rm-card-title" style={{ "margin-bottom": "6px" }}>{t("settings.about.credits")}</div>
+          <div class="muted-line">
+            skinview3d (MIT License) ·{" "}
+            <a
+              href="#"
+              onClick={(e) => {
+                e.preventDefault();
+                void external.openUrl("https://github.com/bs-community/skinview3d");
+              }}
+            >
+              github.com/bs-community/skinview3d
+            </a>
+          </div>
+          <div class="muted-line">
+            three.js (MIT License) ·{" "}
+            <a
+              href="#"
+              onClick={(e) => {
+                e.preventDefault();
+                void external.openUrl("https://github.com/mrdoob/three.js");
+              }}
+            >
+              github.com/mrdoob/three.js
+            </a>
+          </div>
         </div>
       </RmCard>
     </div>

@@ -26,6 +26,8 @@ pub struct SettingsUpdate {
     pub default_max_memory_mb: Option<u32>,
     pub download_concurrency: Option<u32>,
     pub mirror_url: Option<String>,
+    /// Extra browsable game roots (instance list only, read-only).
+    pub extra_game_roots: Option<Vec<String>>,
 
     // ── Global game defaults (fallbacks for instances that inherit) ──
     pub default_jvm_args: Option<Vec<String>>,
@@ -99,6 +101,18 @@ pub async fn settings_set(
     }
     if let Some(m) = opts.mirror_url {
         core.config.mirror_url = if m.is_empty() { None } else { Some(m) };
+    }
+    if let Some(roots) = opts.extra_game_roots {
+        // 绝对路径 + 去重；目录缺失不阻塞保存（浏览时按“无版本”处理）。
+        let mut cleaned: Vec<std::path::PathBuf> = Vec::new();
+        for root in roots {
+            let path = std::path::PathBuf::from(root.trim());
+            if !path.is_absolute() || cleaned.contains(&path) {
+                continue;
+            }
+            cleaned.push(path);
+        }
+        core.config.extra_game_roots = cleaned;
     }
 
     // Global game defaults.

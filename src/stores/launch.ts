@@ -128,7 +128,24 @@ export const launchStore = createRoot(() => {
   }
 
   async function kill(profileId: string): Promise<void> {
+    // 乐观更新：UI 立即停止显示运行中；退出事件晚到也无害（幂等）。
+    setRunning((map) => {
+      const next = new Map(map);
+      next.delete(profileId);
+      return next;
+    });
     await launch.kill(profileId);
+    // 对账兜底：以后端 running 清单为准（防乐观更新与真实状态漂移）。
+    const res = await launch.status();
+    if (res.ok) {
+      setRunning((map) => {
+        const next = new Map<string, RunningGame>();
+        for (const id of res.data) {
+          next.set(id, map.get(id) ?? { profileId: id, pid: 0, startedAt: Date.now() });
+        }
+        return next;
+      });
+    }
   }
 
   /** Restore running state on app start (ui-design 10 §8). */
