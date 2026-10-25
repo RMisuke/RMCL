@@ -550,12 +550,24 @@ fn detect_launch_java(
             if !bin.exists() {
                 return Err(RmcccError::JavaNotFound);
             }
-            Ok(rmccc_launch::JavaInstallation {
-                path: bin,
-                major_version: required_java,
-                vendor: String::new(),
-                is_64bit: true,
-            })
+            // A8：**真实探测**自定义 Java（`java -XshowSettings:properties
+            // -version`）。此前直接伪造 `{major_version: required_java,
+            // is_64bit: true}`——用户装错 JDK 时所有按版本门控的 JVM 参数
+            // （--illegal-access/--sun-misc-unsafe-memory-access/encoding 键）
+            // 都按"期望版本"生成，且 JavaVersionMismatch 校验被完全跳过。
+            let probed = rmccc_platform::java::probe_java_binary(&bin).ok_or_else(|| {
+                RmcccError::Other(format!(
+                    "custom java at {} is not a working JRE/JDK (probe failed)",
+                    bin.display()
+                ))
+            })?;
+            if probed.major_version != required_java {
+                return Err(RmcccError::JavaVersionMismatch {
+                    found: probed.major_version,
+                    required: required_java,
+                });
+            }
+            Ok(probed)
         }
         None => core.platform.java.find(required_java),
     }

@@ -10,6 +10,26 @@
 
 ## 0. 更新记录
 
+**2026-10-25（审计整改批次 5 `fix/launch-args`：启动参数正确性，A8/A9 + kill 统一）**：
+
+- **A9 legacy 参数翻倍**：`generate_command_line` 的三种 game args 来源改为互斥——
+  `arguments.game`（1.13+）优先，其次 `minecraftArguments`（≤1.12 legacy，自带完整
+  参数集），两者皆无才用内置默认集。此前 legacy 收录后又追加一整套
+  `default_game_arguments`（--username/--gameDir 等全量翻倍，OptiFine tweaker 等
+  按位置解析的参数会错乱）。三个分支各有回归测试（`generate_command_line` 快照断言）。
+- **A8 自定义 Java 真实探测**：`detect_launch_java` 对自定义 `java_path` 跑
+  `probe_java_binary`（`java -XshowSettings:properties -version`）——此前直接伪造
+  `{major_version: 期望值, is_64bit: true}`，装错 JDK 时所有按版本门控的 JVM 参数
+  按"期望版本"生成且 `JavaVersionMismatch` 校验被完全跳过。探测失败显式报错，
+  版本不符返回 `JavaVersionMismatch{found, required}`。
+- **ManagedProcess::kill 统一进程组语义**：`kill()` 优先走平台层
+  `terminate_tree(pid)`（与 IPC 层 `launch_kill` 同一语义，Unix 进程组 SIGKILL），
+  平台终止失败时退回 `child.kill()` 兜底——带 wrapper/`nice` 前缀时 child 是外层
+  包装进程，直接杀 child 会留下孤儿 java。`ManagedProcess::with_platform` 接收
+  平台句柄（spawn 侧 `process_group(0)` 保证组长正确）。
+- 门禁：`cargo test --workspace` 43 套件 0 失败（rmccc-launch 新增 3 测试）、
+  clippy 0 警告、fmt 干净、`pnpm typecheck` 0 错误。
+
 **2026-10-25（审计整改批次 4 `fix/loader-install`：Forge processors 修复 + Fabric/Quilt 侧别修正 + installer 下载合一）**：
 
 - **installer 下载三副本合一（B3 提前）**：新增 `installer::download_installer_file` 共享实现——流式写盘（~180MB installer 不再整份进内存双倍拷贝）、唯一临时文件名（修 forge 路径 `/tmp/forge-installer-{pid}.jar` 从不删除的每次安装 ~180MB 泄漏）、ZIP 完整性早失败、`{url}.sha1` 可取时强制校验（镜像劫持/损坏即失败，取不到警告放行）。`InstallerJarRunner` 运行加 600s 超时（此前可永久挂起）；新增 `run_local` 供本地安装器文件复用同一条执行/探测路径。neoforge 的第三份副本（固定名 + 失败路径不清理）一并删除。

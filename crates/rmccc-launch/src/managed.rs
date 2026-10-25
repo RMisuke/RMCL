@@ -42,11 +42,31 @@ pub struct ManagedProcess {
 
     /// Registered lifecycle listeners.
     listeners: Arc<Mutex<Vec<Arc<dyn ProcessListener>>>>,
+
+    /// 平台适配层（批次 5）：kill 走进程组终止（`terminate_tree`），与 IPC 层
+    /// `launch_kill` 的语义一致——带 wrapper/`nice` 前缀时 child 是外层包装
+    /// 进程，直接 `child.kill()` 会留下孤儿 java。
+    platform: rmccc_platform::Platform,
 }
 
 impl ManagedProcess {
-    /// Create a new managed process wrapper.
+    /// Create a new managed process wrapper (默认 `Platform::current()`).
     pub fn new(profile_id: String, child: tokio::process::Child, max_lines: usize) -> Self {
+        Self::with_platform(
+            profile_id,
+            child,
+            max_lines,
+            rmccc_platform::Platform::current(),
+        )
+    }
+
+    /// Create a new managed process wrapper with an injected platform handle.
+    pub fn with_platform(
+        profile_id: String,
+        child: tokio::process::Child,
+        max_lines: usize,
+        platform: rmccc_platform::Platform,
+    ) -> Self {
         let pid = child.id().unwrap_or(0);
         Self {
             profile_id,
@@ -57,6 +77,7 @@ impl ManagedProcess {
             lines: Arc::new(Mutex::new(Vec::new())),
             max_lines,
             listeners: Arc::new(Mutex::new(Vec::new())),
+            platform,
         }
     }
 
@@ -199,10 +220,18 @@ impl ManagedProcess {
     }
 
     /// Kill the process.
+    ///
+    /// 批次 5：优先走平台层进程组终止（`terminate_tree`，Unix 上
+    /// `kill(-pid, SIGKILL)`）——与 IPC 层 `launch_kill` 同一语义，wrapper/
+    /// `nice` 前缀下的整棵进程树都被收割；平台终止失败（如 EPERM）时退回
+    /// 直接 `child.kill()` 兜底。进程组由 spawn 侧 `process_group(0)` 建立。
     pub async fn kill(&self) -> Result<()> {
+        let tree_result = self.platform.process.terminate_tree(self.pid);
         let mut child_opt = self.child.lock().await;
         if let Some(ref mut child) = *child_opt {
-            child.kill().await?;
+            if tree_result.is_err() {
+                child.kill().await?;
+            }
         }
         *child_opt = None;
         self.running.store(false, Ordering::SeqCst);

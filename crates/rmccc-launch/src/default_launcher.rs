@@ -559,13 +559,14 @@ impl DefaultLauncher {
         };
 
         // 17-19. Game arguments.
+        //
+        // 三种来源互斥（A9 修复：此前 legacy minecraftArguments 已收录后又
+        // 追加一整套 default_game_arguments，--username/--gameDir 等全量翻倍，
+        // OptiFine tweaker 等按位置解析的参数会错乱）：
+        // - `arguments.game`（1.13+ 新格式）；
+        // - 否则 `minecraftArguments`（≤1.12 legacy 字符串，自带完整参数集）；
+        // - 两者皆无时才用启动器内置默认集（HMCL getDefaultGameArguments）。
         let mut game_args = Vec::new();
-        if let Some(mc_args) = &self.game_version.minecraft_arguments {
-            // Legacy minecraftArguments (1.12 and earlier).
-            for token in tokenize(mc_args) {
-                game_args.push(replace_templates_owned(&token, &configurations));
-            }
-        }
         if let Some(game) = self
             .game_version
             .arguments
@@ -579,7 +580,11 @@ impl DefaultLauncher {
                 &features,
             );
             game_args.extend(resolved);
-        } else if self.game_version.minecraft_arguments.is_some() {
+        } else if let Some(mc_args) = &self.game_version.minecraft_arguments {
+            for token in tokenize(mc_args) {
+                game_args.push(replace_templates_owned(&token, &configurations));
+            }
+        } else {
             game_args.extend(default_game_arguments(
                 &self.auth,
                 &self.game_version,
@@ -699,7 +704,12 @@ impl DefaultLauncher {
             let _ = self.options.platform.fs.remove_symlink(temp);
         }
 
-        let managed = Arc::new(ManagedProcess::new(self.instance_id.clone(), child, 2000));
+        let managed = Arc::new(ManagedProcess::with_platform(
+            self.instance_id.clone(),
+            child,
+            2000,
+            (*self.options.platform).clone(),
+        ));
         let listener = self.wrap_listener();
         if let Some(l) = listener {
             managed.add_listener(l);
@@ -1491,5 +1501,64 @@ mod tests {
 
         let _ = managed.wait_exit().await;
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A9：三种 game args 来源互斥——legacy minecraftArguments 自带完整
+    /// 参数集时，不得再追加 default_game_arguments（此前 --username 等
+    /// 全量翻倍）。
+    #[test]
+    fn test_legacy_args_are_not_doubled() {
+        let (mut l, dir) = test_launcher_on_disk();
+        l.game_version.minecraft_arguments = Some(
+            "--username ${auth_player_name} --version ${version_name} --gameDir ${game_directory}"
+                .into(),
+        );
+        l.game_version.arguments = None;
+
+        let cmd = l.generate_command_line().unwrap();
+        let usernames = cmd.game_args.iter().filter(|a| *a == "--username").count();
+        let gamedirs = cmd.game_args.iter().filter(|a| *a == "--gameDir").count();
+        assert_eq!(usernames, 1, "game args: {:?}", cmd.game_args);
+        assert_eq!(gamedirs, 1, "game args: {:?}", cmd.game_args);
+        // 模板已被替换为实际值。
+        assert!(
+            cmd.game_args.iter().any(|a| a.contains("Steve")),
+            "game args: {:?}",
+            cmd.game_args
+        );
+        let _ = std::fs::remove_dir_all(dir.parent().unwrap());
+    }
+
+    /// A9：1.13+ `arguments.game` 存在时优先于 legacy 字符串。
+    #[test]
+    fn test_new_style_args_win_over_legacy_string() {
+        let (mut l, dir) = test_launcher_on_disk();
+        l.game_version.minecraft_arguments = Some("--legacy-only".into());
+        let args = rmccc_version::VersionArguments {
+            game: Some(vec![rmccc_version::VersionArgument::Simple(
+                "--new-only".into(),
+            )]),
+            ..Default::default()
+        };
+        l.game_version.arguments = Some(args);
+
+        let cmd = l.generate_command_line().unwrap();
+        assert!(cmd.game_args.contains(&"--new-only".to_string()));
+        assert!(!cmd.game_args.contains(&"--legacy-only".to_string()));
+        let _ = std::fs::remove_dir_all(dir.parent().unwrap());
+    }
+
+    /// A9：两者皆无时使用内置默认集（保证离线可启动）。
+    #[test]
+    fn test_default_args_when_no_version_args() {
+        let (mut l, dir) = test_launcher_on_disk();
+        l.game_version.minecraft_arguments = None;
+        l.game_version.arguments = None;
+
+        let cmd = l.generate_command_line().unwrap();
+        assert!(cmd.game_args.contains(&"--username".to_string()));
+        assert!(cmd.game_args.contains(&"--version".to_string()));
+        assert!(cmd.game_args.contains(&"--gameDir".to_string()));
+        let _ = std::fs::remove_dir_all(dir.parent().unwrap());
     }
 }
