@@ -10,6 +10,19 @@
 
 ## 0. 更新记录
 
+**2026-10-25（全量审计轮：后端/前端/HMCL 比对，未改代码）**：
+
+- 完成五路并行审计（crates 16 crate / src-tauri 99 命令 / 前端 / HMCL-main 功能盘点 /
+  RMCL 功能矩阵），报告存档于 [`audits/BACKEND_AUDIT_2026-10-25/`](audits/BACKEND_AUDIT_2026-10-25/)
+  （README 总览 + 01 crates + 02 src-tauri + 03 前端 + 04 HMCL 比对 + 05 审计意见）。
+- 门禁实测：`cargo check --workspace` 零错误、`pnpm typecheck` 零错误；静态测试数 ≈632（10-20 时 300）。
+- 问题总量：后端 0 P0 / 16 P1 / 50 P2 / 61 P3；前端 2 P0 / 14 P1 / 37 P2 / 33 P3。
+  最优先：auth.rs 嵌套读锁死锁、version_install 长持锁、三套 inheritsFrom/rules 语义互斥、
+  Forge processors classpath 全平台错、OptiFine/LiteLoader 产物不可用、asset_object 短 hash panic。
+- HMCL 差距结论：RMCL 覆盖约 50% 功能点；缺整合包（全缺）、CurseForge、authlib-injector
+  外置登录、Java 自动下载、mod 多格式元数据；RMCL 独有插件平台 / AI-MCP / 字段级继承锁。
+  修复顺序见 05 文档 A/B/C/D 批与 T1→T3 路线图。
+
 **2026-10-24（ui/home-hero-dock 轮：3D 皮肤预览根治 + 闪退修复 + 体积红线放宽）**：
 
 - **3D 皮肤预览（skinview3d）渲染架构定版**：canvas/viewer 归"常驻舞台层"
