@@ -10,6 +10,22 @@
 
 ## 0. 更新记录
 
+**2026-10-25（审计整改批次 7 `chore/audit-cleanup`：后端死代码清理 + 文档对齐）**：
+
+- **死代码清理（净删 ~530 行）**：
+  - `rmccc-launch`：删除与 DefaultLauncher 平行的第二套 JVM 参数实现（`LaunchArgBuilder` + `build_game_env` + `spawn_managed` + 附属 `VersionGate`/gated 辅助函数与 8 个死测试）——缺 log4j/natives 逻辑，留着必然漂移（审计跨 crate #6）；
+  - `rmccc-download`：删除零调用方的 `create_provider`（含 2 个死测试）；
+  - `rmccc-config`：删除 ADR-013 瘦身后遗留的 `agent_sessions_dir`/`agent_tasks_dir`；`agent_audit_path` 从死代码转为**接线**（MCP 审计日志改经它取径，单一事实来源）；
+  - `rmccc-error`：删除从未构造的 `DeviceCodePending` 变体（含 error/cli 两处 match 臂）；
+  - 事件面双侧清理：`DOWNLOAD_PAUSED`/`DOWNLOAD_RESUMED`/`AUTH_STATE_CHANGED` 三死常量从 events.rs 与 src/ipc/events.ts 同步删除（暂停/恢复乐观 UI 无后端事件对账的现状已在审计记录）；删除预留未用的 `ThrottledEmitter::emit_immediate`。
+- **文档对齐（ARCHITECTURE.md，设计文档优先约束）**：
+  - §3.1 依赖图补齐实测边（auth→platform、version→platform、modloader→platform、launch→platform）；
+  - §3.2 `ModLoaderProvider` 章节 as-built 化（改记 `DependencyManager` 能力面，注明原 trait 已收敛删除）；`ModSource` 删除未实现的 `get_mod`，`CurseForgeSource` 标注 planned（指向审计差距 T1）；
+  - §12 体积预算 10MB→**20 MiB（ADR-011）**，含 strip 度量口径说明；main.rs 同步 20 MiB 注释；
+  - tauri.conf.json `$schema` 从 fork 仓库改回官方 `schema.tauri.app`。
+- 前端死代码（HomeDashboard 回捞/死 CSS/i18n 死 key）不在本批：前端工作区有并行未提交改动，避免冲突，留给前端线。
+- 门禁：`cargo test --workspace` 42 套件 0 失败、clippy 0 警告、fmt 干净、`pnpm typecheck` 0 错误。
+
 **2026-10-25（审计整改批次 6 `fix/security-hygiene`：B 批安全专项）**：
 
 - **B1 vault key 权限窗口**：`PlatformFs` 新增 `create_owner_only`（Unix `OpenOptions::mode(0o600)` 一步创建，文件从诞生第一刻即 0600）；vault 改用它——此前"先 `fs::write`（0644 可读）后收紧"存在同机其他用户可读的窗口。macos/unsupported/mock 三个后端实现，`MacosFs` 顺手转 pub（测试需要）。

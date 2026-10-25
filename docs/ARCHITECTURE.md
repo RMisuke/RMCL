@@ -85,7 +85,7 @@ RMCL/
 │   │       └── process.rs        # Response file + process spawning
 │   ├── rmccc-modloader/          # Mod loader installation
 │   │   └── src/
-│   │       ├── lib.rs            # ModLoaderProvider + DependencyManager
+│   │       ├── lib.rs            # DependencyManager（统一安装入口，原 ModLoaderProvider 已收敛）
 │   │       ├── analyzer.rs       # Loader detection from libraries
 │   │       ├── patch.rs          # Shared GameInstancePatch type
 │   │       ├── fabric/  forge/  neoforge/  quilt/
@@ -164,13 +164,13 @@ RMCL/
 rmccc-error                     # leaf — 统一错误类型 + ErrorCode
 ├── rmccc-config                # → error
 ├── rmccc-download              # → error
-├── rmccc-auth                  # → error
+├── rmccc-auth                  # → error, platform
 └── rmccc-mods                  # → error, download
 
-rmccc-version    → error, download
-rmccc-modloader  → error, download, version
+rmccc-version    → error, download, platform
+rmccc-modloader  → error, download, platform, version
 rmccc-profile    → error, config, modloader
-rmccc-launch     → error, config, version, profile
+rmccc-launch     → error, config, platform, version, profile
 rmccc-core       → 以上全部（编排 + DI 容器）
 src-tauri (rmccc)     → rmccc-core + 全部子 crate
 src-cli   (rmccc-cli) → rmccc-core + 全部子 crate
@@ -224,30 +224,24 @@ pub trait VersionProvider: Send + Sync {
 // - MirrorVersionProvider   (BMCLAPI / custom mirror)
 ```
 
-#### ModLoaderProvider
+#### ModLoader 安装入口（as-built：`DependencyManager`）
+
+> 审计批次 3/4 修订：原设计的 `ModLoaderProvider` trait 已被
+> `rmccc_modloader::DependencyManager`（统一分流 Forge/NeoForge installer JAR
+> 与其余 patch 型 loader）+ `rmccc-core::modloader::install_loader` 编排取代，
+> 不存在名为 `ModLoaderProvider` 的 trait。能力面如下：
 
 ```rust
-#[async_trait]
-pub trait ModLoaderProvider: Send + Sync {
-    fn loader_type(&self) -> ModLoaderType;
+// rmccc_modloader::DependencyManager（非 trait，具体类型）
+pub async fn list_versions(&self, loader_type: &ModLoaderType, game_version: &str)
+    -> Result<Vec<LoaderVersion>, RmcccError>;
+pub async fn install_loader(&self, loader_type: &ModLoaderType, game_version: &str,
+    base_version: &GameVersion, loader_version: &str, game_dir: &Path, java_path: &Path)
+    -> Result<LoaderInstallOutcome, RmcccError>;
 
-    /// List available loader versions for a game version
-    async fn list_versions(&self, game_version: &str) -> Result<Vec<LoaderVersion>, RmcccError>;
-
-    /// Install the loader, returns the version ID used as --version
-    async fn install(
-        &self,
-        game_version: &str,
-        loader_version: &str,
-        game_dir: &Path,
-        progress: ProgressCallback,
-    ) -> Result<String, RmcccError>;
-}
-
-// Implementations:
-// - ForgeInstaller     (Forge installer JAR execution / slim installer)
-// - FabricInstaller    (Fabric meta API + profile generation)
-// - NeoForgeInstaller  (NeoForge installer)
+// Implementations（内部路由）:
+// - Forge / NeoForge  → 官方 installer JAR 运行（InstallerJarRunner）
+// - 其余 6 种         → GameInstancePatch（增量 JSON，可回滚可叠加）
 ```
 
 #### ModSource
@@ -260,9 +254,6 @@ pub trait ModSource: Send + Sync {
     /// Search mods by query and filters
     async fn search(&self, query: &ModSearchQuery) -> Result<ModSearchResult, RmcccError>;
 
-    /// Get detailed mod info by slug/ID
-    async fn get_mod(&self, id: &str) -> Result<ModDetail, RmcccError>;
-
     /// List available versions of a mod
     async fn list_versions(&self, mod_id: &str) -> Result<Vec<ModVersion>, RmcccError>;
 
@@ -271,8 +262,8 @@ pub trait ModSource: Send + Sync {
 }
 
 // Implementations:
-// - ModrinthSource     (Modrinth v2 API, open, no key needed)
-// - CurseForgeSource   (CurseForge Core API, API key from env or key file)
+// - ModrinthSource     (Modrinth v2 API, open, no key needed) — 已实现
+// - CurseForgeSource   (CurseForge Core API, API key from env or key file) — planned（审计差距 T1，见 docs/audits/BACKEND_AUDIT_2026-10-25/04）
 ```
 
 #### DownloadManager
@@ -1323,11 +1314,11 @@ User selects "Install Fabric 0.15.6" for profile
   │
   ├─ Frontend: invoke("modloader_install", { profileId, loaderType: "fabric", loaderVersion })
   │
-  ├─ Rust: ModLoaderProvider::list_versions(game_version)
+  ├─ Rust: DependencyManager::list_versions(loader_type, game_version)
   │   └─ Fabric: GET https://meta.fabricmc.net/v2/versions/loader/{gameVersion}
   │   └─ Forge:  GET https://files.minecraftforge.net/net/minecraftforge/forge/promotions_slim.json
   │
-  ├─ Rust: ModLoaderProvider::install(game_version, loader_version, game_dir)
+  ├─ Rust: DependencyManager::install_loader(...) / core::modloader::install_loader
   │   ├─ Fabric: Generate profile JSON + download fabric-loader JAR
   │   └─ Forge:  Download installer JAR + execute slim install (no GUI)
   │
@@ -1493,14 +1484,17 @@ ai_* 5 条 + mods 纯逻辑 2 条取代，S4/S5 再加 mcp_* 9 条）。
 
 ## 12. Size Budget
 
-### 12.1 Target: < 10MB Total
+### 12.1 Target: < 20 MiB Total（ADR-011，2026-10-24 放宽）
+
+> 度量口径：**strip 后的主可执行文件**（1 MiB = 1,048,576 B）；strip 失效时门禁判
+> release-blocked，不得用未剥离数字宣称通过。
 
 | Component | Target Size | Notes |
 |-----------|------------|-------|
 | Tauri 2.x binary (stripped + LTO) | ~4.5 MB | Rust code + WebView glue |
 | SolidJS frontend (gzipped) | ~80 KB | JS + Tailwind CSS |
 | Static assets (icons) | ~100 KB | PNG icons, splash |
-| **Total** | **~4.7 MB** | **Well under 10MB** |
+| **Total** | **~4.7 MB** | **远低于 20 MiB 红线** |
 
 ### 12.2 Binary Optimization Strategy
 
@@ -1872,7 +1866,7 @@ pub struct ColdConfig {
 ## 19. Key Design Decisions
 
 ### Why Tauri 2.x over Electron?
-Electron bundles Chromium (~150MB+). Tauri uses system WebView, keeping binary at ~4-5MB. For a 10MB target, this is non-negotiable.
+Electron bundles Chromium (~150MB+). Tauri uses system WebView, keeping binary at ~4-5MB. For the 20 MiB target (ADR-011), this is non-negotiable.
 
 ### Why SolidJS over React?
 SolidJS compiles to fine-grained reactive DOM updates with no virtual DOM overhead. Bundle is ~8KB vs React's ~40KB. For a launcher that's mostly a management UI (not complex interactive apps), SolidJS is more than sufficient.

@@ -7,11 +7,8 @@ export const EVENTS = {
   DOWNLOAD_PROGRESS: "download://progress",
   DOWNLOAD_COMPLETE: "download://complete",
   DOWNLOAD_ERROR: "download://error",
-  DOWNLOAD_PAUSED: "download://paused",
-  DOWNLOAD_RESUMED: "download://resumed",
 
   // Auth
-  AUTH_STATE_CHANGED: "auth://state-changed",
   AUTH_DEVICE_CODE: "auth://device-code",
 
   // Launch

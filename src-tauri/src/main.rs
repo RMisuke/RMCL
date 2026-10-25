@@ -102,7 +102,7 @@ fn main() {
     }
 
     // P3-13：崩溃上报（本地）——panic hook 将崩溃信息写入日志文件，便于排障。
-    // 未引入 Sentry/OTel（体积红线 <10MB）；后续可在此扩展为远程上报。
+    // 未引入 Sentry/OTel（体积红线 20 MiB（ADR-011））；后续可在此扩展为远程上报。
     std::panic::set_hook(Box::new(|info| {
         let payload = info.payload().downcast_ref::<&str>().map(|s| s.to_string());
         tracing::error!(

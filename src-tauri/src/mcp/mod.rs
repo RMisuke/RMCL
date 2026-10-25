@@ -122,7 +122,7 @@ struct McpInner {
 
 impl McpHandle {
     pub fn new(data_dir: &Path, fs: Arc<dyn PlatformFs>) -> Result<Self> {
-        let audit = AuditLog::open(data_dir.join("agent").join("audit.jsonl"), fs.clone())?;
+        let audit = AuditLog::open(rmccc_config::paths::agent_audit_path(data_dir), fs.clone())?;
         let policies = Self::load_policies(&data_dir.join(POLICIES_FILE));
         Ok(Self {
             data_dir: data_dir.to_path_buf(),

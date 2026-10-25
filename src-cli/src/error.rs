@@ -51,7 +51,7 @@ impl From<rmccc_error::RmcccError> for CliError {
         // not-found / already-running) so scripts can branch on exit codes.
         let code = match &e {
             E::Network(_) | E::Timeout(_) | E::HttpStatus { .. } => ErrorCode::NetworkError,
-            E::AuthFailed(_) | E::DeviceCodePending { .. } => ErrorCode::AuthFailed,
+            E::AuthFailed(_) => ErrorCode::AuthFailed,
             E::CredentialExpired => ErrorCode::CredentialExpired,
             E::WrongAccount { .. } => ErrorCode::WrongAccount,
             E::TokenExpired => ErrorCode::TokenExpired,

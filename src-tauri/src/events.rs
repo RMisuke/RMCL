@@ -14,13 +14,6 @@ use tauri::{AppHandle, Emitter};
 pub const DOWNLOAD_PROGRESS: &str = "download://progress";
 pub const DOWNLOAD_COMPLETE: &str = "download://complete";
 pub const DOWNLOAD_ERROR: &str = "download://error";
-#[allow(dead_code)] // 预留：前端可据此展示暂停/恢复状态（P2-24 单项豁免）
-pub const DOWNLOAD_PAUSED: &str = "download://paused";
-#[allow(dead_code)]
-pub const DOWNLOAD_RESUMED: &str = "download://resumed";
-
-#[allow(dead_code)] // 预留：多账户/会话状态变更广播
-pub const AUTH_STATE_CHANGED: &str = "auth://state-changed";
 pub const AUTH_DEVICE_CODE: &str = "auth://device-code";
 
 pub const LAUNCH_STARTED: &str = "launch://started";
@@ -171,11 +164,5 @@ impl ThrottledEmitter {
             let _ = self.app.emit(DOWNLOAD_PROGRESS, payload);
             *last = Instant::now();
         }
-    }
-
-    /// Emit an event immediately (no throttling).
-    #[allow(dead_code)] // 预留：登录完成/关键节点即时广播
-    pub fn emit_immediate<T: Serialize + Clone>(&self, event: &str, payload: &T) {
-        let _ = self.app.emit(event, payload);
     }
 }

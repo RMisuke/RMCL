@@ -43,10 +43,6 @@ pub enum RmcccError {
     #[error("Token expired and refresh failed")]
     TokenExpired,
 
-    #[allow(dead_code)]
-    #[error("Device code auth pending: visit {uri} and enter code {user_code}")]
-    DeviceCodePending { uri: String, user_code: String },
-
     // ── Download ──
     #[error("Download failed: {url} — {reason}")]
     DownloadFailed { url: String, reason: String },
@@ -221,9 +217,7 @@ impl From<RmcccError> for IpcError {
             RmcccError::Network(_) | RmcccError::Timeout(_) | RmcccError::HttpStatus { .. } => {
                 ErrorCode::NetworkError
             }
-            RmcccError::AuthFailed(_) | RmcccError::DeviceCodePending { .. } => {
-                ErrorCode::AuthFailed
-            }
+            RmcccError::AuthFailed(_) => ErrorCode::AuthFailed,
             RmcccError::CredentialExpired => ErrorCode::CredentialExpired,
             RmcccError::WrongAccount { .. } => ErrorCode::WrongAccount,
             RmcccError::TokenExpired => ErrorCode::TokenExpired,

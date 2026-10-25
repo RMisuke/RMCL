@@ -280,25 +280,6 @@ async fn read_lines<R: tokio::io::AsyncRead + Unpin>(
     }
 }
 
-/// Convenience function: spawn a game and return a ManagedProcess with
-/// monitors already started.
-pub async fn spawn_managed(
-    profile_id: String,
-    java_path: &std::path::Path,
-    response_file: &std::path::Path,
-    game_dir: &std::path::Path,
-    max_lines: usize,
-    platform: &rmccc_platform::Platform,
-) -> Result<Arc<ManagedProcess>> {
-    // Convenience path carries no process-level prefix (`Command::prefix`);
-    // the orchestrated launch path goes through `DefaultLauncher::launch`.
-    let child =
-        crate::process::spawn_game(java_path, &[], response_file, game_dir, None, platform).await?;
-    let managed = Arc::new(ManagedProcess::new(profile_id, child, max_lines));
-    let _monitor_handle = managed.clone().start_monitors();
-    Ok(managed)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

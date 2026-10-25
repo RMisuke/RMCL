@@ -262,29 +262,6 @@ impl DownloadProvider for BmclApiDownloadProvider {
     }
 }
 
-// ── Factory ──
-
-/// Create a download provider from a name string.
-///
-/// Supports optional `@api_root` suffix for BMCLAPI to set a custom mirror root:
-/// `bmclapi@https://my-mirror.example.com`
-pub fn create_provider(name: &str) -> Option<Box<dyn DownloadProvider>> {
-    match name.to_lowercase().as_str() {
-        "mojang" | "official" => Some(Box::new(MojangDownloadProvider)),
-        "bmclapi" | "mirror" => Some(Box::new(BmclApiDownloadProvider::new(
-            "https://bmclapi2.bangbang93.com",
-        ))),
-        _ => {
-            // Check for bmclapi@custom-root format
-            if let Some(custom) = name.strip_prefix("bmclapi@") {
-                Some(Box::new(BmclApiDownloadProvider::new(custom)))
-            } else {
-                None
-            }
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -414,24 +391,5 @@ mod tests {
         assert_eq!(candidates.len(), 2);
         assert_eq!(candidates[0], "https://api.modrinth.com/v2/mod/sodium");
         assert!(candidates[1].contains("mod.mcimirror.top"));
-    }
-
-    // ── Factory ──
-
-    #[test]
-    fn test_create_provider() {
-        assert!(create_provider("mojang").is_some());
-        assert!(create_provider("bmclapi").is_some());
-        assert!(create_provider("unknown").is_none());
-    }
-
-    #[test]
-    fn test_create_provider_custom_bmclapi() {
-        let p = create_provider("bmclapi@https://my-mirror.example.com");
-        assert!(p.is_some());
-        let p = p.unwrap();
-        assert_eq!(p.name(), "BMCLAPI");
-        let injected = p.inject_url("https://libraries.minecraft.net/test.jar");
-        assert!(injected.contains("my-mirror.example.com"));
     }
 }
