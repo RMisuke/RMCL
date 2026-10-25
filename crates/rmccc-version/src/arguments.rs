@@ -161,8 +161,16 @@ pub fn replace_templates(arg: &str, vars: &HashMap<String, String>) -> String {
                 continue;
             }
         }
-        result.push(arg.as_bytes()[i] as char);
-        i += 1;
+        // Copy the whole UTF-8 character, never a lone byte: template text
+        // itself may carry non-ASCII (e.g. user-typed custom JVM args) and
+        // must survive byte-for-byte (audit 2026-10-25 A10).
+        match arg[i..].chars().next() {
+            Some(ch) => {
+                result.push(ch);
+                i += ch.len_utf8();
+            }
+            None => break,
+        }
     }
 
     result
@@ -316,6 +324,23 @@ mod tests {
         vars.insert("auth_player_name".to_string(), "Steve".to_string());
         let result = replace_templates("--username ${auth_player_name}", &vars);
         assert_eq!(result, "--username Steve");
+    }
+
+    #[test]
+    fn test_replace_preserves_multibyte_template_text() {
+        // A10：模板文本自身含非 ASCII（用户自定义 JVM/游戏参数）必须逐字节
+        // 保留；替换值经 push_str 本就不受影响，这里一并钉死。
+        let mut vars = HashMap::new();
+        vars.insert(
+            "game_directory".to_string(),
+            "/Users/玩家/games".to_string(),
+        );
+        let result = replace_templates("-Dnote=中文备注 ${game_directory} 尾部", &vars);
+        assert_eq!(result, "-Dnote=中文备注 /Users/玩家/games 尾部");
+
+        let empty = HashMap::new();
+        let result = replace_templates("路径=中文 未匹配${unknown_var}", &empty);
+        assert_eq!(result, "路径=中文 未匹配${unknown_var}");
     }
 
     #[test]

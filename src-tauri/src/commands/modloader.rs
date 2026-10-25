@@ -43,6 +43,13 @@ pub async fn modloader_list(
         retryable: false,
     })?;
 
+    // A6 triage：安装器未完成的 loader 不再出现在可选版本里（analyzer 仍可
+    // 识别已安装实例）。返回空列表，让向导自然显示"无可用版本"。
+    if !lt.is_installable() {
+        tracing::warn!(loader = %loader_type, "loader installer incomplete; returning empty version list");
+        return Ok(Vec::new());
+    }
+
     // 统一走 DependencyManager（P1-02）：支持全部 8 种 loader
     let dm = DependencyManager::new(state.http_client.clone());
     let versions = dm.list_versions(&lt, &game_version).await?;

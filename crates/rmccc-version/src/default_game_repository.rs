@@ -478,7 +478,7 @@ impl GameRepository for DefaultGameRepository {
         }
     }
 
-    fn get_asset_object(&self, hash: &str) -> PathBuf {
+    fn get_asset_object(&self, hash: &str) -> Option<PathBuf> {
         file_layout::asset_object(&self.base_directory, hash)
     }
 

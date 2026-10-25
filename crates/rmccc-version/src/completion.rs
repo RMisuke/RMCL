@@ -144,18 +144,18 @@ pub fn check_completion(
             });
         } else if let Ok(content) = std::fs::read_to_string(&idx) {
             if let Ok(index) = serde_json::from_str::<AssetIndexContent>(&content) {
-                let count = index.objects.len();
-                let existing = index
+                // Malformed hashes are downloaded data — skip them on BOTH
+                // sides of the count, otherwise "missing" would outrun repair
+                // forever (repair can't download what it can't address).
+                let valid: Vec<_> = index
                     .objects
                     .values()
-                    .filter(|o| {
-                        file_ok(
-                            &file_layout::asset_object(game_dir, &o.hash),
-                            Some(&o.hash),
-                            Some(o.size),
-                            verify,
-                        )
-                    })
+                    .filter_map(|o| file_layout::asset_object(game_dir, &o.hash).map(|p| (o, p)))
+                    .collect();
+                let count = valid.len();
+                let existing = valid
+                    .iter()
+                    .filter(|(o, path)| file_ok(path, Some(&o.hash), Some(o.size), verify))
                     .count();
                 if existing < count {
                     missing.push(MissingItem {
@@ -389,8 +389,8 @@ pub async fn build_completion_downloads(
 
 /// Queue download items for every asset object missing from disk.
 ///
-/// Malformed hashes (shorter than the two-char bucket prefix) are skipped with
-/// a warning instead of slicing into a panic — the index is downloaded data.
+/// Malformed hashes (anything but 40 hex chars) are skipped with a warning
+/// instead of slicing into a panic — the index is downloaded data.
 fn push_missing_assets(
     items: &mut Vec<DownloadItem>,
     game_dir: &Path,
@@ -398,14 +398,16 @@ fn push_missing_assets(
     verify: CompletionVerify,
 ) {
     for obj in content.objects.values() {
-        let dest = file_layout::asset_object(game_dir, &obj.hash);
-        if file_ok(&dest, Some(&obj.hash), Some(obj.size), verify) {
-            continue;
-        }
-        let Some(prefix) = obj.hash.get(..2) else {
+        // `asset_object` doubles as the validity gate (audit A3): None means
+        // the hash can't be addressed on disk or via the CDN URL.
+        let Some(dest) = file_layout::asset_object(game_dir, &obj.hash) else {
             tracing::warn!("Asset object with malformed hash skipped: {:?}", obj.hash);
             continue;
         };
+        if file_ok(&dest, Some(&obj.hash), Some(obj.size), verify) {
+            continue;
+        }
+        let prefix = &obj.hash[..2];
         items.push(DownloadItem {
             url: format!(
                 "https://resources.download.minecraft.net/{prefix}/{}",

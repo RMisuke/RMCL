@@ -201,21 +201,25 @@ pub(crate) fn parse_version_json(id: &str, json: &str) -> Result<GameVersion> {
     // Parse libraries — typed serde derive (G13). `Library` carries the full
     // field set (downloads / rules / extract / natives / checksums / MMC-hint /
     // MMC-filename), so a single `from_value` keeps a single source of truth.
+    // Unparseable entries are skipped with a warning: an empty-name
+    // `Library::default()` placeholder used to slip into classpaths and
+    // download lists (audit 2026-10-25, batch 1).
     let libraries: Vec<super::types::Library> = v["libraries"]
         .as_array()
         .map(|arr| {
             arr.iter()
-                .map(|lib| {
-                    serde_json::from_value::<super::types::Library>(lib.clone()).unwrap_or_else(
-                        |e| {
+                .filter_map(|lib| {
+                    match serde_json::from_value::<super::types::Library>(lib.clone()) {
+                        Ok(parsed) => Some(parsed),
+                        Err(e) => {
                             tracing::warn!(
                                 error = %e,
                                 lib = %lib["name"],
-                                "Failed to parse library entry"
+                                "Skipping unparseable library entry"
                             );
-                            super::types::Library::default()
-                        },
-                    )
+                            None
+                        }
+                    }
                 })
                 .collect()
         })

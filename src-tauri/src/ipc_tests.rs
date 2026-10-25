@@ -397,6 +397,25 @@ fn unknown_loader_type_is_rejected() {
     assert!(rmccc_modloader::ModLoaderType::from_str("").is_none());
 }
 
+#[test]
+fn incomplete_installers_are_not_installable() {
+    // A6：OptiFine / LiteLoader / Cleanroom 安装器未完成（审计 2026-10-25），
+    // install 流程（list=空列表 + install=快速失败）不得再提供它们；
+    // all() 仍包含全部 8 种供 analyzer 识别已安装实例。
+    use rmccc_modloader::ModLoaderType;
+    for offered in ModLoaderType::installable() {
+        assert!(offered.is_installable());
+    }
+    for hidden in ["optifine", "liteloader", "cleanroom"] {
+        let lt = ModLoaderType::from_str(hidden).expect("known loader type");
+        assert!(!lt.is_installable(), "{hidden} must not be installable yet");
+        assert!(
+            ModLoaderType::all().contains(&lt),
+            "{hidden} stays recognizable"
+        );
+    }
+}
+
 // ────────────────────────── 5. 正向契约：profile ──────────────────────────
 
 #[test]

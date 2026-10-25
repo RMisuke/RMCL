@@ -10,6 +10,16 @@
 
 ## 0. 更新记录
 
+**2026-10-25（审计整改批次 1 `fix/panic-guards`：输入校验止血 + 未完成加载器下架）**：
+
+- 后端五项修复（对应 [`audits/BACKEND_AUDIT_2026-10-25`](audits/BACKEND_AUDIT_2026-10-25/) 05 文档 A 批的止血子集）：
+  - **A3** `file_layout::asset_object` 短/畸形哈希切片 panic → 返回 `Option<PathBuf>`（40 位 hex 门禁）；`check_completion` 对畸形哈希在计数两侧同时跳过（避免"缺失"永远追不上"修复"）；`GameRepository::get_asset_object` trait 签名跟进。
+  - **A4** `CacheRepository::sha1_to_path` 缓存键零校验（路径注入/多字节 panic）→ 40 位 hex 校验：`check_by_sha1` 视为 miss、`store` 返回 InvalidInput。
+  - **A10** `replace_templates` 字节级 `as char`（非 ASCII 模板文本乱码）→ 按 UTF-8 char 整字拷贝；中文模板/替换值回归测试钉死。
+  - manifest.rs 解析失败的 library 由 `Library::default()` 空名占位（混入 classpath/下载列表）改为 **skip + warn**。
+  - **A6** OptiFine / LiteLoader / Cleanroom 安装器未完成（产物不可用）→ 新增 `ModLoaderType::installable()` 白名单：`modloader_list` 返回空列表（向导自然无版本可选）、`install_loader` 快速失败并指向审计报告；`all()` 保留全部 8 种供 analyzer 识别已安装实例。
+- 门禁：`cargo test --workspace` 42 套件全绿（0 failed，含新增 4 个回归测试）、`cargo fmt` 干净、`pnpm typecheck` 0 错误。前端零改动（另一会话进行中，未触碰其文件）。
+
 **2026-10-25（全量审计轮：后端/前端/HMCL 比对，未改代码）**：
 
 - 完成五路并行审计（crates 16 crate / src-tauri 99 命令 / 前端 / HMCL-main 功能盘点 /

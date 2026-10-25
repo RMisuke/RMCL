@@ -116,11 +116,32 @@ pub fn asset_index_file(game_dir: &Path, asset_id: &str) -> PathBuf {
 }
 
 /// `{game_dir}/assets/objects/{hash[0:2]}/{hash}`.
-pub fn asset_object(game_dir: &Path, hash: &str) -> PathBuf {
-    assets_dir(game_dir)
-        .join("objects")
-        .join(&hash[..2])
-        .join(hash)
+///
+/// Returns `None` unless `hash` is exactly 40 hex characters: asset indexes
+/// are downloaded data, and a malformed hash must be skipped by callers —
+/// never sliced into a panic nor joined into a traversable path
+/// (audit 2026-10-25 A3).
+pub fn asset_object(game_dir: &Path, hash: &str) -> Option<PathBuf> {
+    if !is_sha1_hex(hash) {
+        return None;
+    }
+    Some(
+        assets_dir(game_dir)
+            .join("objects")
+            .join(&hash[..2])
+            .join(hash),
+    )
+}
+
+/// `true` when `s` is exactly 40 ASCII hex characters (a SHA-1 digest).
+///
+/// Twin of the private predicate in `rmccc-download` — both crates consume
+/// hashes from downloaded manifests and must reject anything that is not a
+/// plain digest before it reaches a path join.
+fn is_sha1_hex(s: &str) -> bool {
+    s.len() == 40
+        && s.bytes()
+            .all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f' | b'A'..=b'F'))
 }
 
 /// `{game_dir}/assets/virtual/legacy` — pre-1.6 resource compatibility.
@@ -215,8 +236,10 @@ mod tests {
             Path::new("/tmp/rmccc-layout/game/assets/indexes/17.json")
         );
         assert_eq!(
-            asset_object(gd(), "a1b2c3"),
-            Path::new("/tmp/rmccc-layout/game/assets/objects/a1/a1b2c3")
+            asset_object(gd(), "a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0"),
+            Some(PathBuf::from(
+                "/tmp/rmccc-layout/game/assets/objects/a1/a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0"
+            ))
         );
         assert_eq!(
             asset_legacy_dir(gd()),
@@ -226,5 +249,14 @@ mod tests {
             launcher_profiles_path(gd()),
             Path::new("/tmp/rmccc-layout/game/launcher_profiles.json")
         );
+    }
+
+    #[test]
+    fn test_asset_object_rejects_malformed_hashes() {
+        // A3：短哈希 / 路径注入 / 多字节哈希一律 None，绝不 panic。
+        assert!(asset_object(gd(), "a").is_none());
+        assert!(asset_object(gd(), "../evil").is_none());
+        assert!(asset_object(gd(), &"日".repeat(40)).is_none());
+        assert!(asset_object(gd(), "").is_none());
     }
 }

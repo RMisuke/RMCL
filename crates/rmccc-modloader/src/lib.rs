@@ -85,7 +85,8 @@ impl ModLoaderType {
         }
     }
 
-    /// All supported types (for GUI dropdowns).
+    /// All known types — including analyzer-only recognition for instances
+    /// that already carry these loaders.
     pub fn all() -> &'static [Self] {
         &[
             Self::Fabric,
@@ -97,6 +98,28 @@ impl ModLoaderType {
             Self::Cleanroom,
             Self::LegacyFabric,
         ]
+    }
+
+    /// Loaders currently offered for **new installs**.
+    ///
+    /// OptiFine / LiteLoader / Cleanroom installers produce broken artifacts
+    /// today (audit 2026-10-25 A6: OptiFine never runs the patcher,
+    /// LiteLoader's library coordinates are unreachable, Cleanroom is a
+    /// stub). They stay in [`Self::all`] so the analyzer can recognize
+    /// already-installed instances, but install flows must not offer them.
+    pub fn installable() -> &'static [Self] {
+        &[
+            Self::Fabric,
+            Self::Forge,
+            Self::NeoForge,
+            Self::Quilt,
+            Self::LegacyFabric,
+        ]
+    }
+
+    /// Whether this loader can be installed right now (see [`Self::installable`]).
+    pub fn is_installable(&self) -> bool {
+        Self::installable().contains(self)
     }
 
     /// Display name for GUI.
@@ -273,6 +296,15 @@ impl DependencyManager {
         game_dir: &Path,
         java_path: &Path,
     ) -> Result<LoaderInstallOutcome> {
+        // A6 triage: incomplete installers fail fast with a clear message
+        // instead of "succeeding" into an unbootable instance.
+        if !loader_type.is_installable() {
+            return Err(RmcccError::Other(format!(
+                "{} installer is incomplete and disabled for new installs \
+                 (see docs/audits/BACKEND_AUDIT_2026-10-25, A6)",
+                loader_type.display_name()
+            )));
+        }
         if installer::needs_installer_jar(loader_type) {
             let runner = installer::InstallerJarRunner {
                 client: &self.client,

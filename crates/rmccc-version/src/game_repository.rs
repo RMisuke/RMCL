@@ -55,7 +55,9 @@ pub trait GameRepository: Send + Sync {
     fn get_asset_index_file(&self, id: &str) -> PathBuf;
 
     /// Asset object path (`assets/objects/{hash[0:2]}/{hash}`).
-    fn get_asset_object(&self, hash: &str) -> PathBuf;
+    ///
+    /// `None` for malformed hashes — see [`crate::file_layout::asset_object`].
+    fn get_asset_object(&self, hash: &str) -> Option<PathBuf>;
 
     /// Mods directory (run-dir dependent for isolated instances).
     fn get_mods_directory(&self, id: &str) -> PathBuf;

@@ -113,6 +113,17 @@ struct BatchState {
 // Follows HMCL's DefaultCacheRepository pattern:
 // cache_dir/objects/{sha1[0:2]}/{sha1}
 
+/// `true` when `s` is exactly 40 ASCII hex characters (a SHA-1 digest).
+///
+/// Twin of the private predicate in `rmccc-version::file_layout` — both
+/// crates consume hashes from downloaded manifests and must reject anything
+/// that is not a plain digest before it reaches a path join.
+fn is_sha1_hex(s: &str) -> bool {
+    s.len() == 40
+        && s.bytes()
+            .all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f' | b'A'..=b'F'))
+}
+
 /// SHA1-based file cache repository.
 ///
 /// Stores downloaded files keyed by SHA1 hash, enabling deduplication
@@ -137,9 +148,10 @@ impl CacheRepository {
     /// Look up a cached file by SHA1 hash.
     ///
     /// Returns `Some(path)` if the file exists in the cache,
-    /// `None` otherwise.
+    /// `None` otherwise. A malformed key (not 40 hex chars) is reported as a
+    /// cache miss, never as a panic or an out-of-`objects/` path.
     pub fn check_by_sha1(&self, sha1: &str) -> Option<PathBuf> {
-        let path = self.sha1_to_path(sha1);
+        let path = self.sha1_to_path(sha1)?;
         if path.exists() {
             let meta = std::fs::metadata(&path).ok()?;
             if meta.len() > 0 {
@@ -154,7 +166,12 @@ impl CacheRepository {
     /// Copies `src` to `cache_dir/objects/{sha1[0:2]}/{sha1}`.
     /// Returns the cached path.
     pub fn store(&self, src: &Path, sha1: &str) -> std::io::Result<PathBuf> {
-        let dest = self.sha1_to_path(sha1);
+        let dest = self.sha1_to_path(sha1).ok_or_else(|| {
+            std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "Invalid SHA1 cache key (expected 40 hex chars)",
+            )
+        })?;
         if dest.exists() {
             return Ok(dest); // already cached
         }
@@ -170,9 +187,15 @@ impl CacheRepository {
     }
 
     /// Convert a SHA1 hash to a cache file path.
-    fn sha1_to_path(&self, sha1: &str) -> PathBuf {
-        let prefix = &sha1[..2.min(sha1.len())];
-        self.cache_dir.join("objects").join(prefix).join(sha1)
+    ///
+    /// Returns `None` unless `sha1` is exactly 40 hex characters — the key
+    /// comes from downloaded manifests / mirror responses and must never
+    /// steer a read or write outside `objects/` (audit 2026-10-25 A4).
+    fn sha1_to_path(&self, sha1: &str) -> Option<PathBuf> {
+        if !is_sha1_hex(sha1) {
+            return None;
+        }
+        Some(self.cache_dir.join("objects").join(&sha1[..2]).join(sha1))
     }
 
     /// The cache directory root.
@@ -832,6 +855,25 @@ pub fn check_disk_space(dest: &Path, required_bytes: u64) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn cache_rejects_malformed_sha1_keys() {
+        // A4：缓存键来自下载的清单/镜像响应——短键、路径注入、多字节键
+        // 一律按 miss/错误处理，绝不 panic，也绝不指向 objects/ 之外。
+        let dir = std::env::temp_dir().join(format!("rmccc-cache-a4-{}", std::process::id()));
+        let repo = CacheRepository::new(dir.clone());
+
+        assert!(repo.check_by_sha1("ab").is_none());
+        assert!(repo.check_by_sha1("../evil").is_none());
+        assert!(repo.check_by_sha1(&"é".repeat(40)).is_none());
+        assert!(repo.check_by_sha1("https://mirror/x").is_none());
+        assert!(repo.store(Path::new("/nonexistent"), "../evil").is_err());
+        // 合法 40 位 hex 键不受影响（不存在的哈希 → miss）。
+        assert!(repo
+            .check_by_sha1("a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0")
+            .is_none());
+        let _ = std::fs::remove_dir_all(dir);
+    }
 
     #[test]
     fn test_retry_delay() {
