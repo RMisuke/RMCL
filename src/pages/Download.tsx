@@ -7,9 +7,9 @@ import type { JSX } from "solid-js";
 import { Show, For, createMemo, createSignal, createEffect, onMount, Switch, Match } from "solid-js";
 import { useNavigate, useSearchParams, useLocation } from "@solidjs/router";
 import { PageHeader } from "../components/PageHeader";
-import { RmButton, RmIconButton, RmInput, RmSelect, RmTag, RmProgress } from "../components/rm/controls";
+import { RmButton, RmIconButton, RmInput, RmSelect, RmTag, RmProgress, RmSwitch } from "../components/rm/controls";
 import { RmDialog } from "../components/rm/overlays";
-import { RmSideTabs, RmListRow, RmEmptyState, RmErrorState, RmCard } from "../components/rm/surfaces";
+import { RmSideTabs, RmListRow, RmEmptyState, RmErrorState, RmCard, RmFieldRow } from "../components/rm/surfaces";
 import { versions, profiles, modLoader, mods, instances, external } from "../ipc/api";
 import type {
   VersionInfo,
@@ -22,17 +22,19 @@ import type {
   Profile,
 } from "../ipc/types";
 import { profilesStore } from "../stores/profiles";
+import { cacheStore } from "../stores/cache";
 import { downloadsStore } from "../stores/downloads";
-import { uiStore, toast } from "../stores/ui";
+import { uiStore, toast, confirmDanger } from "../stores/ui";
 import { t } from "../i18n";
 import type { TranslationKey } from "../i18n/locales/messages";
-import { abbreviateCount, formatDate, initialOf } from "../lib/format";
+import { abbreviateCount, formatDate, initialOf, formatBytes } from "../lib/format";
 import { loaderLabel } from "../lib/loaders";
 
-const TABS: { id: string; icon: "download" | "package" | "layers"; label: TranslationKey }[] = [
+const TABS: { id: string; icon: "download" | "package" | "layers" | "wrench"; label: TranslationKey }[] = [
   { id: "install", icon: "download", label: "download.tab.install" },
   { id: "mods", icon: "package" as const, label: "download.tab.mods" },
   { id: "modpack", icon: "layers" as const, label: "download.tab.modpack" },
+  { id: "cache", icon: "wrench" as const, label: "download.tab.cache" },
 ];
 
 export default function Download(): JSX.Element {
@@ -61,6 +63,7 @@ export default function Download(): JSX.Element {
                 hint={t("download.modpack.hint")}
               />
             </Match>
+            <Match when={tab() === "cache"}><CacheManager /></Match>
           </Switch>
         </div>
       </div>
@@ -447,6 +450,10 @@ function ModStore(): JSX.Element {
       setResult(res.data);
       setPage(targetPage);
       setError(null);
+      // stale-while-revalidate：先显示缓存图，后台条件刷新本页可见图标。
+      for (const hit of res.data.hits) {
+        if (hit.icon_url) cacheStore.refreshIcon(hit.icon_url, "modicon");
+      }
     } else {
       setError(res.error.message);
     }
@@ -608,9 +615,7 @@ function ModStore(): JSX.Element {
               <RmListRow
                 icon={
                   <div class="mod-icon">
-                    <Show when={mod.icon_url} fallback={<span>{initialOf(mod.name)}</span>}>
-                      <img src={mod.icon_url!} alt="" loading="lazy" />
-                    </Show>
+                    <ModIcon url={mod.icon_url} name={mod.name} />
                   </div>
                 }
                 title={mod.name}
@@ -705,9 +710,7 @@ function ModDetail(props: {
       </button>
       <div class="mod-detail-head">
         <div class="mod-icon is-large">
-          <Show when={props.mod.icon_url} fallback={<span>{initialOf(props.mod.name)}</span>}>
-            <img src={props.mod.icon_url!} alt="" loading="lazy" />
-          </Show>
+          <ModIcon url={props.mod.icon_url} name={props.mod.name} />
         </div>
         <div>
           <h3>{props.mod.name}</h3>
@@ -762,5 +765,97 @@ function VersionRow(props: { version: ModVersion; onInstall: () => void; onCopyL
         </div>
       }
     />
+  );
+}
+
+
+// ── 图标缓存组件与缓存管理 ──
+
+/** 缓存协议优先、直连回退、首字母兜底的 Mod 图标。 */
+function ModIcon(props: { url: string | null; name: string }): JSX.Element {
+  const [stage, setStage] = createSignal<"cache" | "direct" | "none">("cache");
+  createEffect(() => {
+    void props.url;
+    setStage("cache");
+  });
+  const src = () => {
+    if (!props.url || stage() === "none") return null;
+    return stage() === "cache" ? cacheStore.iconSrc(props.url) : props.url;
+  };
+  return (
+    <Show when={src()} fallback={<span>{initialOf(props.name)}</span>}>
+      {(url) => (
+        <img
+          src={url()}
+          alt=""
+          loading="lazy"
+          onError={() => setStage(stage() === "cache" ? "direct" : "none")}
+        />
+      )}
+    </Show>
+  );
+}
+
+/** 缓存管理（下载页第四个 Tab）：开关 + 容量上限 + 当前大小/清理。 */
+function CacheManager(): JSX.Element {
+  onMount(() => void cacheStore.refreshStats());
+  const stats = () => cacheStore.stats();
+  const [maxMiB, setMaxMiB] = createSignal(1024);
+  createEffect(() => {
+    if (stats()) setMaxMiB(Math.round(stats()!.maxBytes / 1024 / 1024));
+  });
+
+  async function saveConfig(next: { enabled?: boolean; maxBytes?: number }): Promise<void> {
+    const ok = await cacheStore.setConfig(next);
+    if (!ok) toast({ message: t("cache.saveFailed"), tone: "error" });
+  }
+
+  async function clearCache(): Promise<void> {
+    const allowed = await confirmDanger({
+      title: t("cache.clear"),
+      body: t("cache.clearBody"),
+      confirmLabel: t("common.delete"),
+    });
+    if (!allowed) return;
+    if (await cacheStore.clearAll()) {
+      toast({ message: t("cache.cleared"), tone: "success" });
+    }
+  }
+
+  return (
+    <div class="tab-stack">
+      <RmCard title={t("cache.title")}>
+        <RmFieldRow label={t("cache.toggle")} hint={<span class="muted-line">{t("cache.tips")}</span>}>
+          <RmSwitch checked={stats()?.enabled ?? true} onChange={(v) => void saveConfig({ enabled: v })} />
+        </RmFieldRow>
+        <RmFieldRow label={t("cache.maxSize")}>
+          <div class="btn-row">
+            <input
+              class="rm-input"
+              type="number"
+              min={64}
+              style={{ width: "130px" }}
+              value={maxMiB()}
+              onInput={(e) => setMaxMiB(Number(e.currentTarget.value))}
+            />
+            <span class="muted-line">MiB</span>
+            <RmButton size="sm" onClick={() => void saveConfig({ maxBytes: Math.max(64, maxMiB()) * 1024 * 1024 })}>
+              {t("common.save")}
+            </RmButton>
+          </div>
+        </RmFieldRow>
+        <RmFieldRow label={t("cache.currentSize")}>
+          <div class="btn-row">
+            <span>
+              {formatBytes(stats()?.totalBytes ?? 0)} · {t("cache.entries", { n: stats()?.entries ?? 0 })}
+            </span>
+            <RmButton size="sm" variant="danger" icon="trash" onClick={() => void clearCache()}>
+              {t("cache.clear")}
+            </RmButton>
+          </div>
+        </RmFieldRow>
+        <div class="info-note">{t("cache.strategyNote")}</div>
+      </RmCard>
+    </div>
   );
 }

@@ -14,6 +14,7 @@ import { uiStore, toast } from "../stores/ui";
 import { t } from "../i18n";
 import type { TranslationKey } from "../i18n/locales/messages";
 import { describeExit } from "../lib/exitCodes";
+import { renderMarkdown } from "../lib/markdown";
 
 type LevelFilter = "all" | "info" | "warn" | "error";
 
@@ -53,6 +54,37 @@ export function LogDrawer(): JSX.Element {
   const analysis = () => aiStore.analysis();
   const aiConfigured = () => aiStore.config()?.configured ?? false;
   const [egressPrompt, setEgressPrompt] = createSignal(false);
+
+  // AI 分析展开窗（左侧独立面板，可拖宽度；默认 46% 宽，持久化）。
+  const [aiExpanded, setAiExpanded] = createSignal(false);
+  const AI_WIDTH_KEY = "rmccc.aiPaneWidth";
+  const initialAiWidth = (() => {
+    const stored = Number(localStorage.getItem(AI_WIDTH_KEY));
+    return Number.isFinite(stored) && stored >= 320 ? stored : Math.round(window.innerWidth * 0.46);
+  })();
+  const [aiWidth, setAiWidth] = createSignal(initialAiWidth);
+  let aiWindowEl: HTMLDivElement | undefined;
+
+  function startResize(e: PointerEvent): void {
+    const startX = e.clientX;
+    const startWidth = aiWidth();
+    const onMove = (ev: PointerEvent) => {
+      const next = startWidth + (ev.clientX - startX);
+      const clamped = Math.max(320, Math.min(next, window.innerWidth - 80));
+      setAiWidth(clamped);
+    };
+    const onUp = () => {
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", onUp);
+      try {
+        localStorage.setItem(AI_WIDTH_KEY, String(aiWidth()));
+      } catch {
+        /* 持久化失败仅影响下次默认宽度 */
+      }
+    };
+    window.addEventListener("pointermove", onMove);
+    window.addEventListener("pointerup", onUp);
+  }
 
   createEffect(() => {
     if (autoscroll() && scrollBox) {
@@ -178,19 +210,30 @@ export function LogDrawer(): JSX.Element {
                     {t("common.cancel")}
                   </RmButton>
                 </Show>
-              </div>
-              <div class="ai-panel-text">
-                <Show
-                  when={state().state !== "error"}
-                  fallback={<div class="ai-panel-error">{state().error}</div>}
+                <RmButton
+                  size="sm"
+                  variant="ghost"
+                  icon={aiExpanded() ? "chevron-down" : "chevron-right"}
+                  onClick={() => setAiExpanded(!aiExpanded())}
                 >
-                  {state().text}
-                  <Show when={state().state === "running"}>
-                    <span class="ai-cursor">▌</span>
-                  </Show>
-                </Show>
+                  {aiExpanded() ? t("logs.ai.collapse") : t("logs.ai.expand")}
+                </RmButton>
               </div>
-              <Show when={state().state === "done"}>
+              <Show when={!aiExpanded()}>
+                <div class="ai-panel-text">
+                  <Show
+                    when={state().state !== "error"}
+                    fallback={<div class="ai-panel-error">{state().error}</div>}
+                  >
+                    {/* 先转义后解析的安全 Markdown 渲染（lib/markdown），innerHTML 不可注入 */}
+                    <div class="ai-md" innerHTML={renderMarkdown(state().text)} />
+                    <Show when={state().state === "running"}>
+                      <span class="ai-cursor">▌</span>
+                    </Show>
+                  </Show>
+                </div>
+              </Show>
+              <Show when={!aiExpanded() && state().state === "done"}>
                 <div class="ai-panel-actions">
                   <RmButton
                     size="sm"
@@ -209,6 +252,61 @@ export function LogDrawer(): JSX.Element {
               </Show>
             </div>
           )}
+        </Show>
+
+        {/* AI 分析展开窗：左侧大面板（可拖右缘调宽），日志抽屉保持在右侧 */}
+        <Show when={analysis() && aiExpanded()}>
+          {(_) => {
+            const state = analysis()!;
+            return (
+              <div class="ai-window" ref={aiWindowEl} style={{ width: `${aiWidth()}px` }}>
+                <div class="ai-window-resize" onPointerDown={(e) => startResize(e)} />
+                <header class="ai-window-head">
+                  <Icon name="bot" size={16} />
+                  <span class="ai-window-title">{t("logs.ai.doneTitle")}</span>
+                  <span class="ai-panel-meta">
+                    {t("logs.ai.sentNote", { lines: String(state.sentLines) })}
+                  </span>
+                  <div class="btn-row">
+                    <RmButton
+                      size="sm"
+                      icon="copy"
+                      onClick={() => {
+                        void navigator.clipboard.writeText(state.text);
+                        toast({ message: t("logs.copied"), tone: "success" });
+                      }}
+                    >
+                      {t("logs.ai.copy")}
+                    </RmButton>
+                    <RmButton size="sm" icon="refresh" onClick={() => void startAnalysis()}>
+                      {t("logs.ai.retry")}
+                    </RmButton>
+                    <Show when={state.state === "running"}>
+                      <RmButton size="sm" variant="ghost" onClick={() => void aiStore.cancelAnalysis()}>
+                        {t("common.cancel")}
+                      </RmButton>
+                    </Show>
+                    <RmIconButton
+                      icon="x"
+                      label={t("logs.ai.collapse")}
+                      onClick={() => setAiExpanded(false)}
+                    />
+                  </div>
+                </header>
+                <div class="ai-window-body">
+                  <Show
+                    when={state.state !== "error"}
+                    fallback={<div class="ai-panel-error">{state.error}</div>}
+                  >
+                    <div class="ai-md" innerHTML={renderMarkdown(state.text)} />
+                    <Show when={state.state === "running"}>
+                      <span class="ai-cursor">▌</span>
+                    </Show>
+                  </Show>
+                </div>
+              </div>
+            );
+          }}
         </Show>
 
         <Show when={egressPrompt()}>

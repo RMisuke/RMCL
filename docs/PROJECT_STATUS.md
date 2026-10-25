@@ -10,6 +10,26 @@
 
 ## 0. 更新记录
 
+**2026-10-24（ui/home-hero-dock 轮：3D 皮肤预览根治 + 闪退修复 + 体积红线放宽）**：
+
+- **3D 皮肤预览（skinview3d）渲染架构定版**：canvas/viewer 归"常驻舞台层"
+  （`position:fixed`，挂在 `document.body`，应用生命周期一份）所有；组件挂载时
+  按占位元素矩形做几何同步（`syncRect`），卸载时隐藏舞台 + `renderPaused`。
+  **canvas 节点从不移动/重建**。此前两版（每页重建 / 单例 DOM re-attach）在
+  快速切页后空白：WKWebView 对 reparent 的 WebGL canvas 不重建合成层，
+  rAF 照跑、上下文活着但画面不上屏（日志 contextLost=false 可证）。
+- **切账户闪退修复**：日志三次 `panic in a function that cannot unwind`（abort）
+  均发生在 rmcccicon 协议请求风暴期间——快速切页/切账户时头像/皮肤重渲染
+  产生大量 scheme task start/stop 竞速，撞 wry 0.55.1 scheme responder 的
+  TOCTOU 缺陷。缓解三件套：协议响应 `Cache-Control: no-store → max-age=300`
+  （WebKit 内存缓存去重同 URL 重拉）、皮肤 blob URL 模块级记忆化、加载代际
+  保护（晚到的旧结果不覆盖新结果）。磁盘缓存仍是新鲜度权威。
+- **体积红线放宽（ADR-011 修订）**：strip 后主可执行 < **20 MiB**（原 10 MiB），
+  度量口径与门禁机制不变；AGENTS.md、ADR-007/011/012、DEVELOPMENT_PLAN 同步。
+- 顺带：账号页/主页滚动容器补 hover 裁剪余量；卡片阴影统一为
+  `--rmccc-shadow-card(-hover)` token；Toast 倒计时环改顺时针生长（修复底部
+  不显示）并去掉左侧强调条；全局输入框 48px→32px；AI 设置表单统一宽度上限。
+
 **2026-10-23（前端重构轮：ui-design 全面落地）**：按 `docs/ui-design/`（15 份）从零重写前端。
 
 - **架构**：`src/pages/`（7 页，路由级 lazy 分包）+ `src/stores/`（9 个领域 store +

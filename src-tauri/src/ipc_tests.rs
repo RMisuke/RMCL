@@ -147,7 +147,9 @@ fn ipc_command_count_is_stable() {
     // 86 → 84 → 93（ADR-013）：S7 移除 agent_* 9 条、新增 ai_* 5 + mods 2 条；
     // S4/S5 再新增 mcp_* 9 条（设计目标 93 条达成）。
     // → 94：auth_skin_url（头像由后端代理 sessionserver，规避 WebView CORS）。
-    assert_eq!(crate::handlers::IPC_COMMANDS.len(), 94);
+    // → 95：dialog_pick_directory（多游戏目录的路径选择）。
+    // → 99：cache_icon_* 4 条（图标缓存子系统）。
+    assert_eq!(crate::handlers::IPC_COMMANDS.len(), 99);
 }
 
 // ────────────────────────── 2. 错误码契约 ──────────────────────────

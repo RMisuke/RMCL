@@ -368,21 +368,27 @@ impl GameRepository for DefaultGameRepository {
                     }
                 }
             } else {
-                // Tolerate a mismatched JSON filename: use the single *.json in the folder.
+                // Tolerate a mismatched JSON filename — but only when the file
+                // actually looks like a version manifest. HMCL modpack folders
+                // keep config JSONs (emi.json / modrinth.index.json / …) that
+                // would otherwise parse into garbage instances (HMCL itself
+                // requires `<folder>/<folder>.json` strictly).
                 let fallback = std::fs::read_dir(&path).ok().and_then(|rd| {
                     rd.flatten()
                         .map(|e| e.path())
                         .find(|p| p.extension().and_then(|e| e.to_str()) == Some("json"))
                 });
                 match fallback {
-                    Some(fb) => match Self::read_instance_manifest(&fb, &folder_id) {
-                        Ok(m) => m,
-                        Err(e) => {
-                            tracing::warn!(folder = %folder_id, error = %e, "Skipping version");
-                            continue;
+                    Some(fb) if json_looks_like_version_manifest(&fb) => {
+                        match Self::read_instance_manifest(&fb, &folder_id) {
+                            Ok(m) => m,
+                            Err(e) => {
+                                tracing::warn!(folder = %folder_id, error = %e, "Skipping version");
+                                continue;
+                            }
                         }
-                    },
-                    None => continue,
+                    }
+                    _ => continue,
                 }
             };
 
@@ -589,6 +595,37 @@ fn copy_dir_recursive(from: &Path, to: &Path) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
+    // ── HMCL 兼容：额外目录扫描 + 整合包配置 json 不产生实例 ──
+
+    #[test]
+    fn hmcl_layout_scans_real_versions_and_skips_config_only_folders() {
+        let dir = std::env::temp_dir().join(format!("rmccc-hmcl-{}", std::process::id()));
+        let versions = dir.join("versions");
+        // 真实实例：目录名一致的 json（含 assetIndex 标记）。
+        let real = versions.join("1.21.1-NeoForge");
+        std::fs::create_dir_all(&real).unwrap();
+        std::fs::write(
+            real.join("1.21.1-NeoForge.json"),
+            r#"{"id":"1.21.1-NeoForge","assetIndex":{"id":"13"},"type":"release"}"#,
+        )
+        .unwrap();
+        std::fs::write(real.join("1.21.1-NeoForge.jar"), b"jar").unwrap();
+        // HMCL 整合包目录：只有配置 json（无版本标记）——不得成为实例。
+        let pack = versions.join("SomeModpack");
+        std::fs::create_dir_all(&pack).unwrap();
+        std::fs::write(
+            pack.join("emi.json"),
+            r#"{"bind":{},"crafting":{}}"#,
+        )
+        .unwrap();
+        let mut repo = super::DefaultGameRepository::new(dir.clone());
+        repo.refresh().expect("refresh");
+        let ids = repo.get_instance_ids();
+        assert_eq!(ids, vec!["1.21.1-NeoForge".to_string()]);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+
     use super::*;
     use crate::isolation::IsolationType;
 
@@ -775,4 +812,28 @@ mod tests {
         assert_eq!(resolved.launch.libraries.len(), 3); // vanilla + low + high
         let _ = std::fs::remove_dir_all(&dir);
     }
+}
+
+
+/// Heuristic: does this JSON actually describe a game version?
+///
+/// Used ONLY for the mismatched-filename fallback — any of the markers below
+/// distinguishes a real manifest from mod/config files that merely share the
+/// extension.
+fn json_looks_like_version_manifest(path: &std::path::Path) -> bool {
+    let Ok(text) = std::fs::read_to_string(path) else {
+        return false;
+    };
+    let Ok(v) = serde_json::from_str::<serde_json::Value>(&text) else {
+        return false;
+    };
+    v.get("assetIndex").is_some()
+        || v.get("arguments").is_some()
+        || v.get("minecraftArguments").is_some()
+        || v.get("inheritsFrom").is_some()
+        || v.get("downloads").is_some()
+        || v.get("libraries")
+            .and_then(|l| l.as_array())
+            .map(|a| !a.is_empty())
+            .unwrap_or(false)
 }

@@ -12,6 +12,37 @@ export const settingsStore = createRoot(() => {
   const [themePreference, setThemePreference] = createSignal<string | null>(null);
   const [loaded, setLoaded] = createSignal(false);
 
+  // ── 动态效果开关（宿主统一发布：主题/插件动画都必须跟随此状态）──
+  // 发布形式：<html data-motion="on|off"> + CSS 变量 --rmccc-motion-enabled；
+  // 主题类插件/自定义主题的动画一律以该状态为闸门，宿主动效（hero 流动层等）同源。
+  const MOTION_KEY = "rmccc.motionEnabled";
+
+  function readMotion(): boolean {
+    try {
+      return localStorage.getItem(MOTION_KEY) !== "0";
+    } catch {
+      return true;
+    }
+  }
+
+  function applyMotion(enabled: boolean): void {
+    document.documentElement.dataset.motion = enabled ? "on" : "off";
+    document.documentElement.style.setProperty("--rmccc-motion-enabled", enabled ? "1" : "0");
+  }
+
+  const [motionEnabled, setMotionEnabled_] = createSignal(readMotion());
+  applyMotion(motionEnabled());
+
+  function setMotionEnabled(enabled: boolean): void {
+    setMotionEnabled_(enabled);
+    applyMotion(enabled);
+    try {
+      localStorage.setItem(MOTION_KEY, enabled ? "1" : "0");
+    } catch {
+      /* 持久化失败仅影响下次启动的默认值 */
+    }
+  }
+
   async function refresh(): Promise<void> {
     const [cfg, usr, pref] = await Promise.all([
       settings.get(),
@@ -52,6 +83,8 @@ export const settingsStore = createRoot(() => {
     user,
     themePreference,
     loaded,
+    motionEnabled,
+    setMotionEnabled,
     refresh,
     update,
     updateUser,

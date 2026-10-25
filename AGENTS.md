@@ -4,13 +4,13 @@
 
 ## 项目概述
 
-RMCCC（Rust Minecraft Core Client）是一个纯 Rust 实现的 Minecraft 启动器，使用 Tauri 2.x + SolidJS 构建前端。目标：跨平台、< 10MB、可扩展。
+RMCCC（Rust Minecraft Core Client）是一个纯 Rust 实现的 Minecraft 启动器，使用 Tauri 2.x + SolidJS 构建前端。目标：跨平台、< 20MB、可扩展。
 
 ## 核心约束
 
 1. **设计文档优先**：所有架构决策记录在 `docs/ARCHITECTURE.md`，开发顺序见 `docs/DEVELOPMENT_PLAN.md`。代码实现必须与设计文档一致。如有冲突，以设计文档为准；若需变更设计，先更新文档再改代码。
 2. **Phase 顺序执行**：按 `DEVELOPMENT_PLAN.md` 中的 Phase 1→5 顺序开发。每个 Phase 完成后需通过验收标准才能进入下一个 Phase。
-3. **体积红线**：最终二进制（**strip 后的主可执行文件**）< **10 MiB**（1 MiB = 1,048,576 B），见 `docs/adr/ADR-011`。strip 失效时体积门禁判为 release-blocked，不得用未剥离数字宣称通过。添加新依赖前必须评估体积影响（`cargo bloat`）。
+3. **体积红线**：最终二进制（**strip 后的主可执行文件**）< **20 MiB**（1 MiB = 1,048,576 B），见 `docs/adr/ADR-011`（2026-10-24 由 10 MiB 放宽）。strip 失效时体积门禁判为 release-blocked，不得用未剥离数字宣称通过。添加新依赖前必须评估体积影响（`cargo bloat`）。
 4. **编码规范**：详见 `docs/AI_EDITING_RULES.md`。
 
 ## 关键技术决策（已确定）

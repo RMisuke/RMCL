@@ -20,6 +20,9 @@ pub fn generate_types() -> Result<String, String> {
 
     let types: Vec<String> = vec![
         ts::<rmccc_auth::AuthSession>()?,
+        ts::<crate::commands::auth::SkinTextures>()?,
+        ts::<crate::commands::cache::IconCacheStats>()?,
+        ts::<crate::commands::cache::IconFetchStatus>()?,
         ts::<rmccc_auth::AccountMetadata>()?,
         ts::<rmccc_profile::Profile>()?,
         ts::<rmccc_profile::ModLoaderConfig>()?,

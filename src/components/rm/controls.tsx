@@ -6,7 +6,7 @@
  * with a visible focus ring and labelled for a11y.
  */
 import type { JSX } from "solid-js";
-import { Show } from "solid-js";
+import { Show, createEffect } from "solid-js";
 import { Icon, type IconName } from "../icons";
 
 // ── Button ──
@@ -134,8 +134,17 @@ interface SelectProps {
 
 /** Native select wrapper (dropdown stays native — zero JS, themeable enough). */
 export function RmSelect(props: SelectProps): JSX.Element {
+  let el: HTMLSelectElement | undefined;
+  // options 重建（如探测刷新模型列表）时原生 <select> 会丢选中项；
+  // Solid 只在 value 变化时写 DOM，这里显式跟随 options 重设一次。
+  createEffect(() => {
+    void props.options.length;
+    const value = props.value;
+    if (el && el.value !== value) el.value = value;
+  });
   return (
     <select
+      ref={el}
       class="rm-select"
       value={props.value}
       disabled={props.disabled}

@@ -11,6 +11,8 @@ use crate::state::AppState;
 use chrono::{Duration, Utc};
 use rmccc_auth::{AccountMetadata, AuthSession, CreateAccountContext, REFRESH_WINDOW_SECS};
 use rmccc_error::IpcError;
+use serde::Serialize;
+use ts_rs::TS;
 use tauri::Emitter;
 
 /// Whether the session is at/after the advance-refresh window (or already
@@ -146,7 +148,7 @@ pub async fn auth_logout(state: tauri::State<'_, AppState>) -> Result<(), IpcErr
 /// 无皮肤/网络失败返回 None，前端回退首字母或 Steve。
 #[tauri::command]
 #[tracing::instrument]
-pub async fn auth_skin_url(uuid: String) -> Result<Option<String>, IpcError> {
+pub async fn auth_skin_url(uuid: String) -> Result<Option<SkinTextures>, IpcError> {
     let undashed = uuid.replace('-', "").to_lowercase();
     if undashed.len() != 32 || !undashed.chars().all(|c| c.is_ascii_hexdigit()) {
         return Ok(None);
@@ -189,11 +191,27 @@ pub async fn auth_skin_url(uuid: String) -> Result<Option<String>, IpcError> {
                 .ok()
                 .and_then(|bytes| serde_json::from_slice::<serde_json::Value>(&bytes).ok())
         });
-    let url = textures
-        .as_ref()
-        .and_then(|t| t["textures"]["SKIN"]["url"].as_str())
-        .map(|u| u.replacen("http://", "https://", 1));
-    Ok(url)
+    let pick = |key: &str| {
+        textures
+            .as_ref()
+            .and_then(|t| t["textures"][key]["url"].as_str())
+            .map(|u| u.replacen("http://", "https://", 1))
+    };
+    let skin = pick("SKIN");
+    let cape = pick("CAPE");
+    if skin.is_none() && cape.is_none() {
+        return Ok(None);
+    }
+    Ok(Some(SkinTextures { skin, cape }))
+}
+
+/// sessionserver 纹理信息：皮肤 + 披风（3D 预览共用一次请求）。
+#[derive(Debug, Clone, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "types.ts")]
+pub struct SkinTextures {
+    pub skin: Option<String>,
+    pub cape: Option<String>,
 }
 
 #[tauri::command]

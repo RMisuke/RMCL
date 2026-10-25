@@ -78,26 +78,50 @@ fn locked_error() -> IpcError {
 #[tracing::instrument(skip(state))]
 pub async fn instance_list(
     state: tauri::State<'_, AppState>,
+    root: Option<String>,
 ) -> Result<Vec<InstanceInfo>, IpcError> {
     let core = state.core.read().await;
-    let repo = core.game_repository.read().map_err(|_| locked_error())?;
-    let game_root = repo.game_dir().to_path_buf();
+    // 默认根：core 里已索引的主仓库；指定根：临时仓库只读扫描（多游戏目录）。
+    match root {
+        Some(root) if !root.trim().is_empty() => {
+            // 临时仓库不会自动扫描磁盘——必须 refresh() 才有 manifests
+            //（漏掉这一步就是"选了目录读不出实例"的根因）。
+            let mut repo = rmccc_version::DefaultGameRepository::new(std::path::PathBuf::from(root));
+            repo.refresh().map_err(IpcError::from)?;
+            Ok(list_instances(
+                &repo,
+                repo.game_dir(),
+                &core.platform.descriptor,
+            ))
+        }
+        _ => {
+            let repo = core.game_repository.read().map_err(|_| locked_error())?;
+            Ok(list_instances(&repo, repo.game_dir(), &core.platform.descriptor))
+        }
+    }
+}
 
+/// Shared listing over any repository view (primary root or an extra root).
+fn list_instances(
+    repo: &rmccc_version::DefaultGameRepository,
+    game_root: &std::path::Path,
+    platform: &rmccc_core::rmccc_platform::PlatformDescriptor,
+) -> Vec<InstanceInfo> {
     let ids = repo.get_instance_ids();
     let mut instances = Vec::with_capacity(ids.len());
     for id in ids {
         let resolved = repo.get_resolved(&id).ok();
         let game_version = repo.get_game_version(&id);
         let modded = repo.is_modded(&id);
-        let has_json = rmccc_version::file_layout::instance_json(&game_root, &id).exists();
-        let has_jar = rmccc_version::file_layout::instance_jar(&game_root, &id).exists();
+        let has_json = rmccc_version::file_layout::instance_json(game_root, &id).exists();
+        let has_jar = rmccc_version::file_layout::instance_jar(game_root, &id).exists();
         let missing_count = resolved
             .as_ref()
             .map(|r| {
                 rmccc_version::completion::check_completion(
-                    &game_root,
+                    game_root,
                     r,
-                    &core.platform.descriptor,
+                    platform,
                     rmccc_version::completion::CompletionVerify::Size,
                 )
                 .len()
@@ -112,7 +136,7 @@ pub async fn instance_list(
             missing_count,
         });
     }
-    Ok(instances)
+    instances
 }
 
 #[tauri::command]

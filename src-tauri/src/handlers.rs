@@ -13,6 +13,11 @@ use crate::commands;
 #[cfg_attr(not(test), allow(dead_code))]
 pub const IPC_COMMANDS: &[&str] = &[
     "open_external_url",
+    "dialog_pick_directory",
+    "cache_icon_fetch",
+    "cache_icon_stats",
+    "cache_icon_set_config",
+    "cache_icon_clear",
     "auth_microsoft_login",
     "auth_offline_login",
     "auth_logout",
@@ -122,6 +127,11 @@ pub fn invoke_handlers() -> impl Fn(tauri::ipc::Invoke<tauri::Wry>) -> bool + Se
     tauri::generate_handler![
         // ── external ──
         commands::external::open_external_url,
+        commands::external::dialog_pick_directory,
+        commands::cache::cache_icon_fetch,
+        commands::cache::cache_icon_stats,
+        commands::cache::cache_icon_set_config,
+        commands::cache::cache_icon_clear,
         // ── auth ──
         commands::auth::auth_microsoft_login,
         commands::auth::auth_offline_login,

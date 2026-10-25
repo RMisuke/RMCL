@@ -24,6 +24,7 @@ export type IconName =
   | "x"
   | "check"
   | "chevron-down"
+  | "chevron-up"
   | "chevron-right"
   | "chevron-left"
   | "more-horizontal"
@@ -71,6 +72,7 @@ const PATHS: Record<IconName, string> = {
   x: "M6 6l12 12M18 6 6 18",
   check: "M4.5 12.5 10 18 19.5 6.5",
   "chevron-down": "M6 9.5l6 6 6-6",
+  "chevron-up": "M6 14.5l6-6 6 6",
   "chevron-right": "M9.5 6l6 6-6 6",
   "chevron-left": "M14.5 6l-6 6 6 6",
   "more-horizontal": "M5.5 12h.01M12 12h.01M18.5 12h.01",

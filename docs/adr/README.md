@@ -20,7 +20,7 @@
 | [ADR-007](ADR-007-logic-runtime.md) | 逻辑插件运行时：独立宿主进程 + WASM 解释执行 | **accepted**（2026-10-21，含 PoC 实测） | Phase 5 | 指南 §6.2/§6.3/§17；ADR-003/006/011 |
 | [ADR-009](ADR-009-credential-storage.md) | 凭据存储：AES-256-GCM 文件 vault 为首选，系统密钥链可替换 | **accepted**（2026-10-22） | Phase 6 | 指南 §10.4/§12.1；ADR-011 |
 | [ADR-010](ADR-010-agent-session-audit-privacy.md) | Agent 会话、工具审计与隐私边界 | **accepted**（2026-10-22；部分被 ADR-013 修订） | Phase 6 | 指南 §10.1/§10.2/§10.5/§12.1；ADR-009 |
-| [ADR-011](ADR-011-binary-size-metric.md) | &lt;10 MB 的具体度量对象与门禁 | **accepted** | Phase 0 | AGENTS.md 体积红线；审计 §15.5 |
+| [ADR-011](ADR-011-binary-size-metric.md) | 主可执行体积门禁：度量对象与阈值（2026-10-24 起 < 20 MiB） | **accepted** | Phase 0 | AGENTS.md 体积红线；审计 §15.5 |
 | [ADR-012](ADR-012-macos-intel-build.md) | macOS Intel 的 runner、打包和最低系统版本 | proposed | Phase 0 | 指南 §5.1、§16.3 |
 | [ADR-013](ADR-013-lightweight-ai-and-external-mcp.md) | 轻干预 AI 架构：内部 LLM 服务 + 外部 MCP 控制（内建 Agent 退役） | **accepted**（2026-10-23） | Phase 6→AI/MCP | `../AI_AND_MCP_ARCHITECTURE.md`；ADR-009/010（修订）/011；`../ui-design/07_AI_AND_MCP.md` |
 

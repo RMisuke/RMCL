@@ -3623,6 +3623,7 @@ dependencies = [
  "rmccc-version",
  "serde",
  "serde_json",
+ "sha1",
  "tauri",
  "tauri-build",
  "tauri-plugin-dialog",
