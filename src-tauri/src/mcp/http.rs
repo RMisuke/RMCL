@@ -62,7 +62,10 @@ pub(super) async fn serve(
                 };
                 let io = hyper_util::rt::TokioIo::new(stream);
                 tokio::spawn(async move {
+                    // B9：挂 timer 启用 hyper 的 header 读超时——只连不发的
+                    // 慢速连接不再无限占住任务（回环-only 下仅防资源累积）。
                     let _ = hyper::server::conn::http1::Builder::new()
+                        .timer(hyper_util::rt::TokioTimer::new())
                         .serve_connection(io, service)
                         .await;
                 });

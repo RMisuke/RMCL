@@ -106,19 +106,20 @@ pub async fn auth_offline_login(
     state: tauri::State<'_, AppState>,
     username: String,
 ) -> Result<AuthSession, IpcError> {
-    if username.trim().is_empty() {
-        return Err(IpcError {
-            code: rmccc_error::ErrorCode::ValidationError,
-            message: "Username cannot be empty".to_string(),
-            retryable: false,
-        });
-    }
-    if username.len() > 32 {
+    // B8：Minecraft 离线名的官方字符集/长度约束——用户名会进
+    // `--username ${auth_player_name}` JVM 参数与 @argfile，含引号/空格/
+    // 控制字符的名字会破坏参数结构（审计 2026-10-25）。
+    let trimmed = username.trim();
+    let valid_name = !trimmed.is_empty()
+        && trimmed.len() <= 16
+        && trimmed
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '_');
+    if !valid_name {
         return Err(IpcError {
             code: rmccc_error::ErrorCode::ValidationError,
             message: format!(
-                "Username too long (max 32 characters, got {})",
-                username.len()
+                "Invalid Minecraft username '{trimmed}' (must be 1-16 chars of [A-Za-z0-9_])"
             ),
             retryable: false,
         });

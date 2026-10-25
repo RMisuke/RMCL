@@ -52,6 +52,8 @@ mod unsupported;
 pub use descriptor::{PlatformArch, PlatformDescriptor, PlatformOs};
 pub use fs::PlatformFs;
 pub use java::{JavaDetector, JavaInstallation};
+#[cfg(target_os = "macos")]
+pub use macos::MacosFs;
 pub use process::{PlatformProcessControl, ProcessPriority};
 pub use shell::PlatformShell;
 

@@ -37,6 +37,13 @@ pub trait PlatformFs: Send + Sync {
     /// 需要 `ReplaceFileW`/`MoveFileEx` 语义——因此这是平台差异，必须经适配层。
     /// 调用方负责在失败时保留旧文件（`to` 不应被提前删除）。
     fn atomic_replace(&self, from: &Path, to: &Path) -> Result<()>;
+
+    /// 以"仅属主可读写"（Unix `0600`）**一步创建**敏感文件并写入内容。
+    ///
+    /// 与"先 `write` 后 `restrict_owner_only`"的两步法不同：文件从诞生的
+    /// 第一刻起就是 0600，不存在先全局可读再收紧的权限窗口（审计 2026-10-25
+    /// B1：vault key 曾有这个窗口）。目标已存在时返回错误（调用方应先读）。
+    fn create_owner_only(&self, path: &Path, contents: &[u8]) -> Result<()>;
 }
 
 /// 后端标识（日志 / 诊断）。

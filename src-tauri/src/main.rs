@@ -118,6 +118,9 @@ fn main() {
 
     // P2-15：启动时生成/刷新 src/ipc/types.ts（ts-rs 自动类型桥接）。
     // 生成失败仅告警不阻塞启动（types.ts 缺失时前端 typecheck 会暴露）。
+    // B5：**仅 dev 构建**写盘——release 的 CARGO_MANIFEST_DIR 指向构建机路径，
+    // 用户机器上恰好存在同路径源码树时会被生产进程改写。
+    #[cfg(debug_assertions)]
     if let Err(e) = bindings::write_types_file() {
         tracing::warn!(error = ?e, "Failed to write TS bindings types.ts");
     }

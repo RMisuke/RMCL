@@ -10,6 +10,19 @@
 
 ## 0. 更新记录
 
+**2026-10-25（审计整改批次 6 `fix/security-hygiene`：B 批安全专项）**：
+
+- **B1 vault key 权限窗口**：`PlatformFs` 新增 `create_owner_only`（Unix `OpenOptions::mode(0o600)` 一步创建，文件从诞生第一刻即 0600）；vault 改用它——此前"先 `fs::write`（0644 可读）后收紧"存在同机其他用户可读的窗口。macos/unsupported/mock 三个后端实现，`MacosFs` 顺手转 pub（测试需要）。
+- **B7 日志脱敏**：microsoft.rs 的 XBL/XSTS/refresh 三处错误响应体改经 `redact_body`（此前仅 device code 一处脱敏）。
+- **B8 离线用户名校验**：`auth_offline_login` 强制 `[A-Za-z0-9_]{1,16}`（Minecraft 官方约束）——用户名会进 `--username` JVM 参数与 @argfile，含引号/空格的名字会破坏参数结构。
+- **B2 id 防穿越三处接线**：`validate_profile_id`（profile get/save/delete 前置，`[A-Za-z0-9_.-]{1,64}` 且拒绝 `..`）；version 仓库的 rename/duplicate/remove 校验实例 id（非空、无路径分隔符、非 `.`/`..`、无控制字符——实例名允许空格故不做字母数字白名单）；dashboard 的 load/save/reset 校验 layout_id。**safe_join 文档纠正**：不再自称"全工程防穿越统一入口"（防护点在各 IPC 边界）。
+- **B10 profile delete 守卫**：`cleanup_game_dir` 在共享根检查之外新增 `looks_like_game_dir` 标记校验（assets/saves/mods/resourcepacks/shaderpacks/options.txt 等）——game_dir 被手工改写指向 `~/Documents` 之类时绝不能整树删除（此前唯一防护是 versions/|libraries/ 存在与否）。
+- **B4 capabilities 收窄**：移除 `opener:default`（此前授权前端 JS 无 scope 调 open_url + reveal 任意路径，绕过 `open_external_url` 的 http/https 闸）；Rust 侧 `tauri_plugin_opener::open_url` 不经该 capability，不受影响。
+- **B5 types.ts 写盘限 debug**：main.rs 的 `write_types_file` 挂 `#[cfg(debug_assertions)]`——release 进程不再可能经构建机路径改写源码树。
+- **B6 ui_http_client**：构建失败向上传播（`Client::new()` 兜底会跟随重定向，"30x 不逃出域名白名单"保证失效）。
+- **B9 MCP 会话三补**：`require_session` 校验会话**已登记**（此前只验头非空，伪造 id 可无限 tools/list）；会话空闲 30 分钟自动回收（4 槽位不再可被占满，回收发 GUI 事件）；hyper 连接挂 `TokioTimer` 启用 header 读超时。新增 3 个会话测试；`McpHandle::app()` 改 Option 化（无句柄时跳过事件而非 panic，测试可直连）。
+- 门禁：`cargo test --workspace` 45 套件 0 失败、clippy 0 警告、fmt 干净、`pnpm typecheck` 0 错误。
+
 **2026-10-25（审计整改批次 5 `fix/launch-args`：启动参数正确性，A8/A9 + kill 统一）**：
 
 - **A9 legacy 参数翻倍**：`generate_command_line` 的三种 game args 来源改为互斥——

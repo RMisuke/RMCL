@@ -90,6 +90,8 @@ pub struct Session {
     pub client: String,
     pub connected_at: String,
     calls: VecDeque<Instant>,
+    /// 最近一次活动时刻（B9：空闲回收的判定位）。
+    last_activity: Instant,
 }
 
 /// 服务器运行态（`enabled = true` 时存在）。
@@ -247,12 +249,19 @@ impl McpHandle {
 
     // ── 会话 ──
 
+    /// 会话空闲多久后被回收（B9：此前 4 个槽位可被只 initialize 不用的
+    /// 客户端永久占满，只能靠重启/换 token 清理）。
+    const SESSION_IDLE_TIMEOUT: Duration = Duration::from_secs(30 * 60);
+
     /// `initialize` 时登记会话；并发超限返回错误。
     pub fn register_session(&self, session_id: String, client: String) -> Result<()> {
         let mut inner = self.inner.lock().unwrap_or_else(|p| p.into_inner());
         let Some(running) = inner.running.as_mut() else {
             return Err(RmcccError::Validation("MCP server is not running".into()));
         };
+        // B9：登记前先回收空闲会话，腾出槽位（对 GUI 无感——断开的会话
+        // 本来就该消失）。
+        Self::sweep_idle_sessions(running, &self.app);
         if running.sessions.len() >= MAX_SESSIONS {
             return Err(RmcccError::Validation(format!(
                 "too many MCP sessions (max {MAX_SESSIONS})"
@@ -264,11 +273,50 @@ impl McpHandle {
                 client,
                 connected_at: chrono::Utc::now().to_rfc3339(),
                 calls: VecDeque::new(),
+                last_activity: Instant::now(),
             },
         );
         drop(inner);
         self.emit_session(&session_id, "connected");
         Ok(())
+    }
+
+    /// 回收超过空闲阈值的会话并广播断开事件（B9）。
+    fn sweep_idle_sessions(
+        running: &mut Running,
+        app: &std::sync::Mutex<Option<tauri::AppHandle>>,
+    ) {
+        let now = Instant::now();
+        let expired: Vec<String> = running
+            .sessions
+            .iter()
+            .filter(|(_, s)| now.duration_since(s.last_activity) > Self::SESSION_IDLE_TIMEOUT)
+            .map(|(id, _)| id.clone())
+            .collect();
+        for id in expired {
+            running.sessions.remove(&id);
+            tracing::info!(session = %id, "MCP session reaped (idle timeout)");
+            if let Ok(guard) = app.lock() {
+                if let Some(app) = guard.as_ref() {
+                    let _ = app.emit(
+                        "mcp://session-disconnected",
+                        serde_json::json!({ "session_id": id, "reason": "idle-timeout" }),
+                    );
+                }
+            }
+        }
+    }
+
+    /// 会话是否已登记（B9：ping/tools/list 此前只验头非空，持 token 者可用
+    /// 伪造 session id 无限调用 tools/list 绕过会话语义）。
+    pub fn session_exists(&self, session_id: &str) -> bool {
+        let mut inner = self.inner.lock().unwrap_or_else(|p| p.into_inner());
+        let Some(running) = inner.running.as_mut() else {
+            return false;
+        };
+        // 存在性查询顺带做空闲回收（低频路径，无额外开销）。
+        Self::sweep_idle_sessions(running, &self.app);
+        running.sessions.contains_key(session_id)
     }
 
     /// 限速检查（每会话 60 次/分钟）+ 活跃心跳。
@@ -296,6 +344,7 @@ impl McpHandle {
             )));
         }
         session.calls.push_back(now);
+        session.last_activity = now;
         Ok(())
     }
 
@@ -352,24 +401,23 @@ impl McpHandle {
                 .map(|s| s.client.clone())
                 .unwrap_or_default()
         };
-        let _ = self.app().emit(
-            events::MCP_SESSION,
-            &events::McpSessionPayload {
-                kind: kind.to_string(),
-                session_id: session_id.to_string(),
-                client,
-            },
-        );
+        let _ = self.app().as_ref().map(|a| {
+            a.emit(
+                events::MCP_SESSION,
+                &events::McpSessionPayload {
+                    kind: kind.to_string(),
+                    session_id: session_id.to_string(),
+                    client,
+                },
+            )
+        });
     }
 
-    fn app(&self) -> tauri::AppHandle {
+    fn app(&self) -> Option<tauri::AppHandle> {
         // 会话/确认事件需要在无 AppHandle 引用的方法里发射；
-        // 句柄在 AppState::new 时注入（见 `set_app`）。
-        self.app
-            .lock()
-            .unwrap_or_else(|p| p.into_inner())
-            .clone()
-            .expect("McpHandle app handle must be set before serving")
+        // 句柄在 AppState::new 时注入（见 `set_app`）。无句柄（单元测试 /
+        // set_app 之前的极早窗口）时静默跳过事件——会话语义不依赖它。
+        self.app.lock().unwrap_or_else(|p| p.into_inner()).clone()
     }
 
     // ── 策略 ──
@@ -439,15 +487,17 @@ impl McpHandle {
                 },
             );
         }
-        let _ = self.app().emit(
-            events::MCP_CONFIRMATION,
-            &events::McpConfirmationPayload {
-                kind: "requested".into(),
-                confirmation_id: id,
-                tool: tool.to_string(),
-                session_id: Some(session_id.to_string()),
-            },
-        );
+        let _ = self.app().as_ref().map(|a| {
+            a.emit(
+                events::MCP_CONFIRMATION,
+                &events::McpConfirmationPayload {
+                    kind: "requested".into(),
+                    confirmation_id: id,
+                    tool: tool.to_string(),
+                    session_id: Some(session_id.to_string()),
+                },
+            )
+        });
         Ok((snapshot.task_id.clone(), snapshot, rx))
     }
 
@@ -463,15 +513,17 @@ impl McpHandle {
                 None => return false,
             }
         };
-        let _ = self.app().emit(
-            events::MCP_CONFIRMATION,
-            &events::McpConfirmationPayload {
-                kind: "resolved".into(),
-                confirmation_id: id.to_string(),
-                tool: tool.to_string(),
-                session_id: Some(session_id),
-            },
-        );
+        let _ = self.app().as_ref().map(|a| {
+            a.emit(
+                events::MCP_CONFIRMATION,
+                &events::McpConfirmationPayload {
+                    kind: "resolved".into(),
+                    confirmation_id: id.to_string(),
+                    tool: tool.to_string(),
+                    session_id: Some(session_id),
+                },
+            )
+        });
         true
     }
 
@@ -522,5 +574,113 @@ impl McpHandle {
         let mut records = self.audit.read_all()?;
         let start = records.len().saturating_sub(limit);
         Ok(records.split_off(start))
+    }
+}
+
+#[cfg(test)]
+mod session_tests {
+    use super::*;
+    use std::sync::Arc;
+
+    fn test_handle() -> Arc<McpHandle> {
+        let dir = std::env::temp_dir().join(format!(
+            "rmccc-mcp-session-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        Arc::new(McpHandle::new(&dir, Arc::new(rmccc_core::rmccc_platform::MacosFs)).unwrap())
+    }
+
+    /// 直接注入 Running 态（不起 HTTP 任务）：register/session_exists 只依赖它。
+    fn inject_running(handle: &McpHandle) {
+        let (shutdown_tx, _shutdown_rx) = tokio::sync::watch::channel(false);
+        handle.inner.lock().unwrap().running = Some(Running {
+            port: 0,
+            token: "test-token".into(),
+            shutdown: shutdown_tx,
+            sessions: HashMap::new(),
+        });
+    }
+
+    /// B9：ping/tools/list 的会话校验依据——未登记的 session id 必须判否。
+    #[test]
+    fn session_exists_requires_registered_session() {
+        let handle = test_handle();
+        // 未运行 → 一律 false。
+        assert!(!handle.session_exists("mcp-fake"));
+        inject_running(&handle);
+
+        assert!(
+            !handle.session_exists("mcp-fake"),
+            "伪造 session id 必须判否"
+        );
+        handle
+            .register_session("mcp-real".into(), "client".into())
+            .unwrap();
+        assert!(handle.session_exists("mcp-real"));
+        assert!(!handle.session_exists(""));
+    }
+
+    /// B9：空闲超过阈值的会话被回收，腾出槽位。
+    #[test]
+    fn idle_sessions_are_reaped() {
+        let handle = test_handle();
+        inject_running(&handle);
+
+        handle
+            .register_session("mcp-stale".into(), "old".into())
+            .unwrap();
+        // 把 last_activity 拨回阈值之外（同模块可直接构造）。
+        {
+            let mut inner = handle.inner.lock().unwrap();
+            let running = inner.running.as_mut().unwrap();
+            let mut stale = running.sessions.remove("mcp-stale").unwrap();
+            stale.last_activity =
+                Instant::now() - McpHandle::SESSION_IDLE_TIMEOUT - Duration::from_secs(1);
+            running.sessions.insert("mcp-stale".into(), stale);
+        }
+        // 第一次存在性查询即触发回收（sweep 内联在 session_exists 里）。
+        assert!(!handle.session_exists("mcp-stale"), "空闲会话必须被回收");
+
+        // 新会话正常登记，且活跃会话不被误收。
+        handle
+            .register_session("mcp-live".into(), "new".into())
+            .unwrap();
+        assert!(handle.session_exists("mcp-live"));
+        assert!(handle.session_exists("mcp-live"), "活跃会话不被回收");
+    }
+
+    /// B9：占满槽位的旧客户端被回收后，新客户端能 register（此前只能重启）。
+    #[test]
+    fn reaped_slots_free_capacity() {
+        let handle = test_handle();
+        inject_running(&handle);
+
+        for i in 0..MAX_SESSIONS {
+            handle
+                .register_session(format!("mcp-s{i}"), "hog".into())
+                .unwrap();
+        }
+        // 槽位满。
+        assert!(handle
+            .register_session("mcp-extra".into(), "new".into())
+            .is_err());
+
+        // 全部拨成过期 → 下一次登记前回收腾位。
+        {
+            let mut inner = handle.inner.lock().unwrap();
+            let running = inner.running.as_mut().unwrap();
+            for s in running.sessions.values_mut() {
+                s.last_activity =
+                    Instant::now() - McpHandle::SESSION_IDLE_TIMEOUT - Duration::from_secs(1);
+            }
+        }
+        handle
+            .register_session("mcp-extra".into(), "new".into())
+            .expect("reaped slots must free capacity");
     }
 }

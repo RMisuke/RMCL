@@ -51,6 +51,12 @@ impl PlatformFs for UnsupportedFs {
         // TODO(linux): 与 macOS 相同的 rename(2)，可直接复用。
         Err(unsupported("原子替换文件"))
     }
+
+    fn create_owner_only(&self, _path: &Path, _contents: &[u8]) -> Result<()> {
+        // TODO(windows): OpenOptions + ACL 收紧。
+        // TODO(linux): OpenOptionsExt::mode(0o600)，与 macOS 同一实现。
+        Err(unsupported("创建仅属主可读文件"))
+    }
 }
 
 /// 未实现平台的进程控制后端。

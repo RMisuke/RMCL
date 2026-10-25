@@ -19,6 +19,7 @@ pub enum MockCall {
     Symlink(String, String),
     RemoveSymlink(String),
     AtomicReplace(String, String),
+    CreateOwnerOnly(String),
     TerminateTree(u32),
     SetPriority(u32, ProcessPriority),
     ConfigureProcessGroup,
@@ -137,6 +138,12 @@ impl PlatformFs for MockPlatform {
         ))?;
         // Mock 需要真的完成替换，否则调用方的断言会失败。
         std::fs::rename(from, to)?;
+        Ok(())
+    }
+
+    fn create_owner_only(&self, path: &Path, contents: &[u8]) -> Result<()> {
+        self.record(MockCall::CreateOwnerOnly(path.display().to_string()))?;
+        std::fs::write(path, contents)?;
         Ok(())
     }
 }

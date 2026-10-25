@@ -15,6 +15,24 @@ pub struct LayoutStore {
     fs: Arc<dyn PlatformFs>,
 }
 
+/// B2：layout_id 直接进 `{layouts_dir}/{id}.json` 拼接，入口来自 IPC——
+/// 只允许内部 id 形态（`[A-Za-z0-9_-]{1,64}`），拒绝路径注入
+/// （审计 2026-10-25）。
+fn validate_layout_id(id: &str) -> Result<()> {
+    let ok = !id.is_empty()
+        && id.len() <= 64
+        && id
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_');
+    if ok {
+        Ok(())
+    } else {
+        Err(rmccc_error::RmcccError::Validation(format!(
+            "invalid layout id: {id:?}"
+        )))
+    }
+}
+
 impl LayoutStore {
     pub fn new(data_dir: &Path, fs: Arc<dyn PlatformFs>) -> Self {
         Self {
@@ -41,6 +59,7 @@ impl LayoutStore {
         layout_id: &str,
         constraints: &ConstraintMap,
     ) -> Result<(DashboardLayout, NormalizationResult)> {
+        validate_layout_id(layout_id)?;
         std::fs::create_dir_all(&self.layouts_dir)?;
         let path = self.layouts_dir.join(format!("{layout_id}.json"));
 
@@ -91,6 +110,7 @@ impl LayoutStore {
         constraints: &ConstraintMap,
     ) -> Result<NormalizationResult> {
         let result = normalize(layout, constraints);
+        validate_layout_id(&result.layout.layout_id)?;
         std::fs::create_dir_all(&self.layouts_dir)?;
         let path = self
             .layouts_dir

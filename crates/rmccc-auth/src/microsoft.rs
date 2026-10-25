@@ -194,7 +194,8 @@ impl MicrosoftAuthProvider {
         if !resp.status().is_success() {
             let status = resp.status();
             let body = resp.text().await.unwrap_or_default();
-            tracing::error!(status = %status, body = %body, "XBL auth failed");
+            let redacted = redact_body(&body, 512);
+            tracing::error!(status = %status, body = %redacted, "XBL auth failed");
             return Err(RmcccError::AuthFailed(format!(
                 "XBL auth failed: HTTP {status}"
             )));
@@ -231,7 +232,8 @@ impl MicrosoftAuthProvider {
         let status = resp.status();
         if !status.is_success() {
             let body = resp.text().await.unwrap_or_default();
-            tracing::error!(status = %status, body = %body, "XSTS auth failed");
+            let redacted = redact_body(&body, 512);
+            tracing::error!(status = %status, body = %redacted, "XSTS auth failed");
 
             if status.as_u16() == 401 {
                 return Err(RmcccError::AuthFailed(
@@ -364,7 +366,8 @@ impl AuthProvider for MicrosoftAuthProvider {
         let status = resp.status();
         if !status.is_success() {
             let body = resp.text().await.unwrap_or_default();
-            tracing::error!(status = %status, body = %body, "Token refresh failed");
+            let redacted = redact_body(&body, 512);
+            tracing::error!(status = %status, body = %redacted, "Token refresh failed");
             return Err(RmcccError::TokenExpired);
         }
 

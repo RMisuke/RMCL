@@ -232,6 +232,27 @@ impl DefaultGameRepository {
     }
 }
 
+/// B2：实例 id 直接进 `versions/` 路径拼接，且 rename/duplicate/remove 的
+/// 入口来自 IPC（用户可起含空格的名字，因此不能像 profile 一样只允许
+/// `[A-Za-z0-9_-]`）——安全边界是"必须是单个合法文件名"：非空、无路径
+/// 分隔符、不是 `.`/`..`、无控制字符（审计 2026-10-25）。
+pub(crate) fn validate_instance_id(id: &str) -> Result<()> {
+    let ok = !id.is_empty()
+        && id.len() <= 128
+        && id != "."
+        && id != ".."
+        && !id.contains('/')
+        && !id.contains('\\')
+        && !id.chars().any(char::is_control);
+    if ok {
+        Ok(())
+    } else {
+        Err(RmcccError::Validation(format!(
+            "invalid instance id: {id:?}"
+        )))
+    }
+}
+
 impl GameRepository for DefaultGameRepository {
     fn game_dir(&self) -> &Path {
         &self.base_directory
@@ -409,6 +430,8 @@ impl GameRepository for DefaultGameRepository {
     }
 
     fn rename_instance(&mut self, from: &str, to: &str) -> Result<()> {
+        validate_instance_id(from)?;
+        validate_instance_id(to)?;
         if from == to {
             return Ok(());
         }
@@ -442,6 +465,8 @@ impl GameRepository for DefaultGameRepository {
     }
 
     fn duplicate_instance(&mut self, from: &str, to: &str) -> Result<()> {
+        validate_instance_id(from)?;
+        validate_instance_id(to)?;
         if from == to {
             return Ok(());
         }
@@ -471,6 +496,7 @@ impl GameRepository for DefaultGameRepository {
     }
 
     fn remove_instance(&mut self, id: &str) -> Result<()> {
+        validate_instance_id(id)?;
         let root = file_layout::instance_root(&self.base_directory, id);
         if root.exists() {
             std::fs::remove_dir_all(&root)?;

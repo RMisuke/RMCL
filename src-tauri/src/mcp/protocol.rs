@@ -115,7 +115,17 @@ pub async fn handle(
 
 fn require_session(ctx: &Ctx) -> Result<(), RpcError> {
     match ctx.session_id.as_deref() {
-        Some(id) if !id.is_empty() => Ok(()),
+        // B9：不只验头非空——必须命中已登记会话，否则持 token 者可用伪造
+        // session id 无限调用 tools/list 绕过会话速率语义。
+        Some(id) if !id.is_empty() => {
+            if ctx.handle.session_exists(id) {
+                Ok(())
+            } else {
+                Err(RpcError::from_message(
+                    "unknown MCP session (initialize first)",
+                ))
+            }
+        }
         _ => Err(RpcError::from_message(
             "missing Mcp-Session-Id header (call initialize first)",
         )),

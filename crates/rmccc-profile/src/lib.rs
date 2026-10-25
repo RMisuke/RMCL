@@ -366,6 +366,27 @@ pub struct ProfileStore {
     profiles_dir: PathBuf,
 }
 
+/// B2：profile id 直接进文件名拼接（`{id}.json`），来自内部生成但 store 是
+/// pub API——拒绝空值、超长与路径注入字符（`/` `\` `..` 控制字符），
+/// 对齐 agent/confirm 的 validate_id 思路（审计 2026-10-25）。
+pub fn validate_profile_id(id: &str) -> Result<()> {
+    let ok = !id.is_empty()
+        && id.len() <= 64
+        && id != ".."
+        && id != "."
+        && id
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_' || b == b'.')
+        && !id.contains("..");
+    if ok {
+        Ok(())
+    } else {
+        Err(rmccc_error::RmcccError::Validation(format!(
+            "invalid profile id: {id:?}"
+        )))
+    }
+}
+
 impl ProfileStore {
     pub fn new(profiles_dir: PathBuf) -> Self {
         Self { profiles_dir }
@@ -399,6 +420,7 @@ impl ProfileStore {
 
     /// Load a single profile by ID.
     pub fn get(&self, id: &str) -> Result<Option<Profile>> {
+        validate_profile_id(id)?;
         let path = self.profile_path(id);
         if !path.exists() {
             return Ok(None);
@@ -409,6 +431,7 @@ impl ProfileStore {
 
     /// Save a profile to disk atomically (write temp → rename).
     pub fn save(&self, profile: &Profile) -> Result<()> {
+        validate_profile_id(&profile.id)?;
         std::fs::create_dir_all(&self.profiles_dir)?;
         let path = self.profile_path(&profile.id);
         let tmp = self.profiles_dir.join(format!("{}.json.tmp", profile.id));
@@ -422,10 +445,13 @@ impl ProfileStore {
     /// Delete a profile and optionally clean up its game directory.
     /// 删除 profile。
     ///
-    /// `cleanup_game_dir` **只**会删除该实例自己的运行目录；当 `game_dir` 就是
-    /// 共享游戏根（`versions/` `libraries/` `assets/` 的存放处）时该参数被忽略，
-    /// 否则会连带删掉**其它所有实例**的游戏文件（ADR-002 决策 3）。
+    /// `cleanup_game_dir` **只**会删除该实例自己的运行目录；两类目录被拒绝：
+    /// 共享游戏根（`versions/` `libraries/` 的存放处，会连带删掉其它所有
+    /// 实例的游戏文件，ADR-002 决策 3），以及**不像游戏目录的任意目录**
+    /// （B10：profile JSON 可被手工编辑，`game_dir` 指向 `~/Documents` 之类
+    /// 时绝不能整树删除——必须有游戏目录的磁盘特征才允许 remove_dir_all）。
     pub fn delete(&self, id: &str, cleanup_game_dir: bool) -> Result<()> {
+        validate_profile_id(id)?;
         let path = self.profile_path(id);
         if !path.exists() {
             return Err(rmccc_error::RmcccError::ProfileNotFound(id.to_string()));
@@ -445,6 +471,12 @@ impl ProfileStore {
                     game_dir = %profile.game_dir.display(),
                     "Refusing to delete the shared game root; only the profile was removed"
                 );
+            } else if !Self::looks_like_game_dir(&profile.game_dir) {
+                tracing::warn!(
+                    profile_id = %id,
+                    game_dir = %profile.game_dir.display(),
+                    "Refusing to delete: game_dir has no game-directory markers; only the profile was removed"
+                );
             } else if profile.game_dir.exists() {
                 std::fs::remove_dir_all(&profile.game_dir)?;
                 tracing::info!(profile_id = %id, "Instance directory cleaned up");
@@ -460,6 +492,21 @@ impl ProfileStore {
     /// 用磁盘特征而不是配置判断，避免 `ProfileStore` 依赖 `AppConfig`。
     fn is_shared_game_root(game_dir: &std::path::Path) -> bool {
         game_dir.join("versions").exists() || game_dir.join("libraries").exists()
+    }
+
+    /// 目录是否具备游戏目录特征（B10 的 delete 守卫）。
+    ///
+    /// 共享根检查已经拒绝 versions/|libraries/；这里补上隔离实例的其余
+    /// 特征（assets/ saves/ mods/ resourcepacks/ shaderpacks/ options.txt
+    /// launcher_profiles.json）——都没有的目录（如被改写指向的
+    /// `~/Documents`）一律拒绝整树删除。
+    fn looks_like_game_dir(game_dir: &std::path::Path) -> bool {
+        ["assets", "saves", "mods", "resourcepacks", "shaderpacks"]
+            .iter()
+            .any(|m| game_dir.join(m).is_dir())
+            || ["options.txt", "launcher_profiles.json", "servers.dat"]
+                .iter()
+                .any(|m| game_dir.join(m).is_file())
     }
 
     /// Update the last_played timestamp.
@@ -601,6 +648,52 @@ mod tests {
 
         store.delete("p-iso", true).unwrap();
         assert!(!instance_dir.exists(), "隔离实例目录应被清理");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// B2：profile id 零校验曾是路径注入面——`../x` 之类不得落到文件名拼接。
+    #[test]
+    fn test_profile_id_validation_rejects_traversal() {
+        for bad in ["../evil", "a/b", "a\\b", "..", ".", "", "a..b", "包含中文"] {
+            assert!(
+                validate_profile_id(bad).is_err(),
+                "{bad:?} must be rejected"
+            );
+        }
+        for good in ["11111111-1111-1111-1111-111111111111", "abc-DEF_012"] {
+            assert!(
+                validate_profile_id(good).is_ok(),
+                "{good:?} must be accepted"
+            );
+        }
+        // 非法 id 连读都不允许（get/save/delete 均走 profile_path 前置校验）。
+        let dir = temp_profiles_dir("id-validate");
+        let store = ProfileStore::new(dir.clone());
+        assert!(store.get("../evil").is_err());
+        assert!(store.delete("../evil", false).is_err());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// B10：game_dir 被手工改写为任意目录（无游戏特征）时，cleanup 决不能
+    /// 整树删除它。
+    #[test]
+    fn test_delete_refuses_dirs_without_game_markers() {
+        let dir = temp_profiles_dir("del-marker");
+        let store = ProfileStore::new(dir.clone());
+
+        let victim = dir.join("precious-docs");
+        std::fs::create_dir_all(&victim).unwrap();
+        std::fs::write(victim.join("resume.pdf"), b"do not delete").unwrap();
+
+        let mut profile = make_profile("p-evil");
+        profile.game_dir = victim.clone();
+        store.save(&profile).unwrap();
+
+        store.delete("p-evil", true).unwrap();
+        assert!(store.get("p-evil").unwrap().is_none());
+        assert!(victim.exists(), "无游戏特征的目录绝不能被整树删除");
+        assert!(victim.join("resume.pdf").exists());
 
         let _ = std::fs::remove_dir_all(&dir);
     }

@@ -126,8 +126,13 @@ pub fn ensure_dirs() -> std::io::Result<()> {
 
 /// Check that a sub-path resolves within the given root directory.
 ///
-/// Returns `Ok(resolved)` if the path is safe, or `Err` if a directory
-/// traversal attack is detected (e.g., `../../etc/passwd`).
+/// 返回 `Ok(resolved)` 表示路径安全，`Err` 表示检测到目录穿越
+/// （如 `../../etc/passwd`）。
+///
+/// 注意（B2 审计结论）：这是一个**通用工具**，不是全工程的防穿越统一入口——
+/// 全工程的 id/路径防护点在各 IPC 边界（`rmccc-profile::validate_profile_id`、
+/// `rmccc-version` 的 `validate_instance_id`、`rmccc-dashboard` 的
+/// `validate_layout_id` 等），那些防护不经过本函数。
 pub fn safe_join(root: &Path, sub: &str) -> std::io::Result<PathBuf> {
     // Canonicalize the root first (fail gracefully if root doesn't exist yet)
     let root = if root.exists() {

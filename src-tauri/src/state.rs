@@ -76,8 +76,10 @@ impl AppState {
             .redirect(reqwest::redirect::Policy::none())
             .timeout(std::time::Duration::from_secs(30))
             .user_agent(concat!("RMCCC/", env!("CARGO_PKG_VERSION"), " (plugin-ui)"))
+            // B6：构建失败必须报错——`Client::new()` 兜底会**跟随重定向**，
+            // `network.request` 的"30x 不能逃出域名白名单"保证随之失效。
             .build()
-            .unwrap_or_else(|_| reqwest::Client::new());
+            .map_err(|e| rmccc_error::RmcccError::Other(format!("ui http client: {e}")))?;
 
         let mcp = Arc::new(crate::mcp::McpHandle::new(
             data_dir,

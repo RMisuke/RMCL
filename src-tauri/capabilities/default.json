@@ -1,7 +1,9 @@
 {
   "identifier": "default",
   "description": "Default capabilities for the main window",
-  "windows": ["main"],
+  "windows": [
+    "main"
+  ],
   "permissions": [
     "core:default",
     "core:window:default",
@@ -18,7 +20,6 @@
     "core:event:allow-emit",
     "process:default",
     "window-state:default",
-    "opener:default",
     "dialog:allow-open",
     "updater:default"
   ]

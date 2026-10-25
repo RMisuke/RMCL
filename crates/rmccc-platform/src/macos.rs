@@ -53,6 +53,20 @@ impl PlatformFs for MacosFs {
         std::fs::rename(from, to)?;
         Ok(())
     }
+
+    fn create_owner_only(&self, path: &Path, contents: &[u8]) -> Result<()> {
+        use std::io::Write;
+        use std::os::unix::fs::OpenOptionsExt;
+        // `mode(0o600)` 在 open(2) 生效：文件从诞生的第一刻起就仅属主可读，
+        // 没有"先写后收紧"的窗口（审计 B1）。
+        let mut file = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .open(path)?;
+        file.write_all(contents)?;
+        Ok(())
+    }
 }
 
 /// macOS 进程控制后端。

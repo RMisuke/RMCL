@@ -44,7 +44,7 @@ pub struct TokenVault {
 impl TokenVault {
     /// Load existing key or generate a new one.
     ///
-    /// 权限收紧经注入的 [`PlatformFs`]（Unix `0600` / Windows ACL），本函数
+    /// 权限经注入的 [`PlatformFs`]（Unix `0600` / Windows ACL），本函数
     /// 不再出现 `#[cfg(unix)]` / `#[cfg(windows)]`（指南 §5.7.1）。
     pub fn init(key_path: &Path, fs: &dyn PlatformFs) -> Result<Self> {
         let key_bytes = if key_path.exists() {
@@ -54,11 +54,10 @@ impl TokenVault {
             let mut key = [0u8; 32];
             use rand::RngCore;
             rand::thread_rng().fill_bytes(&mut key);
-            std::fs::write(key_path, key)?;
 
-            // 仅属主可读写。密钥文件权限收紧失败必须报错——悄悄放过等于把
-            // 令牌明文暴露给同机其他用户。
-            fs.restrict_owner_only(key_path)?;
+            // B1：一步创建 0600 文件——不存在"先写后收紧"的窗口。创建失败
+            // 必须报错：悄悄放过等于把令牌明文暴露给同机其他用户。
+            fs.create_owner_only(key_path, &key)?;
 
             key.to_vec()
         };
