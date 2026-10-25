@@ -62,7 +62,7 @@ const TitleBar: Component = () => {
   // excluded from dragging.
   return (
     <div class="titlebar" data-tauri-drag-region="deep">
-      <div class="titlebar-brand">RMCCC</div>
+      <div class="titlebar-brand">SNGL</div>
 
       {/* 顶部 Dock 导航（图标 + 文字），取代左侧栏（ui/home-hero-dock 试验分支） */}
       <nav class="titlebar-dock" role="navigation">

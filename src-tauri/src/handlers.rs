@@ -59,6 +59,7 @@ pub const IPC_COMMANDS: &[&str] = &[
     "settings_get_user",
     "settings_set_user",
     "settings_supported_locales",
+    "settings_app_info",
     "java_detect",
     "version_list",
     "version_install",
@@ -188,6 +189,7 @@ pub fn invoke_handlers() -> impl Fn(tauri::ipc::Invoke<tauri::Wry>) -> bool + Se
         commands::settings::settings_get_user,
         commands::settings::settings_set_user,
         commands::settings::settings_supported_locales,
+        commands::settings::settings_app_info,
         commands::settings::java_detect,
         // ── version ──
         commands::version::version_list,

@@ -9,6 +9,9 @@ pub use rmccc_error::{ErrorCode, IpcError, Result, RmcccError};
 // Re-export sub-crate APIs
 pub use rmccc_auth;
 pub use rmccc_config;
+/// 内核版本（关于页展示；与启动器版本独立语义）。
+pub const CORE_VERSION: &str = env!("CARGO_PKG_VERSION");
+
 pub use rmccc_dashboard;
 pub use rmccc_download;
 pub use rmccc_launch;

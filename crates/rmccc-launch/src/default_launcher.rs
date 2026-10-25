@@ -240,7 +240,7 @@ impl DefaultLauncher {
             &self.game_version.asset_index.id,
             natives_var,
             classpath,
-            "RMCL",
+            "SNGL",
             env!("CARGO_PKG_VERSION"),
             self.options.width,
             self.options.height,
@@ -441,7 +441,7 @@ impl DefaultLauncher {
         // 9-11. Generated JVM arguments.
         if !self.options.no_generated_jvm_args {
             // Launcher brand/version (HMCL HMCLGameLauncher.appendJvmArgs).
-            cmd.add_default("-Dminecraft.launcher.brand=", "RMCL");
+            cmd.add_default("-Dminecraft.launcher.brand=", "SNGL");
             cmd.add_default("-Dminecraft.launcher.version=", env!("CARGO_PKG_VERSION"));
 
             // -Dminecraft.client.jar with the real path (L12).
@@ -1399,7 +1399,7 @@ mod tests {
         assert!(command
             .jvm_args
             .iter()
-            .any(|a| a == "-Dminecraft.launcher.brand=RMCL"));
+            .any(|a| a == "-Dminecraft.launcher.brand=SNGL"));
 
         let _ = std::fs::remove_dir_all(&dir);
     }

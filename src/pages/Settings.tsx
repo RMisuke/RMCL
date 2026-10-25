@@ -11,7 +11,7 @@ import { RmButton, RmIconButton, RmInput, RmSelect, RmSwitch, RmTag } from "../c
 import { RmDialog, RmMenu } from "../components/rm/overlays";
 import { RmCard, RmSideTabs, RmListRow, RmAdvancedSection, RmFieldRow, RmEmptyState } from "../components/rm/surfaces";
 import { settings as settingsApi, userSettings, instances, logs, external, mcp as mcpApi, ai as aiApi, plugins as pluginsApi, dashboard } from "../ipc/api";
-import type { JavaInfo, InstanceInfo, LocaleInfo, McpToolView } from "../ipc/types";
+import type { AppInfoView, JavaInfo, InstanceInfo, LocaleInfo, McpToolView } from "../ipc/types";
 import { settingsStore } from "../stores/settings";
 import { aiStore } from "../stores/ai";
 import { mcpStore } from "../stores/mcp";
@@ -943,12 +943,20 @@ function Advanced(): JSX.Element {
 // ── About ──
 
 function About(): JSX.Element {
-  const version = __APP_VERSION__;
+  const [info, setInfo] = createSignal<AppInfoView | null>(null);
+  onMount(async () => {
+    const res = await settingsApi.appInfo();
+    if (res.ok) setInfo(res.data);
+  });
   return (
     <div class="tab-stack narrow">
-      <RmCard title="RMCCC">
+      <RmCard title="SNGL">
+        <div class="muted-line" style={{ "margin-bottom": "10px" }}>{t("settings.about.desc")}</div>
         <div class="kv-grid">
-          <span>{t("settings.about.version")}</span><span>{version}</span>
+          <span>{t("settings.about.launcherVersion")}</span>
+          <span>{info()?.launcher_version ?? __APP_VERSION__}</span>
+          <span>{t("settings.about.coreVersion")}</span>
+          <span>{info()?.core_version ?? "-"}</span>
           <span>{t("settings.about.size")}</span><span>{t("settings.about.sizeValue")}</span>
         </div>
         <div class="btn-row">

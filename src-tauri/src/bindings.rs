@@ -40,6 +40,7 @@ pub fn generate_types() -> Result<String, String> {
         ts::<rmccc_error::IpcError>()?,
         ts::<rmccc_error::ErrorCode>()?,
         ts::<crate::commands::settings::JavaInfo>()?,
+        ts::<crate::commands::settings::AppInfoView>()?,
         ts::<crate::commands::settings::SettingsUpdate>()?,
         ts::<crate::commands::settings::UserSettingsUpdate>()?,
         ts::<crate::commands::settings::LocaleInfo>()?,

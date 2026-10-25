@@ -1,6 +1,6 @@
 {
   "$schema": "https://schema.tauri.app/HEAD/crates/tauri-cli/schema.json",
-  "productName": "RMCCC",
+  "productName": "SNGL",
   "version": "0.1.0",
   "identifier": "com.rmccc.launcher",
   "build": {
@@ -13,7 +13,7 @@
     "withGlobalTauri": false,
     "windows": [
       {
-        "title": "RMCCC",
+        "title": "SNGL",
         "label": "main",
         "width": 1100,
         "height": 700,

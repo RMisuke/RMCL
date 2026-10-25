@@ -414,7 +414,7 @@ mod tests {
             "17",
             "/game/natives",
             "/game/libraries/*:/game/versions/1.20.4/1.20.4.jar",
-            "RMCL",
+            "SNGL",
             "0.1.0",
             Some(1920),
             Some(1080),
@@ -422,7 +422,7 @@ mod tests {
         assert_eq!(vars.get("auth_player_name").unwrap(), "Steve");
         assert_eq!(vars.get("version_type").unwrap(), "release");
         assert_eq!(vars.get("resolution_width").unwrap(), "1920");
-        assert_eq!(vars.get("launcher_name").unwrap(), "RMCL");
+        assert_eq!(vars.get("launcher_name").unwrap(), "SNGL");
         assert!(vars.contains_key("classpath"));
     }
     #[test]
@@ -557,7 +557,7 @@ mod tests {
             "1",
             "/game/natives",
             "/game/libs/*",
-            "RMCL",
+            "SNGL",
             "0.1.0",
             None,
             None,

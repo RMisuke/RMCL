@@ -463,7 +463,7 @@ export default function Home(): JSX.Element {
     const current = layout();
     const builtins = HERO_DEFAULTS.order
       .filter((id) => !current.order.includes(id) || current.hidden.includes(id))
-      .map((id) => ({ id, name: cardTitle(id), subtitle: "RMCCC" }));
+      .map((id) => ({ id, name: cardTitle(id), subtitle: "SNGL" }));
     const plugins = catalog()
       .filter((w) => w.pluginId !== "org.rmccc.core-ui")
       .map((w) => ({ id: `${pluginPrefix}${w.pluginId}`, name: w.displayName, subtitle: w.pluginId }))

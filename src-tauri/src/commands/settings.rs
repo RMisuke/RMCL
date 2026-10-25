@@ -270,3 +270,27 @@ pub async fn settings_supported_locales(
         })
         .collect())
 }
+
+
+// ── 应用信息（关于页：启动器 SNGL / 内核 RMCCC 双版本）──
+
+/// 启动器与内核的名称 + 版本。
+#[derive(Debug, Clone, Serialize, TS)]
+#[ts(export_to = "types.ts")]
+pub struct AppInfoView {
+    pub launcher_name: String,
+    pub launcher_version: String,
+    pub core_name: String,
+    pub core_version: String,
+}
+
+#[tauri::command]
+#[tracing::instrument]
+pub async fn settings_app_info() -> Result<AppInfoView, IpcError> {
+    Ok(AppInfoView {
+        launcher_name: "SNGL".to_string(),
+        launcher_version: env!("CARGO_PKG_VERSION").to_string(),
+        core_name: "RMCCC".to_string(),
+        core_version: rmccc_core::CORE_VERSION.to_string(),
+    })
+}

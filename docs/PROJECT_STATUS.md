@@ -10,6 +10,14 @@
 
 ## 0. 更新记录
 
+**2026-10-25（正式立项：项目更名 SNGL，内核保留 RMCCC）**：
+
+- **显示层更名**：标题栏品牌、窗口标题、`<title>`、欢迎页、MCP/AI 提示文案、关于页卡题、主页插件卡副标题、`productName`（bundle 名 RMCCC.app → SNGL.app）→ **SNGL**。
+- **对游戏的启动器品牌**：`launcher_name` / `-Dminecraft.launcher.brand` 由 `RMCL` 改为 `SNGL`（外部可见标识）。
+- **内核与协议保留 RMCCC**：crate 名（rmccc-*）、Rust 标识符、IPC/协议命名空间（`rmcccplugin://` 等）、CSS 变量（`--rmccc-*`）、localStorage 键、bundle 标识符 `com.rmccc.launcher`（改它会孤立 `~/Library/Application Support/rmccc` 用户数据目录）、HTTP UA——全部不动。
+
+
+
 **2026-10-25（NeoForge 安装失败诊断与修复：UA 403 / 镜像候选 / data 解压 / 宽松解析）**：
 
 真实环境（MC 26.1 + NeoForge 26.1.0.1-beta）端到端复现修复，四层缺陷逐层暴露、全部修掉：

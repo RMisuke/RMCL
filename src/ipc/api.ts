@@ -54,7 +54,7 @@ export type {
   McpRecentCallView,
 } from "./types";
 
-import type {
+import type { AppInfoView,
   SettingsUpdate as GeneratedSettingsUpdate,
   ProfileUpdateOpts as GeneratedProfileUpdateOpts,
   AuthSession,
@@ -253,6 +253,8 @@ export const settings = {
   get: () => safeInvoke<AppConfig>("settings_get"),
   set: (opts: SettingsUpdate) => safeInvoke<AppConfig>("settings_set", { opts }),
   detectJava: () => safeInvoke<JavaInfo[]>("java_detect"),
+  appInfo: () =>
+    safeInvoke<AppInfoView>("settings_app_info", {}),
 };
 
 // ── User-level settings（UI 语言等）──

@@ -149,7 +149,8 @@ fn ipc_command_count_is_stable() {
     // → 94：auth_skin_url（头像由后端代理 sessionserver，规避 WebView CORS）。
     // → 95：dialog_pick_directory（多游戏目录的路径选择）。
     // → 99：cache_icon_* 4 条（图标缓存子系统）。
-    assert_eq!(crate::handlers::IPC_COMMANDS.len(), 99);
+    // → 100：settings_app_info（关于页：SNGL 启动器版本 / RMCCC 内核版本）。
+    assert_eq!(crate::handlers::IPC_COMMANDS.len(), 100);
 }
 
 // ────────────────────────── 2. 错误码契约 ──────────────────────────
