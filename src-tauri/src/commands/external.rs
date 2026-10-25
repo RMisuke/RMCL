@@ -42,20 +42,17 @@ pub fn open_external_url(url: String) -> Result<(), IpcError> {
 /// stored when the user confirms adding it in the UI.
 #[tauri::command]
 #[tracing::instrument(skip(app))]
-pub async fn dialog_pick_directory(
-    app: tauri::AppHandle,
-) -> Result<Option<String>, IpcError> {
+pub async fn dialog_pick_directory(app: tauri::AppHandle) -> Result<Option<String>, IpcError> {
     use tauri_plugin_dialog::DialogExt;
 
-    let picked = tauri::async_runtime::spawn_blocking(move || {
-        app.dialog().file().blocking_pick_folder()
-    })
-    .await
-    .map_err(|e| IpcError {
-        code: rmccc_error::ErrorCode::Unknown,
-        message: format!("directory dialog failed: {e}"),
-        retryable: false,
-    })?;
+    let picked =
+        tauri::async_runtime::spawn_blocking(move || app.dialog().file().blocking_pick_folder())
+            .await
+            .map_err(|e| IpcError {
+                code: rmccc_error::ErrorCode::Unknown,
+                message: format!("directory dialog failed: {e}"),
+                retryable: false,
+            })?;
 
     match picked {
         Some(path) => {

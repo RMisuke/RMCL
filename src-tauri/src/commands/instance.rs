@@ -86,7 +86,8 @@ pub async fn instance_list(
         Some(root) if !root.trim().is_empty() => {
             // 临时仓库不会自动扫描磁盘——必须 refresh() 才有 manifests
             //（漏掉这一步就是"选了目录读不出实例"的根因）。
-            let mut repo = rmccc_version::DefaultGameRepository::new(std::path::PathBuf::from(root));
+            let mut repo =
+                rmccc_version::DefaultGameRepository::new(std::path::PathBuf::from(root));
             repo.refresh().map_err(IpcError::from)?;
             Ok(list_instances(
                 &repo,
@@ -96,7 +97,11 @@ pub async fn instance_list(
         }
         _ => {
             let repo = core.game_repository.read().map_err(|_| locked_error())?;
-            Ok(list_instances(&repo, repo.game_dir(), &core.platform.descriptor))
+            Ok(list_instances(
+                &repo,
+                repo.game_dir(),
+                &core.platform.descriptor,
+            ))
         }
     }
 }

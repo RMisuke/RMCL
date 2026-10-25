@@ -229,7 +229,10 @@ pub async fn lookup(state: &AppState, url: &str) -> Option<ServedIcon> {
     .ok()
     .unwrap_or_else(|| "application/octet-stream".into());
     // last_used 只在内存里推进；索引随下一次 fetch/clear 落盘（避免每次渲染写盘）。
-    Some(ServedIcon { bytes, content_type })
+    Some(ServedIcon {
+        bytes,
+        content_type,
+    })
 }
 
 // ── IPC 视图 ──
@@ -370,7 +373,10 @@ pub async fn cache_icon_fetch(
             commit(state_ref, &key, &kind, None, None, None, None)
                 .await
                 .map_err(IpcError::from)?;
-            Ok(IconFetchStatus { status: "unchanged".into(), cached: true })
+            Ok(IconFetchStatus {
+                status: "unchanged".into(),
+                cached: true,
+            })
         }
         Ok(resp) if resp.status().is_success() => {
             let etag = resp
@@ -394,7 +400,10 @@ pub async fn cache_icon_fetch(
                 retryable: true,
             })?;
             if bytes.len() > MAX_ICON_BYTES {
-                return Ok(IconFetchStatus { status: "too_large".into(), cached: false });
+                return Ok(IconFetchStatus {
+                    status: "too_large".into(),
+                    cached: false,
+                });
             }
             commit(
                 state_ref,
@@ -407,23 +416,38 @@ pub async fn cache_icon_fetch(
             )
             .await
             .map_err(IpcError::from)?;
-            Ok(IconFetchStatus { status: "updated".into(), cached: true })
+            Ok(IconFetchStatus {
+                status: "updated".into(),
+                cached: true,
+            })
         }
         // 网络失败但有旧档：保留旧档继续用（stale-while-error）。
         Ok(_) if !entry.content_type.is_empty() => {
             commit(state_ref, &key, &kind, None, None, None, None)
                 .await
                 .map_err(IpcError::from)?;
-            Ok(IconFetchStatus { status: "stale".into(), cached: true })
+            Ok(IconFetchStatus {
+                status: "stale".into(),
+                cached: true,
+            })
         }
-        Ok(_) => Ok(IconFetchStatus { status: "miss".into(), cached: false }),
+        Ok(_) => Ok(IconFetchStatus {
+            status: "miss".into(),
+            cached: false,
+        }),
         Err(_) if !entry.content_type.is_empty() => {
             commit(state_ref, &key, &kind, None, None, None, None)
                 .await
                 .map_err(IpcError::from)?;
-            Ok(IconFetchStatus { status: "stale".into(), cached: true })
+            Ok(IconFetchStatus {
+                status: "stale".into(),
+                cached: true,
+            })
         }
-        Err(_) => Ok(IconFetchStatus { status: "miss".into(), cached: false }),
+        Err(_) => Ok(IconFetchStatus {
+            status: "miss".into(),
+            cached: false,
+        }),
     }
 }
 

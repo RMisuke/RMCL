@@ -1,8 +1,8 @@
 //! IPC command handlers.
 
 pub mod ai;
-pub mod cache;
 pub mod auth;
+pub mod cache;
 pub mod dashboard;
 pub mod download;
 pub mod external;

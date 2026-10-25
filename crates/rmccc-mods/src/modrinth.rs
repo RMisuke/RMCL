@@ -53,7 +53,10 @@ impl ModSource for ModrinthSource {
                 ((query.page.saturating_sub(1)) * query.limit).to_string(),
             ),
             ("limit", query.limit.to_string()),
-            ("index", query.index.clone().unwrap_or_else(|| "relevance".into())),
+            (
+                "index",
+                query.index.clone().unwrap_or_else(|| "relevance".into()),
+            ),
         ];
 
         let mut req = self

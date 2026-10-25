@@ -12,8 +12,8 @@ use chrono::{Duration, Utc};
 use rmccc_auth::{AccountMetadata, AuthSession, CreateAccountContext, REFRESH_WINDOW_SECS};
 use rmccc_error::IpcError;
 use serde::Serialize;
-use ts_rs::TS;
 use tauri::Emitter;
+use ts_rs::TS;
 
 /// Whether the session is at/after the advance-refresh window (or already
 /// expired), i.e. worth a network refresh before use. Avoids re-writing the

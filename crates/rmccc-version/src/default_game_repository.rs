@@ -613,18 +613,13 @@ mod tests {
         // HMCL 整合包目录：只有配置 json（无版本标记）——不得成为实例。
         let pack = versions.join("SomeModpack");
         std::fs::create_dir_all(&pack).unwrap();
-        std::fs::write(
-            pack.join("emi.json"),
-            r#"{"bind":{},"crafting":{}}"#,
-        )
-        .unwrap();
+        std::fs::write(pack.join("emi.json"), r#"{"bind":{},"crafting":{}}"#).unwrap();
         let mut repo = super::DefaultGameRepository::new(dir.clone());
         repo.refresh().expect("refresh");
         let ids = repo.get_instance_ids();
         assert_eq!(ids, vec!["1.21.1-NeoForge".to_string()]);
         let _ = std::fs::remove_dir_all(&dir);
     }
-
 
     use super::*;
     use crate::isolation::IsolationType;
@@ -813,7 +808,6 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
-
 
 /// Heuristic: does this JSON actually describe a game version?
 ///

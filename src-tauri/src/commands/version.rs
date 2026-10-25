@@ -150,8 +150,7 @@ async fn run_install_background(
     };
 
     // ── 3. 有失败条目：不提交 profile，上报错误 ──
-    let real_batch_id =
-        last_batch_id.lock().unwrap().clone().unwrap_or_default();
+    let real_batch_id = last_batch_id.lock().unwrap().clone().unwrap_or_default();
     if !report.is_complete() {
         tracing::warn!(
             profile_id = %profile_id,
