@@ -33,6 +33,7 @@ impl CliContext {
             &profile,
             loader_type,
             loader_version,
+            None,
         )
         .await?;
 

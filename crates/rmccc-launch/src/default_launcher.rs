@@ -256,13 +256,30 @@ impl DefaultLauncher {
             self.auth.user_properties.clone(),
         );
 
+        // `${library_directory}` 必须指向共享 libraries 根（HMCL
+        // DefaultLauncher "library_directory" → repository.getLibrariesDirectory），
+        // 而不是 build_template_vars 推导的 `{run_dir}/libraries`：版本隔离时
+        // run_dir 是实例根，Forge/NeoForge 的 `-p ${library_directory}/...`
+        // 模块路径会全部落空 → JVM "Unknown module" 警告 → `--add-opens`
+        // 被静默忽略 → BootstrapLauncher 反射 IMPL_LOOKUP 崩溃
+        // （InaccessibleObjectException，2026-10-25 Forge 47.4.5 实测）。
+        vars_map.insert(
+            vars::LIBRARY_DIRECTORY.to_string(),
+            file_layout::libraries_dir(&self.game_dir)
+                .display()
+                .to_string(),
+        );
+
         // HMCL extras not covered by build_template_vars.
         vars_map.insert("game_assets".to_string(), assets_dir.clone());
         vars_map.insert("assets_root".to_string(), assets_dir);
         let primary_jar = self.client_jar_path();
-        vars_map.insert("primary_jar".to_string(), primary_jar.display().to_string());
         vars_map.insert(
-            "primary_jar_name".to_string(),
+            vars::PRIMARY_JAR.to_string(),
+            primary_jar.display().to_string(),
+        );
+        vars_map.insert(
+            vars::PRIMARY_JAR_NAME.to_string(),
             primary_jar
                 .file_name()
                 .map(|n| n.to_string_lossy().to_string())
@@ -537,12 +554,38 @@ impl DefaultLauncher {
             .as_ref()
             .and_then(|a| a.jvm.as_deref())
         {
-            let resolved = resolve_arguments(
+            let mut resolved = resolve_arguments(
                 &self.options.platform.descriptor,
                 jvm_args,
                 &configurations,
                 &features,
             );
+
+            // HMCL `MaintainTask.maintainGameWithCpwBoostrapLauncher`
+            // （bootstraplauncher ≥ 0.1.17 分支）：BootstrapLauncher 按 classpath
+            // 条目的**文件名**匹配 `-DignoreList`，把匹配的 jar 排除在模块层之外。
+            // Forge 预置的 `${version_name}.jar` 只匹配"启动器把主 jar 按版本 id
+            // 命名"的布局，而我们与 HMCL 一样把原版主 jar 放在
+            // `versions/<jar id>/<jar id>.jar`（如 `1.20.1.jar`）——文件名不在
+            // ignoreList 里 → 被收进模块层，文件名 `1.20.1` 不是合法模块名，
+            // 转成自动模块 `_1._20._1`，与 srg jar 的 `minecraft` 模块导出同包
+            // → `ResolutionException: Modules minecraft and _1._20._1 export
+            // package …`（2026-10-25 Forge 47.4.5 实测）。HMCL 的修法：把主 jar
+            // 文件名追加进 ignoreList。
+            if self.game_version.main_class.contains("BootstrapLauncher") {
+                if let Some(primary_jar_name) = configurations.get(vars::PRIMARY_JAR_NAME) {
+                    if !primary_jar_name.is_empty() {
+                        for arg in resolved.iter_mut() {
+                            if let Some(rest) = arg.strip_prefix("-DignoreList=") {
+                                if !rest.split(',').any(|e| e == primary_jar_name.as_str()) {
+                                    *arg = format!("-DignoreList={rest},{primary_jar_name}");
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
             cmd.add_all_default(&resolved);
         }
 
@@ -1357,6 +1400,110 @@ mod tests {
             .jvm_args
             .iter()
             .any(|a| a == "-Dminecraft.launcher.brand=RMCL"));
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // ── Forge 47.4.5 启动崩溃回归（2026-10-25）────────────────────────
+    // 版本隔离时 run_dir 是实例根；`${library_directory}` 必须仍指向共享
+    // libraries 根，否则 Forge `-p ${library_directory}/...` 模块路径落空，
+    // `--add-opens` 被静默忽略 → BootstrapLauncher 反射 IMPL_LOOKUP 崩溃。
+    #[test]
+    fn test_library_directory_points_at_shared_libraries_root() {
+        let (l, dir) = test_launcher_on_disk();
+
+        // 版本隔离：run_dir = 实例根（隔离目录下不存在 libraries/）。
+        let run_dir = dir.join("game/versions/1.20.4");
+        let mut opts = l.options.clone();
+        opts.run_dir = run_dir.clone();
+        let mut gv = l.game_version.clone();
+        gv.arguments = Some(rmccc_version::VersionArguments {
+            // Forge 47.x 的模块路径形态（简化）。
+            jvm: Some(vec![rmccc_version::VersionArgument::Simple(
+                "-p ${library_directory}/cpw/mods/securejarhandler/2.1.10/securejarhandler-2.1.10.jar"
+                    .to_string(),
+            )]),
+            game: None,
+        });
+        let l = DefaultLauncher::new(l.instance_id.clone(), gv, l.auth.clone(), opts, None);
+        assert!(!run_dir.join("libraries").exists());
+
+        // 模板变量层：指向共享 libraries 根，而非实例根下的 libraries。
+        let vars = l.get_configurations("cp", "/natives");
+        assert_eq!(
+            vars.get("library_directory").unwrap(),
+            &file_layout::libraries_dir(&dir.join("game"))
+                .display()
+                .to_string()
+        );
+
+        // 解析后的 JVM 参数层：-p 模块路径落在共享 libraries 根。
+        let command = l.generate_command_line().unwrap();
+        let expected = format!(
+            "-p {}/cpw/mods/securejarhandler/2.1.10/securejarhandler-2.1.10.jar",
+            file_layout::libraries_dir(&dir.join("game")).display()
+        );
+        assert!(
+            command.jvm_args.contains(&expected),
+            "module path must resolve against the shared libraries root, got {:#?}",
+            command.jvm_args
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // ── Forge 47.4.5 模块冲突回归（2026-10-25）────────────────────────
+    // BootstrapLauncher 按 classpath 文件名匹配 `-DignoreList`；原版主 jar
+    // `1.20.1.jar` 不在 Forge 预置 ignoreList → 进模块层成 `_1._20._1`
+    // 自动模块，与 srg jar 的 `minecraft` 模块导出同包 → ResolutionException。
+    // 修复对齐 HMCL：把主 jar 文件名追加进 ignoreList。
+    #[test]
+    fn test_bootstrap_launcher_ignore_list_appends_primary_jar() {
+        let (l, dir) = test_launcher_on_disk();
+
+        // Forge 形态：BootstrapLauncher 主类 + 预置 ignoreList（含
+        // `${version_name}.jar`，经模板解析后是 options.version_name）。
+        let mut gv = l.game_version.clone();
+        gv.main_class = "cpw.mods.bootstraplauncher.BootstrapLauncher".to_string();
+        gv.arguments = Some(rmccc_version::VersionArguments {
+            jvm: Some(vec![rmccc_version::VersionArgument::Simple(
+                "-DignoreList=bootstraplauncher,client-extra,${version_name}.jar".to_string(),
+            )]),
+            game: None,
+        });
+        let mut opts = l.options.clone();
+        opts.version_name = Some("1.20.1-forge".to_string());
+        let l = DefaultLauncher::new(l.instance_id.clone(), gv, l.auth.clone(), opts, None);
+
+        let command = l.generate_command_line().unwrap();
+        // 主 jar 文件名（1.20.4.jar，来自测试夹具的 jar id）被追加到末尾。
+        let expected =
+            "-DignoreList=bootstraplauncher,client-extra,1.20.1-forge.jar,1.20.4.jar".to_string();
+        assert!(
+            command.jvm_args.contains(&expected),
+            "primary jar name must be appended to ignoreList, got {:#?}",
+            command.jvm_args
+        );
+
+        // 非 BootstrapLauncher 主类（vanilla / Fabric）不动 ignoreList。
+        let mut gv = l.game_version.clone();
+        gv.main_class = "net.minecraft.client.main.Main".to_string();
+        let l2 = DefaultLauncher::new(
+            l.instance_id.clone(),
+            gv,
+            l.auth.clone(),
+            l.options.clone(),
+            None,
+        );
+        let command2 = l2.generate_command_line().unwrap();
+        assert!(
+            command2
+                .jvm_args
+                .iter()
+                .any(|a| a == "-DignoreList=bootstraplauncher,client-extra,1.20.1-forge.jar"),
+            "vanilla launch must not touch ignoreList, got {:#?}",
+            command2.jvm_args
+        );
 
         let _ = std::fs::remove_dir_all(&dir);
     }

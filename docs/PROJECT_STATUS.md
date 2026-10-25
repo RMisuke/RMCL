@@ -10,6 +10,39 @@
 
 ## 0. 更新记录
 
+**2026-10-25（NeoForge 安装失败诊断与修复：UA 403 / 镜像候选 / data 解压 / 宽松解析）**：
+
+真实环境（MC 26.1 + NeoForge 26.1.0.1-beta）端到端复现修复，四层缺陷逐层暴露、全部修掉：
+
+1. **共享 HTTP 客户端无 User-Agent**：BMCLAPI 的 302 重定向镜像池（cernet/ustc 等）对无 UA 请求直接 403（reqwest 默认 UA 为空；curl 有 UA 全程 200）。`CoreContext` 下载客户端补 `RMCCC/{version}` UA——全部下载路径受益。
+2. **安装器候选无重试**：`download_installer_file` 每候选单次尝试，镜像轮询的单次 403 即废掉候选；补每候选 3 次重试（与下载管理器 attempts 对齐）。
+3. **processor 依赖库无镜像候选**：`install_profile.libraries` 的 URL 直连 maven.neoforged.net（本机网络超时）；补 BMCLAPI `/maven/` 镜像候选（原 URL 优先，neoforged / minecraftforge 两大 maven 覆盖）。
+4. **data 表内嵌文件未解压**：`{BINPATCH}` = `/data/client.lzma` 是安装器 ZIP 内路径，HMCL 会先解压到临时文件再传处理器；此前直接传字符串路径 → `FileNotFoundException`。`ForgeNewInstallTask` 补 data 条目解压（Forge 47.4.5 因走 installer-JAR 整体运行从未暴露）。
+5. **安装器 version JSON 严格解析失败**：NeoForge 26.1 的 version.json 缺 `assetIndex`，typed 解析整体报错；改走 `merge_partial_json_into_parent` 宽松解析（patch 只需 mainClass/arguments/libraries）。
+6. **base client jar 就位保障**：PROCESS_MINECRAFT_JAR 处理器需要原版 jar；`core::install_loader` 在安装前检查缺失即补一次基础版本修复（GUI 向导本有顺序保证，CLI/MCP 无此约定）。
+
+诊断手段：临时端到端复现测试（真实下载 + 真实 processors 执行），最终 `patch id=neoforge version=26.1.0.1-beta` 全流程通过后移除。
+
+**2026-10-25（NeoForge 安装重做：processors 管线对齐 HMCL）**：
+
+- **架构修正**：NeoForge 此前被划入 installer-JAR 路径（整体 `java -jar` 跑官方安装器）；HMCL 对 NeoForge 是**刻意自处理**（读 `install_profile.json` 后复用 Forge processors 管线）。现对齐 HMCL `download/neoforge/`：
+  - `needs_installer_jar` 只保留 Forge；NeoForge 走 patch 管线，经 `NeoForgeInstallTask` 路由到 `ForgeNewInstallTask`（processors 逐条执行 + maven 内嵌提取 + 依赖下载）。此前实现只提取库、从不跑 processors，1.20.2+ 的 universal/binpatched 产物缺失，装出来必然不可启动。
+  - **Path A**（1.20.1 世代，forge profile + `NEOFORGE.RSA` / 正文含 neoforge）：跑 Forge 管线后 patch 改名 `forge→neoforge`、版本号剥 MC 前缀（HMCL `modifyNeoForgeOldVersion` 语义）；
+  - **Path B**（1.20.2+ 原生 neoforge profile）：同管线，版本号剥 `neoforge` 段（`modifyNeoForgeNewVersion`）；两路径均带 MC 版本一致性校验（HMCL `VersionMismatchException` 对齐）。
+  - 已知差异（注释记录）：HMCL 会把 `DOWNLOAD_MOJMAPS` 处理器替换为镜像直下 mappings（仅为加速），我们按原样执行处理器，功能等价。
+- **版本列表**：BMCLAPI 镜像为主；失败回退官方元数据（`net/neoforged/forge` + `net/neoforged/neoforge` 两端点，HMCL `NeoForgeOfficialVersionList` 对齐，含 26.x 四段版本号 → MC 版本推算算法）。安装器下载候选 = [BMCLAPI, maven.neoforged.net 官方]，403/失败切官方。
+
+**2026-10-25（实测修复二：Forge 启动模块冲突 `ResolutionException`）**：
+
+- **现象**：Forge 47.4.5 装好、依赖补齐后启动，ModLauncher 模块层构建时抛 `java.lang.module.ResolutionException: Modules minecraft and _1._20._1 export package net.minecraft.client to module forge`（崩溃点在 `ModuleLayerHandler.buildLayer`，游戏未进入初始化）。
+- **根因**：模块名 `_1._20._1` 是从文件名 `1.20.1.jar` 推导的自动模块名——即**原版混淆 jar**（`versions/1.20.1/1.20.1.jar`，我们与 HMCL 同样把主 jar 按 jar id 放进 classpath）没有被 BootstrapLauncher 的 `-DignoreList` 排除，被收进模块层后与 srg jar 构成的 `minecraft` 模块导出同包。Forge 预置 ignoreList 里的 `${version_name}.jar` 只匹配"主 jar 按启动器版本 id 命名"的官方布局，不匹配我们的 `1.20.1.jar`。
+- **修复**（对齐 HMCL `MaintainTask.maintainGameWithCpwBoostrapLauncher`，bsl ≥ 0.1.17 分支）：`generate_command_line` 中检测 BootstrapLauncher 主类（Forge/NeoForge 1.17+），把 `${primary_jar_name}`（主 jar 文件名）追加进解析后的 `-DignoreList`。回归测试 `test_bootstrap_launcher_ignore_list_appends_primary_jar` 钉死追加与 vanilla 不动两侧行为。
+
+**2026-10-25（实测修复：Forge 启动崩溃根因 + AI 日志分析回退）**：
+
+- **Forge 47.4.5 启动即崩（exit 1, `InaccessibleObjectException`）根因修复**：版本隔离（默认 `modded` 隔离 + Forge 实例）时 `run_dir` 是实例根，`get_configurations` 把它当 `game_dir` 传入 `build_template_vars`，`${library_directory}` 被推导成 `{实例根}/libraries`（不存在）→ Forge `-p ${library_directory}/...` 模块路径全部落空 → JVM `Unknown module: cpw.mods.securejarhandler` 警告 → `--add-opens java.base/java.lang.invoke=...` 被静默忽略 → `BootstrapLauncher` 反射 `IMPL_LOOKUP` 抛 `ExceptionInInitializerError`。修复：`get_configurations` 显式用共享 libraries 根覆盖该变量（HMCL `DefaultLauncher` "library_directory" → `repository.getLibrariesDirectory` 对齐）；回归测试 `test_library_directory_points_at_shared_libraries_root` 钉死模板变量与解析后 `-p` 两层。
+- **AI 日志分析拿不到崩溃日志（"未找到游戏日志…先启动一次游戏再分析"误报）**：崩溃发生在 log4j 文件初始化之前时 `latest.log` 不生成，而 AI 分析（`ai_analyze_log`）与 MCP `game_logs` 只读该文件；启动器侧捕获的进程输出在 `launch_start` 拿到 pid 后即被丢弃。修复：`AppState` 新增每实例输出环形缓冲（`game_output`，2000 行，`TauriProcessListener.on_log` 落行、新一轮启动清空）；两处读取在 latest.log 缺失或为空时回退到捕获输出，AI 分析的 context 标注日志来源，MCP 返回增加 `source` 字段。
+
 **2026-10-25（审计整改批次 7 `chore/audit-cleanup`：后端死代码清理 + 文档对齐）**：
 
 - **死代码清理（净删 ~530 行）**：

@@ -90,6 +90,23 @@ pub fn select_for(
     })
 }
 
+/// `java.version` → 主版本号（2026-10-25 修复：legacy 命名方案此前没实现）。
+///
+/// - 现代（Java 9+）：`17.0.9` → `17`，`25.0.2` → `25`；
+/// - legacy（≤ Java 8）：`1.8.0_392` / `1.8` → `8`——此前取首段得 `1`，
+///   Java 8 安装被识别成 "Java 1"，`required=8` 时永远匹配不上
+///   （日志症状：`required = 8, found = 17` 的回退）；
+/// - 加后缀的 `25.0.2-internal` / `1.8.0_392-b10` 同样兼容。
+fn legacy_aware_major(version: &str) -> Option<u32> {
+    let mut segments = version.split('.');
+    let first: u32 = segments.next()?.parse().ok()?;
+    if first == 1 {
+        // legacy `1.MAJOR...`：主版本在第二段
+        return segments.next()?.parse().ok();
+    }
+    Some(first)
+}
+
 /// 读一个 java 可执行文件的版本 / vendor / 位数。
 ///
 /// 所有平台同一条命令（`-XshowSettings:properties -version`），因此这段逻辑
@@ -116,8 +133,7 @@ pub fn probe_java_binary(path: &Path) -> Option<JavaInstallation> {
         .lines()
         .find(|l| l.contains("java.version"))
         .and_then(|l| l.split('=').nth(1))
-        .and_then(|v| v.trim().split('.').next())
-        .and_then(|v| v.parse::<u32>().ok());
+        .and_then(|v| legacy_aware_major(v.trim()));
 
     let Some(major) = major else {
         tracing::warn!(path = %path.display(), "Failed to parse Java version");
@@ -227,5 +243,18 @@ mod tests {
     #[test]
     fn probe_missing_binary_returns_none() {
         assert!(probe_java_binary(Path::new("/definitely/not/java")).is_none());
+    }
+
+    #[test]
+    fn legacy_version_scheme_parses_second_segment() {
+        // 2026-10-25 修复：`1.8.0_392` 此前取首段得 1，Java 8 被识别成 "Java 1"。
+        assert_eq!(legacy_aware_major("1.8.0_392"), Some(8));
+        assert_eq!(legacy_aware_major("1.8"), Some(8));
+        assert_eq!(legacy_aware_major("1.8.0_392-b10"), Some(8));
+        assert_eq!(legacy_aware_major("17.0.9"), Some(17));
+        assert_eq!(legacy_aware_major("25.0.2"), Some(25));
+        assert_eq!(legacy_aware_major("21"), Some(21));
+        assert_eq!(legacy_aware_major("garbage"), None);
+        assert_eq!(legacy_aware_major(""), None);
     }
 }

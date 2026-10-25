@@ -15,6 +15,9 @@ use rmccc_error::IpcError;
 use std::sync::Arc;
 use tauri::Emitter;
 
+/// 每实例保留的输出行上限（与进程内存缓冲同量级，崩溃分析只需尾部）。
+const GAME_OUTPUT_CAP: usize = 2000;
+
 /// Forwards game process events to the UI (HMCL `ProcessListener`).
 ///
 /// `on_log` → `LAUNCH_OUTPUT`; `on_exit` → `LAUNCH_EXITED` (with exit type)
@@ -23,10 +26,20 @@ struct TauriProcessListener {
     app_handle: tauri::AppHandle,
     profile_id: String,
     running_games: Arc<dashmap::DashMap<String, u32>>,
+    /// 每实例输出环形缓冲（AI 日志分析 / MCP game_logs 的 latest.log 回退源）。
+    game_output: Arc<dashmap::DashMap<String, Arc<std::sync::Mutex<Vec<String>>>>>,
 }
 
 impl rmccc_launch::ProcessListener for TauriProcessListener {
     fn on_log(&self, line: String, _is_stderr: bool) {
+        if let Some(buf) = self.game_output.get(&self.profile_id) {
+            let mut lines = buf.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+            lines.push(line.clone());
+            let excess = lines.len().saturating_sub(GAME_OUTPUT_CAP);
+            if excess > 0 {
+                lines.drain(..excess);
+            }
+        }
         let _ = self.app_handle.emit(
             crate::events::LAUNCH_OUTPUT,
             serde_json::json!({ "profile_id": self.profile_id, "text": line }),
@@ -85,7 +98,20 @@ pub async fn launch_start(
         app_handle: state.app_handle.clone(),
         profile_id: profile_id.clone(),
         running_games: state.running_games.clone(),
+        game_output: state.game_output.clone(),
     });
+
+    // 新一轮启动：清掉上一轮的捕获输出（进程退出后保留供事后分析）。
+    // 必须在 spawn 之前建好，on_log 才有地方落行。
+    let output_buf = state
+        .game_output
+        .entry(profile_id.clone())
+        .or_insert_with(|| Arc::new(std::sync::Mutex::new(Vec::new())));
+    output_buf
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .clear();
+    drop(output_buf);
 
     // ── 解析 profile → 启动前修复 → 启动（编排全在 pipeline）──
     // A2：ensure_launch_ready 可能触发修复下载、launch_game 含 Java 探测与

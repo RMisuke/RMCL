@@ -72,7 +72,12 @@ pub enum ModLoaderType {
 impl ModLoaderType {
     #[allow(clippy::should_implement_trait)]
     pub fn from_str(s: &str) -> Option<Self> {
-        match s.to_lowercase().as_str() {
+        // 同时接受两种形态：本 crate 的 library_id（"neoforge"，与
+        // DependencyManager 注册表键一致）和 serde `snake_case` 序列化名
+        //（"neo_forge"——ts-rs 生成给前端的值，IPC 传回的就是它）。
+        // 此前只认前者，NeoForge/OptiFine/LiteLoader/LegacyFabric 四个
+        // 驼峰变体从下载页请求版本列表/安装一律 "Unknown mod loader type"。
+        match s.to_lowercase().replace('_', "").as_str() {
             "fabric" => Some(Self::Fabric),
             "forge" => Some(Self::Forge),
             "neoforge" => Some(Self::NeoForge),
@@ -163,6 +168,21 @@ pub struct LoaderVersion {
 
 /// Progress callback for version list loading and installation.
 pub type ProgressCallback = Arc<dyn Fn(&str, u32, u32) + Send + Sync>;
+
+/// 安装进度事件（Task Center 细节展示，2026-10-25）。
+///
+/// `stage` 是稳定机器名（下载 / 运行安装器 / 检测产物 / 补库等），`percent`
+/// 是整体安装的爬行估值（不精确到字节，但单调推进），`message` 是直接可展示
+/// 的细节行（安装器 stdout 原行、下载字节数等）。
+#[derive(Debug, Clone)]
+pub struct InstallProgressEvent {
+    pub stage: &'static str,
+    pub percent: u8,
+    pub message: String,
+}
+
+/// 安装进度回调；`None` 时安装行为与此前完全一致。
+pub type InstallProgressCallback = Arc<dyn Fn(InstallProgressEvent) + Send + Sync>;
 
 /// loader 安装产物。
 ///
@@ -306,6 +326,9 @@ impl DependencyManager {
     /// |---|---|---|
     /// | Forge / NeoForge | 运行官方 installer JAR | 安装器自写 `versions/<id>/<id>.json` |
     /// | 其余 6 种 | 打 [`GameInstancePatch`] | 调用方写增量 JSON（`inheritsFrom` + `patches`） |
+    // 进度参数独立成位（不并入 options struct）：调用方两行内的改动面最小；
+    // 7 个定位参数均为安装固有输入（HMCL 同形）。
+    #[allow(clippy::too_many_arguments)]
     pub async fn install_loader(
         &self,
         loader_type: &ModLoaderType,
@@ -314,6 +337,7 @@ impl DependencyManager {
         loader_version: &str,
         game_dir: &Path,
         java_path: &Path,
+        progress: Option<InstallProgressCallback>,
     ) -> Result<LoaderInstallOutcome> {
         // A6 triage: incomplete installers fail fast with a clear message
         // instead of "succeeding" into an unbootable instance.
@@ -331,7 +355,7 @@ impl DependencyManager {
                 game_dir,
             };
             let version_id = runner
-                .run(loader_type, game_version, loader_version)
+                .run(loader_type, game_version, loader_version, progress.as_ref())
                 .await?;
             return Ok(LoaderInstallOutcome::InstallerJar { version_id });
         }
@@ -344,6 +368,7 @@ impl DependencyManager {
                 loader_version,
                 game_dir,
                 java_path,
+                progress,
             )
             .await?;
         // `install_with_patch` 已把 patch 合进 merged；这里只取 patch 生成的 id。
@@ -371,6 +396,7 @@ impl DependencyManager {
             loader_version,
             game_dir,
             java_path,
+            None,
         )
         .await
         .map(|(version, _)| version)
@@ -382,6 +408,9 @@ impl DependencyManager {
     /// The patch enables the HMCL-aligned incremental model: the caller can
     /// serialize a version JSON that carries `inheritsFrom` + `patches` instead
     /// of a frozen merged manifest (rollback = remove the patch).
+    // 进度参数独立成位（不并入 options struct）：调用方两行内的改动面最小；
+    // 7 个定位参数均为安装固有输入（HMCL 同形）。
+    #[allow(clippy::too_many_arguments)]
     pub async fn install_with_patch(
         &self,
         loader_type: &ModLoaderType,
@@ -390,8 +419,20 @@ impl DependencyManager {
         loader_version: &str,
         game_dir: &Path,
         java_path: &Path,
+        progress: Option<InstallProgressCallback>,
     ) -> Result<(rmccc_version::GameVersion, GameInstancePatch)> {
         let id = loader_type.library_id();
+        if let Some(cb) = &progress {
+            cb(InstallProgressEvent {
+                stage: "fetch",
+                percent: 20,
+                message: format!(
+                    "获取 {} {} 元数据 ...",
+                    loader_type.display_name(),
+                    loader_version
+                ),
+            });
+        }
         let vl = self.get_vl(id)?;
         vl.load(game_version).await?;
 
@@ -411,6 +452,13 @@ impl DependencyManager {
         };
         let cleaned = self.remove_library(base_version, id);
         let mut task = rv.create_install_task(self, &cleaned, &ctx)?;
+        if let Some(cb) = &progress {
+            cb(InstallProgressEvent {
+                stage: "execute",
+                percent: 45,
+                message: format!("执行 {} 安装任务 ...", loader_type.display_name()),
+            });
+        }
         let patch = task.execute().await?;
         let mut merged = cleaned;
         patch.merge_into(&mut merged);

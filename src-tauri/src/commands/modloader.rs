@@ -3,6 +3,7 @@
 use crate::state::AppState;
 use rmccc_error::IpcError;
 use rmccc_modloader::{DependencyManager, LoaderVersion, ModLoaderType};
+use std::sync::Arc;
 use tauri::Emitter;
 
 /// 发射 modloader 安装进度事件（P2-06）。
@@ -89,6 +90,7 @@ pub async fn modloader_install(
             })?
     };
     let base_game_version = profile.game_version.clone();
+    let base_game_version_for_progress = base_game_version.clone();
 
     emit_modloader_progress(
         &app_handle,
@@ -100,6 +102,25 @@ pub async fn modloader_install(
         &format!("开始安装 {} ...", lt.display_name()),
     );
 
+    // 安装细节回调：modloader crate 的阶段事件逐条转发为 IPC 进度事件
+    //（下载字节 / 安装器 stdout 原行 / 检测产物 / 补库），Task Center 展示。
+    let progress: rmccc_modloader::InstallProgressCallback = {
+        let app_handle = app_handle.clone();
+        let profile_id = profile_id.clone();
+        let loader_type = loader_type.clone();
+        Arc::new(move |event: rmccc_modloader::InstallProgressEvent| {
+            emit_modloader_progress(
+                &app_handle,
+                &profile_id,
+                &loader_type,
+                &base_game_version_for_progress,
+                event.stage,
+                event.percent,
+                &event.message,
+            );
+        })
+    };
+
     // 统一入口（P1-4）：installer-JAR 与 patch 两条路径的分流已在
     // `rmccc_modloader` 内部，Tauri/CLI 不再各自 match。
     // A2：Forge/NeoForge 安装要运行官方 installer JAR（分钟级）——handle
@@ -108,8 +129,30 @@ pub async fn modloader_install(
         let core = state.core.read().await;
         core.handle()
     };
-    let installed =
-        rmccc_core::modloader::install_loader(&core, &profile, &lt, &loader_version).await?;
+    let installed = match rmccc_core::modloader::install_loader(
+        &core,
+        &profile,
+        &lt,
+        &loader_version,
+        Some(progress),
+    )
+    .await
+    {
+        Ok(installed) => installed,
+        Err(error) => {
+            // 失败也要落地：否则 Task Center 的安装行永远悬着。
+            emit_modloader_progress(
+                &app_handle,
+                &profile_id,
+                &loader_type,
+                &base_game_version,
+                "failed",
+                100,
+                &format!("安装失败：{error}"),
+            );
+            return Err(error.into());
+        }
+    };
     tracing::info!(
         profile_id = %profile_id,
         loader = %loader_type,

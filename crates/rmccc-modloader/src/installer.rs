@@ -12,11 +12,11 @@
 
 use rmccc_error::{Result, RmcccError};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use crate::ModLoaderType;
 
 /// NeoForge Maven 根。
-const NEOFORGE_MAVEN: &str = "https://maven.neoforged.net/releases/net/neoforged";
 /// MinecraftForge Maven 根。
 const FORGE_MAVEN: &str = "https://maven.minecraftforge.net/net/minecraftforge/forge";
 
@@ -33,15 +33,62 @@ impl<'a> InstallerJarRunner<'a> {
     /// 返回的 id 以磁盘上实际出现的 `versions/<id>/<id>.json` 为准（安装器有
     /// 时会把 MC 版本号写成 `1.20.1-forge-47.2.0`，有时只写 `1.20.1`），
     /// 而不是我们猜测的字符串。
+    ///
+    /// `progress` 为 `Some` 时逐阶段上报（下载字节进度、安装器 stdout 原行），
+    /// 供 Task Center 展示安装细节。
     pub async fn run(
         &self,
         loader_type: &ModLoaderType,
         mc_version: &str,
         loader_version: &str,
+        progress: Option<&crate::InstallProgressCallback>,
     ) -> Result<String> {
         let before = self.version_ids()?;
         let candidates = installer_urls(loader_type, mc_version, loader_version);
-        let (installer_path, used_url) = download_installer_file(self.client, &candidates).await?;
+        if let Some(cb) = progress {
+            cb(crate::InstallProgressEvent {
+                stage: "download",
+                percent: 5,
+                message: format!(
+                    "下载 {} 安装器 {} ...",
+                    loader_type.display_name(),
+                    loader_version
+                ),
+            });
+        }
+        // 字节级下载进度：≥1 MiB 或完成才上报（chunk 级会刷屏）。
+        let byte_progress = progress.map(|cb| {
+            let cb = Arc::clone(cb);
+            let last = std::sync::atomic::AtomicU64::new(0);
+            move |done: u64, total: Option<u64>| {
+                let last_done = last.load(std::sync::atomic::Ordering::Relaxed);
+                let finished = total.is_some_and(|t| done >= t);
+                if done.saturating_sub(last_done) < 1024 * 1024 && !finished {
+                    return;
+                }
+                last.store(done, std::sync::atomic::Ordering::Relaxed);
+                let (percent, total_str) = match total {
+                    Some(t) if t > 0 => (
+                        5u8 + ((done.min(t) * 15) / t) as u8,
+                        format!(" / {}", mib_str(t)),
+                    ),
+                    _ => (10u8, String::new()),
+                };
+                cb(crate::InstallProgressEvent {
+                    stage: "download",
+                    percent: percent.min(20),
+                    message: format!("下载安装器：{}{}", mib_str(done), total_str),
+                });
+            }
+        });
+        let (installer_path, used_url) = download_installer_file(
+            self.client,
+            &candidates,
+            byte_progress
+                .as_ref()
+                .map(|f| f as &(dyn Fn(u64, Option<u64>) + Send + Sync)),
+        )
+        .await?;
         tracing::info!(loader = %loader_type.display_name(), url = %used_url, "Loader installer downloaded");
 
         let result = self
@@ -51,6 +98,7 @@ impl<'a> InstallerJarRunner<'a> {
                 mc_version,
                 loader_version,
                 before,
+                progress,
             )
             .await;
         // 安装器 JAR 不再需要（无论成败都清理，见 download_installer_file 注释）。
@@ -75,6 +123,7 @@ impl<'a> InstallerJarRunner<'a> {
             mc_version,
             loader_version,
             before,
+            None,
         )
         .await
     }
@@ -87,6 +136,7 @@ impl<'a> InstallerJarRunner<'a> {
         mc_version: &str,
         loader_version: &str,
         before: Vec<String>,
+        progress: Option<&crate::InstallProgressCallback>,
     ) -> Result<String> {
         let profiles_path = self.game_dir.join("launcher_profiles.json");
         if !profiles_path.exists() {
@@ -99,20 +149,54 @@ impl<'a> InstallerJarRunner<'a> {
             installer = %installer_path.display(),
             "Running loader installer JAR"
         );
+        if let Some(cb) = progress {
+            cb(crate::InstallProgressEvent {
+                stage: "run",
+                percent: 25,
+                message: format!(
+                    "运行 {} 官方安装器（processors 阶段可能持续数分钟）...",
+                    loader_type.display_name()
+                ),
+            });
+        }
+
         // 安装器要解压大量库 + 跑 processors，慢机上可达数分钟；完全无超时
         // 才是原状（此前挂起会永久卡住安装命令）。
         const INSTALLER_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(600);
-        let output = tokio::time::timeout(
-            INSTALLER_TIMEOUT,
-            tokio::process::Command::new(self.java_path)
-                .arg("-jar")
-                .arg(installer_path)
-                .arg("--installClient")
-                .arg(self.game_dir)
-                .stdout(std::process::Stdio::piped())
-                .stderr(std::process::Stdio::piped())
-                .output(),
-        )
+        let spawned = tokio::process::Command::new(self.java_path)
+            .arg("-jar")
+            .arg(installer_path)
+            .arg("--installClient")
+            .arg(self.game_dir)
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .map_err(|e| {
+                RmcccError::Other(format!(
+                    "Failed to run {} installer: {e}",
+                    loader_type.display_name()
+                ))
+            })?;
+        let mut child = spawned;
+        let stdout = child.stdout.take();
+        let stderr = child.stderr.take();
+        // stdout 逐行转发为细节事件；stderr 收集尾部供失败诊断。
+        let stdout_pump = tokio::spawn(pump_installer_output(stdout, progress.cloned(), true));
+        let stderr_pump = tokio::spawn(pump_installer_output(stderr, None, false));
+        let output = tokio::time::timeout(INSTALLER_TIMEOUT, async {
+            let status = child.wait().await.map_err(|e| {
+                RmcccError::Other(format!(
+                    "Failed to run {} installer: {e}",
+                    loader_type.display_name()
+                ))
+            })?;
+            let (stdout_tail, stderr_tail) = tokio::join!(stdout_pump, stderr_pump);
+            Ok::<_, RmcccError>((
+                status,
+                stdout_tail.unwrap_or_default(),
+                stderr_tail.unwrap_or_default(),
+            ))
+        })
         .await
         .map_err(|_| {
             RmcccError::Other(format!(
@@ -120,25 +204,38 @@ impl<'a> InstallerJarRunner<'a> {
                 loader_type.display_name(),
                 INSTALLER_TIMEOUT.as_secs()
             ))
-        })?
-        .map_err(|e| {
-            RmcccError::Other(format!(
-                "Failed to run {} installer: {e}",
-                loader_type.display_name()
-            ))
-        })?;
+        })??;
 
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            let exit_code = output
-                .status
+        let (status, stdout_tail, stderr_tail) = output;
+        if !status.success() {
+            let exit_code = status
                 .code()
                 .map(|c| c.to_string())
                 .unwrap_or_else(|| "unknown".into());
+            let mut tail = stderr_tail.clone();
+            if tail.is_empty() {
+                tail = stdout_tail;
+            }
+            let tail = tail
+                .iter()
+                .rev()
+                .take(8)
+                .rev()
+                .cloned()
+                .collect::<Vec<_>>()
+                .join("\n");
             return Err(RmcccError::Other(format!(
-                "{} installer failed (exit {exit_code}): {stderr}",
+                "{} installer failed (exit {exit_code}): {tail}",
                 loader_type.display_name()
             )));
+        }
+
+        if let Some(cb) = progress {
+            cb(crate::InstallProgressEvent {
+                stage: "detect",
+                percent: 65,
+                message: "安装器执行完毕，检测产物版本 ...".to_string(),
+            });
         }
 
         // 以"新增了哪个版本目录"为准，而不是猜 id。
@@ -150,6 +247,13 @@ impl<'a> InstallerJarRunner<'a> {
             .or_else(|| created.last())
         {
             tracing::info!(version_id = %id, "Loader installer created version");
+            if let Some(cb) = progress {
+                cb(crate::InstallProgressEvent {
+                    stage: "detect",
+                    percent: 70,
+                    message: format!("安装器创建版本 {id}"),
+                });
+            }
             return Ok((*id).clone());
         }
 
@@ -191,18 +295,39 @@ impl<'a> InstallerJarRunner<'a> {
 /// - ZIP 完整性早失败（不是合法 ZIP 不交给 Java）；
 /// - `{url}.sha1` 可取时强制校验（镜像劫持/损坏即失败）；取不到时警告放行
 ///   （部分镜像不带 .sha1）；
+/// - **候选内重试**（2026-10-25 NeoForge 26.1 安装失败实测）：BMCLAPI 的 302
+///   在多个镜像间轮询，个别镜像节点会对请求瞬时 403——单次尝试会把整个候选
+///   废掉；重试大概率落到健康镜像。库下载走下载管理器本就有 attempts，这里
+///   对齐同样的韧性。
 /// - **调用方负责在使用后删除**（成功与失败路径都要）。
 pub async fn download_installer_file(
     client: &reqwest::Client,
     candidates: &[String],
+    byte_progress: Option<&(dyn Fn(u64, Option<u64>) + Send + Sync)>,
 ) -> Result<(PathBuf, String)> {
+    /// 每个候选 URL 的尝试次数（BMCLAPI 302 轮询镜像，瞬时 403 靠重试吸收）。
+    const ATTEMPTS_PER_CANDIDATE: usize = 3;
+
     let mut last_error = String::new();
 
     for url in candidates {
-        let fetched = fetch_installer_candidate(client, url).await;
-        match fetched {
-            Ok(path) => return Ok((path, url.clone())),
-            Err(e) => last_error = format!("{url} — {e}"),
+        for attempt in 0..ATTEMPTS_PER_CANDIDATE {
+            let fetched = fetch_installer_candidate(client, url, byte_progress).await;
+            match fetched {
+                Ok(path) => return Ok((path, url.clone())),
+                Err(e) => {
+                    tracing::warn!(
+                        url = %url,
+                        attempt,
+                        error = %e,
+                        "Installer candidate failed; retrying"
+                    );
+                    last_error = format!("{url} — {e}");
+                    if attempt + 1 < ATTEMPTS_PER_CANDIDATE {
+                        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+                    }
+                }
+            }
         }
     }
 
@@ -213,7 +338,11 @@ pub async fn download_installer_file(
 }
 
 /// 单候选下载 + 校验；失败时清理半成品临时文件。
-async fn fetch_installer_candidate(client: &reqwest::Client, url: &str) -> Result<PathBuf> {
+async fn fetch_installer_candidate(
+    client: &reqwest::Client,
+    url: &str,
+    byte_progress: Option<&(dyn Fn(u64, Option<u64>) + Send + Sync)>,
+) -> Result<PathBuf> {
     let resp = client
         .get(url)
         .send()
@@ -225,7 +354,7 @@ async fn fetch_installer_candidate(client: &reqwest::Client, url: &str) -> Resul
 
     let temp = unique_installer_temp_path(url);
     let result = async {
-        stream_to_file(resp, &temp).await?;
+        stream_to_file(resp, &temp, byte_progress).await?;
         validate_and_verify(client, url, &temp).await
     }
     .await;
@@ -242,7 +371,11 @@ async fn fetch_installer_candidate(client: &reqwest::Client, url: &str) -> Resul
 }
 
 /// 流式写盘（chunk 循环，installer ~180MB 不再整份进内存）。
-async fn stream_to_file(mut resp: reqwest::Response, dest: &Path) -> Result<()> {
+async fn stream_to_file(
+    mut resp: reqwest::Response,
+    dest: &Path,
+    byte_progress: Option<&(dyn Fn(u64, Option<u64>) + Send + Sync)>,
+) -> Result<()> {
     use tokio::io::AsyncWriteExt;
     if let Some(parent) = dest.parent() {
         std::fs::create_dir_all(parent)?;
@@ -250,15 +383,72 @@ async fn stream_to_file(mut resp: reqwest::Response, dest: &Path) -> Result<()> 
     let mut file = tokio::fs::File::create(dest)
         .await
         .map_err(RmcccError::Io)?;
+    let total = resp.content_length();
+    let mut done: u64 = 0;
     while let Some(chunk) = resp
         .chunk()
         .await
         .map_err(|e| RmcccError::Network(e.to_string()))?
     {
         file.write_all(&chunk).await.map_err(RmcccError::Io)?;
+        done += chunk.len() as u64;
+        if let Some(cb) = byte_progress {
+            cb(done, total);
+        }
     }
     file.flush().await.map_err(RmcccError::Io)?;
     Ok(())
+}
+
+/// 安装器输出泵：stdout 逐行转发为细节进度事件；stderr 只收集尾部供失败诊断。
+async fn pump_installer_output<R: tokio::io::AsyncRead + Unpin>(
+    reader: Option<R>,
+    progress: Option<crate::InstallProgressCallback>,
+    emit_lines: bool,
+) -> Vec<String> {
+    use tokio::io::{AsyncBufReadExt, BufReader};
+    let Some(reader) = reader else {
+        return Vec::new();
+    };
+    let mut collected: Vec<String> = Vec::new();
+    let mut line_no: usize = 0;
+    let mut buf = BufReader::new(reader);
+    let mut line = String::new();
+    loop {
+        line.clear();
+        match buf.read_line(&mut line).await {
+            Ok(0) | Err(_) => break,
+            Ok(_) => {}
+        }
+        let trimmed = line.trim_end().to_string();
+        if trimmed.is_empty() {
+            continue;
+        }
+        // 保底限内存：只留尾部 200 行。
+        if collected.len() >= 200 {
+            collected.remove(0);
+        }
+        collected.push(trimmed.clone());
+        if emit_lines {
+            if let Some(cb) = &progress {
+                line_no += 1;
+                // 安装器行数未知：30→60% 按行数爬行（上限封顶，completed 由
+                // 外层 detect/completed 阶段接管）。
+                let percent = 30u8.saturating_add((line_no.min(120) / 4) as u8).min(60);
+                cb(crate::InstallProgressEvent {
+                    stage: "detail",
+                    percent,
+                    message: trimmed,
+                });
+            }
+        }
+    }
+    collected
+}
+
+/// 字节数 → MiB 展示（下载进度行）。
+fn mib_str(bytes: u64) -> String {
+    format!("{:.1} MiB", bytes as f64 / (1024.0 * 1024.0))
 }
 
 /// ZIP 完整性 + （可取时）`.sha1` 校验。
@@ -337,7 +527,11 @@ fn sha1_of_file(path: &Path) -> Result<String> {
 
 /// 该 loader 是否需要"运行官方安装器"（而不是打 patch）。
 pub fn needs_installer_jar(loader_type: &ModLoaderType) -> bool {
-    matches!(loader_type, ModLoaderType::Forge | ModLoaderType::NeoForge)
+    // NeoForge 不在此列（HMCL 对齐）：NeoForge 安装器**从不整体交给
+    // `java -jar` 运行**，而是读出 install_profile 后复用 Forge processors
+    // 管线自处理（`neoforge::NeoForgeInstallTask`）——可靠且安装器下载可走
+    // 镜像候选。见 `DependencyManager::install_loader` 的 patch 分支。
+    matches!(loader_type, ModLoaderType::Forge)
 }
 
 /// 安装器 JAR 的候选 URL（纯函数，便于单测）。
@@ -352,10 +546,8 @@ pub fn installer_urls(
         ModLoaderType::Forge => vec![format!(
             "{FORGE_MAVEN}/{mc_version}-{loader_version}/forge-{mc_version}-{loader_version}-installer.jar"
         )],
-        ModLoaderType::NeoForge => vec![
-            format!("{NEOFORGE_MAVEN}/neoforge/{loader_version}/neoforge-{loader_version}-installer.jar"),
-            format!("{NEOFORGE_MAVEN}/forge/{loader_version}/forge-{loader_version}-installer.jar"),
-        ],
+        // NeoForge 不走 installer-JAR 路径（见 needs_installer_jar 注释），
+        // 其安装器候选 URL 由 `neoforge::NeoForgeVersionList` 提供。
         _ => Vec::new(),
     }
 }
@@ -376,9 +568,11 @@ mod tests {
     use super::*;
 
     #[test]
-    fn only_forge_and_neoforge_need_installer_jar() {
+    fn only_forge_needs_installer_jar() {
+        // NeoForge 对齐 HMCL：不走整体安装器，走 neoforge::NeoForgeInstallTask
+        // 的 processors 管线（其下载候选由版本列表提供）。
         assert!(needs_installer_jar(&ModLoaderType::Forge));
-        assert!(needs_installer_jar(&ModLoaderType::NeoForge));
+        assert!(!needs_installer_jar(&ModLoaderType::NeoForge));
         for other in [
             ModLoaderType::Fabric,
             ModLoaderType::Quilt,
@@ -403,15 +597,10 @@ mod tests {
     }
 
     #[test]
-    fn neoforge_tries_both_artifact_names() {
-        let urls = installer_urls(&ModLoaderType::NeoForge, "1.20.1", "47.1.106");
-        assert_eq!(urls.len(), 2);
-        assert!(urls[0].contains("/neoforge/"));
-        assert!(urls[1].contains("/forge/"));
-    }
-
-    #[test]
     fn non_installer_loaders_have_no_installer_urls() {
+        // NeoForge 的安装器候选 URL 由 neoforge::NeoForgeVersionList 提供，
+        // 不再经过此函数（needs_installer_jar 已将其划入 patch 管线）。
+        assert!(installer_urls(&ModLoaderType::NeoForge, "1.20.1", "47.1.106").is_empty());
         assert!(installer_urls(&ModLoaderType::Fabric, "1.20.4", "0.15.0").is_empty());
     }
 }

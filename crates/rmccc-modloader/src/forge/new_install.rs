@@ -69,7 +69,44 @@ impl InstallTask for ForgeNewInstallTask {
         );
 
         // ── 3. Build template variables ──
-        let vars = build_template_vars(&self.game_dir, &self.installer_path, &self.game_version);
+        let mut vars =
+            build_template_vars(&self.game_dir, &self.installer_path, &self.game_version);
+
+        // ── 3b. data 表中指向**安装器内部文件**的条目解压到临时文件（HMCL
+        // `NeoForgeOldInstallTask::execute` 同款）──
+        // NeoForge 的 `{BINPATCH}` = `/data/client.lzma` 等是 ZIP 内路径，直接
+        // 传给处理器会拿去开文件系统绝对路径 → FileNotFoundException。Forge
+        // 47.4.5 走 installer-JAR 整体运行所以从未暴露；processors 自处理路径
+        // 必须补齐。
+        let data_temp_dir = std::env::temp_dir().join(format!(
+            "rmccc-loader-data-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
+        ));
+        std::fs::create_dir_all(&data_temp_dir)?;
+        {
+            let zip_file = std::fs::File::open(&self.installer_path)?;
+            let mut archive = zip::ZipArchive::new(zip_file)
+                .map_err(|e| RmcccError::Other(format!("installer is not a valid ZIP: {e}")))?;
+            for (key, entry) in &profile.data {
+                let resolved = resolve_template(&entry.client, &vars, &profile.data, &libs_dir)?;
+                if !resolved.starts_with('/') {
+                    continue;
+                }
+                let inner = resolved.trim_start_matches('/');
+                let Ok(mut zip_entry) = archive.by_name(inner) else {
+                    continue;
+                };
+                let dest = data_temp_dir.join(sanitize_data_temp_name(key));
+                let mut out = std::fs::File::create(&dest)?;
+                std::io::copy(&mut zip_entry, &mut out)?;
+                vars.insert(key.clone(), dest.display().to_string());
+                tracing::debug!(data_key = %key, zip_path = %inner, "extracted installer data entry");
+            }
+        }
 
         // ── 4. Read the version JSON from the installer ──
         let version_info = self.read_version_json(&profile)?;
@@ -153,8 +190,20 @@ impl ForgeNewInstallTask {
             entry.read_to_string(&mut version_json)?;
         }
 
-        serde_json::from_str(&version_json)
-            .map_err(|e| RmcccError::Other(format!("Failed to parse version JSON: {e}")))
+        // 安装器内的子 version JSON 常缺 `assetIndex` / `downloads` 等字段
+        //（NeoForge 26.1 实测缺 assetIndex）——typed 整体解析会失败。patch 只
+        // 需要 mainClass / arguments / libraries，走宽松的部分解析即可
+        //（与 pipeline::resolve_version 的合并语义同源）。
+        let value: serde_json::Value = serde_json::from_str(&version_json)
+            .map_err(|e| RmcccError::Other(format!("Failed to parse version JSON: {e}")))?;
+        let mut partial = rmccc_version::GameVersion::default();
+        rmccc_version::merge_partial_json_into_parent(&mut partial, &value);
+        if partial.main_class.is_empty() {
+            return Err(RmcccError::Other(
+                "Installer version JSON has no mainClass".to_string(),
+            ));
+        }
+        Ok(partial)
     }
 
     /// Check if all processor outputs exist with correct SHA-1 hashes.
@@ -435,21 +484,31 @@ async fn download_processor_libraries(
             );
             continue;
         }
-        let resp = client
-            .get(&artifact.url)
-            .send()
-            .await
-            .map_err(|e| RmcccError::Network(e.to_string()))?;
-        if !resp.status().is_success() {
-            return Err(RmcccError::DownloadFailed {
-                url: artifact.url.clone(),
-                reason: format!("HTTP {}", resp.status()),
-            });
+        // 镜像候选（2026-10-25 NeoForge 26.1 安装实测）：maven.neoforged.net 在
+        // 部分网络下直连超时；BMCLAPI 的 `/maven/` 路径镜像了 neoforged /
+        // minecraftforge maven（安装器本体即由它伺服）。原 URL 失败时切镜像。
+        let mut last_error: Option<RmcccError> = None;
+        let mut downloaded: Option<Vec<u8>> = None;
+        for url in mirror_candidates(&artifact.url) {
+            match fetch_url(client, &url).await {
+                Ok(bytes) => {
+                    downloaded = Some(bytes);
+                    break;
+                }
+                Err(e) => {
+                    tracing::warn!(library = %lib.name, url = %url, error = %e, "processor dependency candidate failed");
+                    last_error = Some(e);
+                }
+            }
         }
-        let bytes = resp
-            .bytes()
-            .await
-            .map_err(|e| RmcccError::Network(e.to_string()))?;
+        let bytes = match downloaded {
+            Some(bytes) => bytes,
+            None => {
+                return Err(last_error.unwrap_or_else(|| {
+                    RmcccError::Other(format!("no candidates for {}", lib.name))
+                }));
+            }
+        };
         if !artifact.sha1.is_empty() {
             use sha1::{Digest, Sha1};
             let mut hasher = Sha1::new();
@@ -471,7 +530,53 @@ async fn download_processor_libraries(
     Ok(())
 }
 
+/// BMCLAPI maven 镜像根（`/maven/{maven path}`，无 `releases` 段）。
+const BMCLAPI_MAVEN: &str = "https://bmclapi2.bangbang93.com/maven";
+
+/// 原 URL 优先，紧跟 BMCLAPI maven 镜像候选（仅对已知两大 modloader maven）。
+fn mirror_candidates(url: &str) -> Vec<String> {
+    let mut v = vec![url.to_string()];
+    if let Some(rest) = url.strip_prefix("https://maven.neoforged.net/releases/") {
+        v.push(format!("{BMCLAPI_MAVEN}/{rest}"));
+    } else if let Some(rest) = url.strip_prefix("https://maven.minecraftforge.net/maven/") {
+        v.push(format!("{BMCLAPI_MAVEN}/{rest}"));
+    }
+    v
+}
+
+async fn fetch_url(client: &reqwest::Client, url: &str) -> Result<Vec<u8>> {
+    let resp = client
+        .get(url)
+        .send()
+        .await
+        .map_err(|e| RmcccError::Network(e.to_string()))?;
+    if !resp.status().is_success() {
+        return Err(RmcccError::DownloadFailed {
+            url: url.to_string(),
+            reason: format!("HTTP {}", resp.status()),
+        });
+    }
+    let bytes = resp
+        .bytes()
+        .await
+        .map_err(|e| RmcccError::Network(e.to_string()))?;
+    Ok(bytes.to_vec())
+}
+
 // ── Utilities ──
+
+/// data 键名 → 安全临时文件名（防穿越：只留字母数字与 `-_`）。
+fn sanitize_data_temp_name(key: &str) -> String {
+    let safe: String = key
+        .chars()
+        .filter(|c| c.is_ascii_alphanumeric() || *c == '-' || *c == '_')
+        .collect();
+    if safe.is_empty() {
+        "data".to_string()
+    } else {
+        safe
+    }
+}
 
 /// Convert a Maven coordinate to a filesystem path under `libs_dir`.
 fn maven_to_path(maven: &str, libs_dir: &Path) -> PathBuf {

@@ -398,6 +398,35 @@ fn unknown_loader_type_is_rejected() {
 }
 
 #[test]
+fn serde_snake_case_loader_names_are_accepted() {
+    // 前端拿到的是 ts-rs 生成的 serde `snake_case` 名：NeoForge → "neo_forge"，
+    // OptiFine → "opti_fine"，LiteLoader → "lite_loader"，LegacyFabric →
+    // "legacy_fabric"。此前 from_str 只认 library_id 形态，下载页点 NeoForge
+    // 请求版本列表直接 "Unknown mod loader type"（2026-10-25 实测）。
+    assert!(matches!(
+        rmccc_modloader::ModLoaderType::from_str("neo_forge"),
+        Some(rmccc_modloader::ModLoaderType::NeoForge)
+    ));
+    assert!(matches!(
+        rmccc_modloader::ModLoaderType::from_str("opti_fine"),
+        Some(rmccc_modloader::ModLoaderType::OptiFine)
+    ));
+    assert!(matches!(
+        rmccc_modloader::ModLoaderType::from_str("lite_loader"),
+        Some(rmccc_modloader::ModLoaderType::LiteLoader)
+    ));
+    assert!(matches!(
+        rmccc_modloader::ModLoaderType::from_str("legacy_fabric"),
+        Some(rmccc_modloader::ModLoaderType::LegacyFabric)
+    ));
+    // library_id 形态依旧成立。
+    assert!(matches!(
+        rmccc_modloader::ModLoaderType::from_str("neoforge"),
+        Some(rmccc_modloader::ModLoaderType::NeoForge)
+    ));
+}
+
+#[test]
 fn incomplete_installers_are_not_installable() {
     // A6：OptiFine / LiteLoader / Cleanroom 安装器未完成（审计 2026-10-25），
     // install 流程（list=空列表 + install=快速失败）不得再提供它们；

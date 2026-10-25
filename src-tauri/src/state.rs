@@ -42,6 +42,12 @@ pub struct AppState {
     /// Running game processes (profile_id → pid).
     pub running_games: Arc<dashmap::DashMap<String, u32>>,
 
+    /// 游戏进程输出环形缓冲（profile_id → 最近 GAME_OUTPUT_CAP 行 stdout/stderr）。
+    /// 用途：latest.log 未生成（log4j 初始化前崩溃，如 Forge BootstrapLauncher
+    /// 的 ExceptionInInitializerError）时，AI 日志分析与 MCP game_logs 仍能
+    /// 拿到输出。进程退出后保留供事后分析，下次启动同实例时清空。
+    pub game_output: Arc<dashmap::DashMap<String, Arc<std::sync::Mutex<Vec<String>>>>>,
+
     /// Logic plugin helpers (ADR-007), one slot per plugin (see [`LogicSlot`]).
     pub logic: dashmap::DashMap<String, Arc<LogicSlot>>,
 
@@ -96,6 +102,7 @@ impl AppState {
             ui_http_client,
             app_handle,
             running_games: Arc::new(dashmap::DashMap::new()),
+            game_output: Arc::new(dashmap::DashMap::new()),
             logic: dashmap::DashMap::new(),
             platform,
             ai_cancels: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),

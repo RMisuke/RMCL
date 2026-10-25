@@ -231,25 +231,39 @@ async fn gather_analysis_input(
     };
     drop(core);
 
-    let raw = match std::fs::read_to_string(&log_path) {
-        Ok(text) => text,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            return Err(RmcccError::Validation(format!(
-                "未找到游戏日志（{}）：先启动一次游戏再分析",
-                log_path.display()
-            )));
+    let (raw, source) = match std::fs::read_to_string(&log_path) {
+        Ok(text) if !text.trim().is_empty() => (text, "游戏日志 latest.log"),
+        Err(error) if error.kind() != std::io::ErrorKind::NotFound => {
+            return Err(RmcccError::Io(error));
         }
-        Err(error) => return Err(RmcccError::Io(error)),
+        // latest.log 未生成（log4j 初始化前崩溃，如 BootstrapLauncher 阶段的
+        // ExceptionInInitializerError）或为空 → 回退启动器捕获的进程输出。
+        _ => {
+            let captured = profile_id
+                .and_then(|id| state.game_output.get(id))
+                .map(|buf| {
+                    buf.lock()
+                        .unwrap_or_else(|poisoned| poisoned.into_inner())
+                        .join("\n")
+                });
+            match captured {
+                Some(text) if !text.trim().is_empty() => {
+                    (text, "启动器捕获的进程输出（latest.log 未生成或为空）")
+                }
+                _ => {
+                    return Err(RmcccError::Validation(format!(
+                        "未找到游戏日志（{}），也没有捕获到进程输出：先启动一次游戏再分析",
+                        log_path.display()
+                    )));
+                }
+            }
+        }
     };
-    if raw.trim().is_empty() {
-        return Err(RmcccError::Validation(
-            "游戏日志为空，没有可分析的内容".into(),
-        ));
-    }
     // 尾部截取（崩溃信息几乎总在末尾），再脱敏（home → ~、凭据遮蔽）。
     let tail = tail_chars(&raw, ANALYSIS_LOG_MAX_CHARS);
     let sent_lines = tail.lines().count();
     let redacted = redact::redact_text(tail, redact::user_home().as_deref());
+    let context = format!("{context}；日志来源：{source}");
     Ok((redacted, context, sent_lines))
 }
 

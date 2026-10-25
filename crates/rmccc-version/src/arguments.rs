@@ -34,6 +34,10 @@ pub mod vars {
     pub const LAUNCHER_VERSION: &str = "launcher_version";
     pub const LIBRARY_DIRECTORY: &str = "library_directory";
     pub const CLASSPATH_SEPARATOR: &str = "classpath_separator";
+    /// 主 jar 绝对路径（HMCL 扩展变量）。
+    pub const PRIMARY_JAR: &str = "primary_jar";
+    /// 主 jar 文件名（HMCL 扩展变量；追加进 Forge `-DignoreList` 用）。
+    pub const PRIMARY_JAR_NAME: &str = "primary_jar_name";
 }
 
 /// Build the standard template variable map for launching Minecraft.

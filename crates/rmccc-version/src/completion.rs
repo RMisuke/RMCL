@@ -287,7 +287,17 @@ pub async fn build_completion_downloads(
                 push_missing_assets(&mut items, game_dir, &content, verify);
             }
             None => {
-                // Fetch the asset index from the network.
+                // Fetch the asset index from the network. An empty URL (child
+                // manifest without assetIndex that should have inherited the
+                // parent's) must fail with a clear message, never a cryptic
+                // reqwest "builder error" (incident 2026-10-25).
+                if launch.asset_index.url.is_empty() {
+                    return Err(RmcccError::Other(format!(
+                        "asset index '{}' has no download URL (broken inheritance?); \
+                         cannot fetch it for repair",
+                        launch.asset_index.id
+                    )));
+                }
                 let resp = client
                     .get(&launch.asset_index.url)
                     .send()

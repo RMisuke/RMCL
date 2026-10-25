@@ -783,8 +783,37 @@ async fn game_logs(app: &tauri::AppHandle, args: &Value) -> Result<Value, ToolEr
                 .join("latest.log")
         }
     };
-    let raw = std::fs::read_to_string(&path)
-        .map_err(|e| format!("cannot read game log ({}): {e}", path.display()))?;
+    let (raw, source) = match std::fs::read_to_string(&path) {
+        Ok(text) if !text.trim().is_empty() => (text, "latest.log"),
+        Err(error) if error.kind() != std::io::ErrorKind::NotFound => {
+            return Err(
+                format!("cannot read game log ({}): {e}", path.display(), e = error).into(),
+            );
+        }
+        // latest.log 未生成（log4j 初始化前崩溃）或为空 → 启动器捕获的输出。
+        _ => {
+            let captured = arg_opt_str(args, "profile_id")
+                .and_then(|id| state.game_output.get(&id))
+                .map(|buf| {
+                    buf.lock()
+                        .unwrap_or_else(|poisoned| poisoned.into_inner())
+                        .join("\n")
+                });
+            match captured {
+                Some(text) if !text.trim().is_empty() => (
+                    text,
+                    "launcher-captured output (latest.log missing or empty)",
+                ),
+                _ => {
+                    return Err(format!(
+                        "cannot read game log ({}): latest.log missing and no captured output",
+                        path.display()
+                    )
+                    .into());
+                }
+            }
+        }
+    };
     let selected: Vec<&str> = {
         let all: Vec<&str> = raw.lines().collect();
         let start = all.len().saturating_sub(lines);
@@ -794,6 +823,7 @@ async fn game_logs(app: &tauri::AppHandle, args: &Value) -> Result<Value, ToolEr
     let text = redact::redact_text(&selected.join("\n"), redact::user_home().as_deref());
     Ok(json!({
         "path": redact::redact_text(&path.to_string_lossy(), redact::user_home().as_deref()),
+        "source": source,
         "total_lines": raw.lines().count(),
         "returned_lines": selected.len(),
         "truncated": truncated,

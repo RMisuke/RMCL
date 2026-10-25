@@ -9,7 +9,8 @@ use rmccc_error::Result;
 pub struct NeoForgeRemoteVersion {
     pub game_version: String,
     pub neo_version: String,
-    pub installer_url: String,
+    /// 下载候选 = [镜像, 官方回退]（`RemoteVersion::urls` 暴露，安装任务使用）。
+    pub installer_urls: Vec<String>,
 }
 
 impl NeoForgeRemoteVersion {
@@ -43,7 +44,7 @@ impl RemoteVersion for NeoForgeRemoteVersion {
         &self.neo_version
     }
     fn urls(&self) -> &[String] {
-        &[]
+        &self.installer_urls
     }
     fn release_date(&self) -> Option<DateTime<Utc>> {
         None
@@ -54,15 +55,18 @@ impl RemoteVersion for NeoForgeRemoteVersion {
 
     fn create_install_task(
         &self,
-        _dm: &super::super::DependencyManager,
+        dm: &super::super::DependencyManager,
         _manifest: &rmccc_version::GameVersion,
-        _ctx: &super::super::remote_version::InstallTaskContext<'_>,
+        ctx: &super::super::remote_version::InstallTaskContext<'_>,
     ) -> Result<Box<dyn InstallTask>> {
         Ok(Box::new(super::install_task::NeoForgeInstallTask {
             game_version: self.game_version.clone(),
             neo_version: self.neo_version.clone(),
-            installer_url: self.installer_url.clone(),
-            client: reqwest::Client::new(),
+            installer_urls: self.installer_urls.clone(),
+            java_path: ctx.java_path.to_path_buf(),
+            game_dir: ctx.game_dir.to_path_buf(),
+            platform: dm.platform_descriptor(),
+            client: dm.client_for_tasks(),
         }))
     }
 }

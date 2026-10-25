@@ -10,7 +10,10 @@
 
 use crate::CoreHandle;
 use rmccc_error::{Result, RmcccError};
-use rmccc_modloader::{DependencyManager, LoaderInstallOutcome, ModLoaderType};
+use rmccc_modloader::{
+    DependencyManager, InstallProgressCallback, InstallProgressEvent, LoaderInstallOutcome,
+    ModLoaderType,
+};
 
 /// 安装结果。
 #[derive(Debug, Clone)]
@@ -29,11 +32,15 @@ pub struct InstalledLoader {
 /// 3. `DependencyManager::install_loader` 执行安装；
 /// 4. patch 型 loader 写**增量**版本 JSON（`inheritsFrom` + `patches`）；
 /// 5. 更新 profile（`mod_loader` + `game_version`）并刷新本地索引。
+///
+/// `progress` 为 `Some` 时逐阶段上报安装细节（下载字节、安装器 stdout、
+/// 补库阶段），供 Task Center 展示；`None` 时行为不变。
 pub async fn install_loader(
     core: &CoreHandle,
     profile: &rmccc_profile::Profile,
     loader_type: &ModLoaderType,
     loader_version: &str,
+    progress: Option<InstallProgressCallback>,
 ) -> Result<InstalledLoader> {
     // ── 1. Java（installer JAR 需要真实 JVM 运行）──
     let required_java = rmccc_version::java_version_for_mc(&profile.game_version);
@@ -47,6 +54,29 @@ pub async fn install_loader(
     // 安装目标是共享游戏根（`GameRepository` 索引的目录）。
     let game_dir = core.config.resolved_game_root();
 
+    // ── 2.5 原版 client jar 就位保障 ──
+    // installer 型 loader（Forge 安装器 --installClient）与 patch 管线里的
+    // PROCESS_MINECRAFT_JAR 处理器都要读 `versions/{base}/{base}.jar`。
+    // GUI 向导保证"先装原版再装 loader"，CLI/MCP 没有这个顺序约定——缺 jar
+    // 时补一次基础版本修复（已完整则 no-op）。
+    let base_client_jar = game_dir
+        .join("versions")
+        .join(&profile.game_version)
+        .join(format!("{}.jar", profile.game_version));
+    if !base_client_jar.exists() {
+        tracing::info!(
+            version = %profile.game_version,
+            "Base client jar missing before loader install; repairing base version"
+        );
+        crate::pipeline::repair_instance(
+            core,
+            &profile.game_version,
+            None,
+            rmccc_version::completion::CompletionVerify::Hash,
+        )
+        .await?;
+    }
+
     // ── 3. 安装（分流在 modloader crate 内部）──
     // 平台描述符经注入传递（批次 4：Forge processors 的 classpath 分隔符）。
     let dm =
@@ -59,6 +89,7 @@ pub async fn install_loader(
             loader_version,
             &game_dir,
             &java_install.path,
+            progress.clone(),
         )
         .await?;
 
@@ -97,6 +128,13 @@ pub async fn install_loader(
     // `ClassNotFoundException: net.fabricmc.loader.impl.launch.knot.KnotClient`。
     // 启动前的 `ensure_launch_ready` 也能补，但那次失败体验很差（错误信息在
     // 游戏 stdout 里，而不是安装步骤里）。
+    if let Some(cb) = &progress {
+        cb(InstallProgressEvent {
+            stage: "repair",
+            percent: 75,
+            message: "下载 loader 依赖库（字节进度见下载任务）...".to_string(),
+        });
+    }
     let repaired = crate::pipeline::repair_instance(
         core,
         &version_id,

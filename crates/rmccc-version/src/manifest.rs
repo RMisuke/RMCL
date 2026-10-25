@@ -189,9 +189,15 @@ pub(crate) fn parse_version_json(id: &str, json: &str) -> Result<GameVersion> {
         _ => ReleaseType::Release,
     };
 
-    // Parse asset index
+    // Parse asset index. A **missing** assetIndex (loader/patched child JSONs
+    // never carry one) must resolve to an EMPTY id, never to the version id:
+    // the inheritsFrom merge inherits the parent's index when the child's id
+    // is empty — a fabricated non-empty id would override the parent with
+    // `url: ""` and every repair/launch on that instance would fail
+    // (incident 2026-10-25: "Network request failed: builder error" — a fetch
+    // of the empty URL).
     let asset_index = super::types::AssetIndex {
-        id: v["assetIndex"]["id"].as_str().unwrap_or(id).to_string(),
+        id: v["assetIndex"]["id"].as_str().unwrap_or("").to_string(),
         url: v["assetIndex"]["url"].as_str().unwrap_or("").to_string(),
         sha1: v["assetIndex"]["sha1"].as_str().unwrap_or("").to_string(),
         size: v["assetIndex"]["size"].as_u64().unwrap_or(0),

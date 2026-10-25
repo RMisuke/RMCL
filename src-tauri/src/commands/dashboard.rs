@@ -5,7 +5,8 @@
 
 use crate::state::AppState;
 use rmccc_core::rmccc_dashboard::{
-    builtin_dark, builtin_light, builtin_list, extract_tokens, DashboardLayout,
+    builtin_dark, builtin_ember, builtin_forest, builtin_light, builtin_list, builtin_ocean,
+    builtin_paper, builtin_sakura, builtin_sky, extract_tokens, DashboardLayout,
     NormalizationResult, ThemeInfo, ThemeJson, ThemeTokens, WidgetDescriptor, WidgetRegistry,
 };
 use rmccc_error::IpcError;
@@ -105,6 +106,12 @@ pub(crate) fn theme_tokens_for(
     match key {
         "builtin:dark" => Ok(builtin_dark()),
         "builtin:light" => Ok(builtin_light()),
+        "builtin:forest" => Ok(builtin_forest()),
+        "builtin:ocean" => Ok(builtin_ocean()),
+        "builtin:ember" => Ok(builtin_ember()),
+        "builtin:sakura" => Ok(builtin_sakura()),
+        "builtin:paper" => Ok(builtin_paper()),
+        "builtin:sky" => Ok(builtin_sky()),
         "" | "system" => Ok(if fallback_mode == "light" {
             builtin_light()
         } else {

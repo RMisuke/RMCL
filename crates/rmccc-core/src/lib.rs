@@ -203,6 +203,11 @@ impl CoreContext {
             .pool_max_idle_per_host(32)
             .connect_timeout(std::time::Duration::from_secs(15))
             .read_timeout(std::time::Duration::from_secs(120))
+            // BMCLAPI 的重定向镜像池（cernet/ustc 等）对**无 User-Agent 的请求
+            // 直接 403**（2026-10-25 NeoForge 安装器下载失败实测：reqwest 默认
+            // 不发 UA → 302 链终点的镜像拒绝；curl 有 UA 则全程 200）。reqwest
+            // 默认 UA 为空，必须显式设置。
+            .user_agent(concat!("RMCCC/", env!("CARGO_PKG_VERSION")))
             .build()
             .map_err(|e| RmcccError::Other(e.to_string()))?;
 
@@ -210,10 +215,40 @@ impl CoreContext {
         let cache_dir = data_dir.join("cache");
         let cache_repo = Arc::new(rmccc_download::CacheRepository::new(cache_dir));
 
+        // 自动选源（2026-10-25，`mirror_url = "auto"`）：TCP 连接延迟探测两大
+        // 下载源，选更快的（资源更新可能滞后——见设置页提示）。TCP 连接时长是
+        // 到 CDN 边缘 RTT 的良好代理，且同步、有界（单次 ≤ 2s），不拖慢启动。
+        let chosen_mirror: Option<String> = match config.mirror_url.as_deref() {
+            Some("auto") => {
+                let (official_ms, bmclapi_ms) = probe_source_latencies();
+                let pick_bmclapi = match (official_ms, bmclapi_ms) {
+                    // 并发限流注定的镜像池 + 官方更权威：持平或官方不可测时选官方。
+                    (_, Some(b)) => official_ms.is_some_and(|o| b < o),
+                    _ => false,
+                };
+                tracing::info!(
+                    official_ms = ?official_ms,
+                    bmclapi_ms = ?bmclapi_ms,
+                    chosen = if pick_bmclapi { "bmclapi" } else { "official" },
+                    "Auto download source selected"
+                );
+                pick_bmclapi.then(|| "https://bmclapi2.bangbang93.com".to_string())
+            }
+            other => other.map(str::to_string),
+        };
+        let is_bmclapi_mirror = matches!(
+            chosen_mirror.as_deref(),
+            Some("bmclapi") | Some("https://bmclapi2.bangbang93.com")
+        );
+        let effective_concurrency = if is_bmclapi_mirror {
+            config.download_concurrency.min(16)
+        } else {
+            config.download_concurrency
+        };
         let download_manager: Arc<dyn rmccc_download::DownloadManager> = Arc::new(
             rmccc_download::ConcurrentDownloadManager::new(
                 http_client.clone(),
-                config.download_concurrency,
+                effective_concurrency,
             )
             .with_cache(cache_repo.clone()),
         );
@@ -227,6 +262,24 @@ impl CoreContext {
         // re-run after every install via `refresh()`.
         let game_root = config.resolved_game_root();
         std::fs::create_dir_all(&game_root)?;
+
+        /// TCP 连接延迟探测（自动选源）。连接失败 → `None`。
+        fn tcp_connect_ms(host: &str) -> Option<u128> {
+            use std::net::TcpStream;
+            use std::time::Instant;
+            let start = Instant::now();
+            TcpStream::connect((host, 443))
+                .ok()
+                .map(|_| start.elapsed().as_millis())
+        }
+
+        /// 两大下载源的延迟快照（官方 launcher 元数据主机 vs BMCLAPI）。
+        fn probe_source_latencies() -> (Option<u128>, Option<u128>) {
+            (
+                tcp_connect_ms("launchermeta.mojang.com"),
+                tcp_connect_ms("bmclapi2.bangbang93.com"),
+            )
+        }
 
         // Adopt instance data written by the pre-shared-root layout *before*
         // indexing, so the repository sees the migrated versions immediately.
@@ -245,7 +298,7 @@ impl CoreContext {
         ));
 
         let download_provider: std::sync::Arc<dyn rmccc_download::provider::DownloadProvider> =
-            if let Some(ref mirror) = config.mirror_url {
+            if let Some(ref mirror) = chosen_mirror {
                 match mirror.as_str() {
                     "bmclapi" | "https://bmclapi2.bangbang93.com" => {
                         std::sync::Arc::new(rmccc_download::provider::BmclApiDownloadProvider::new(

@@ -237,12 +237,18 @@ impl DownloadProvider for BmclApiDownloadProvider {
     }
 
     fn inject_url_with_candidates(&self, url: &str) -> Vec<String> {
-        // Primary match?
+        // Primary match? Mirror first, **original official URL kept as the
+        // fallback candidate**: BMCLAPI rate-limits bursts with HTTP 403, and
+        // dropping the official URL (the old behaviour) left no fallback —
+        // every rate-limited file died after retrying the same mirror
+        // (incident 2026-10-25: 45/3657 libraries lost during a Forge 1.20.1
+        // install). The download engine walks candidates in order, so a 403
+        // now falls through to the official source.
         if let Some(injected) = self.apply_rules(url, &self.primary_rules) {
             if injected == url {
                 vec![url.to_string()]
             } else {
-                vec![injected]
+                vec![injected, url.to_string()]
             }
         } else if let Some(fallback) = self.apply_rules(url, &self.fallback_rules) {
             // URL didn't match primary rules — try fallback (Modrinth/CurseForge).
@@ -258,7 +264,9 @@ impl DownloadProvider for BmclApiDownloadProvider {
     }
 
     fn concurrency(&self) -> usize {
-        32
+        // BMCLAPI rate-limits high-concurrency bursts with HTTP 403 — stay at
+        // the same level as the official source (incident 2026-10-25).
+        16
     }
 }
 
@@ -374,13 +382,15 @@ mod tests {
     // ── inject_url_with_candidates ──
 
     #[test]
-    fn test_bmclapi_candidates_primary() {
+    fn test_bmclapi_candidates_primary_keeps_official_fallback() {
         let p = BmclApiDownloadProvider::new("https://bmclapi2.bangbang93.com");
-        let candidates = p.inject_url_with_candidates(
-            "https://libraries.minecraft.net/net/minecraft/launchwrapper/1.12/launchwrapper-1.12.jar",
-        );
-        assert_eq!(candidates.len(), 1);
+        // 主规则命中：镜像在前，官方 URL 必须保留为回退候选（BMCLAPI 403
+        // 限流时引擎按序回退官方源——2026-10-25 事故修复）。
+        let official = "https://libraries.minecraft.net/net/minecraft/launchwrapper/1.12/launchwrapper-1.12.jar";
+        let candidates = p.inject_url_with_candidates(official);
+        assert_eq!(candidates.len(), 2);
         assert!(candidates[0].contains("bmclapi2.bangbang93.com/libraries"));
+        assert_eq!(candidates[1], official);
     }
 
     #[test]

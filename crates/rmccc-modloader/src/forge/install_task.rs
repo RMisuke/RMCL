@@ -99,9 +99,12 @@ impl InstallTask for ForgeInstallTask {
         // 批次 4：下载走共享实现（唯一临时文件名 + ZIP 校验 + .sha1 校验；
         // 此前固定名 `/tmp/forge-installer-{pid}.jar` 且从不删除——每次
         // 安装泄漏 ~180MB）。
-        let (installer_path, _used_url) =
-            crate::installer::download_installer_file(&self.client, &[self.installer_url.clone()])
-                .await?;
+        let (installer_path, _used_url) = crate::installer::download_installer_file(
+            &self.client,
+            &[self.installer_url.clone()],
+            None,
+        )
+        .await?;
 
         let result = async {
             // Detect type if not already done

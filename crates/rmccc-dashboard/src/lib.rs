@@ -25,7 +25,8 @@ pub use layout::{ConstraintMap, DEFAULT_COLUMNS, DEFAULT_GAP};
 
 pub use store::{load_layout, save_layout, LayoutStore};
 pub use theme::{
-    builtin_dark, builtin_light, builtin_list, extract_tokens, SafetyColors, ThemeInfo, ThemeJson,
-    ThemePreference, ThemeTokens,
+    builtin_dark, builtin_ember, builtin_forest, builtin_light, builtin_list, builtin_ocean,
+    builtin_paper, builtin_sakura, builtin_sky, extract_tokens, SafetyColors, ThemeInfo,
+    ThemeJson, ThemePreference, ThemeTokens,
 };
 pub use widget::{WidgetDescriptor, WidgetRegistry};

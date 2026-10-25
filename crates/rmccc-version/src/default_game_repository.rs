@@ -677,6 +677,47 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// 2026-10-25 事故回归：官方 Forge 安装器写的子 JSON **没有 assetIndex
+    /// 字段**。parse_version_json 曾把缺失的 id 伪造为版本 id（非空），
+    /// 骗过合并守卫，让空 URL 的 assetIndex 覆盖父版本的有效索引——
+    /// 修复/启动全部失败（`--assetIndex <版本id>` + 抓取空 URL 的
+    /// "builder error"）。缺失必须解析为空 id → 从父版本继承。
+    #[test]
+    fn test_child_without_assetindex_inherits_parent() {
+        let dir = temp_dir("no-asset-index");
+        write_version(&dir, "1.20.1", &vanilla_json("1.20.1"));
+        // Forge 安装器形态：无 assetIndex 字段、有 mainClass + libraries。
+        write_version(
+            &dir,
+            "1.20.1-forge-47.4.5",
+            r#"{
+                "id": "1.20.1-forge-47.4.5",
+                "type": "release",
+                "inheritsFrom": "1.20.1",
+                "mainClass": "cpw.mods.bootstraplauncher.BootstrapLauncher",
+                "libraries": [{"name": "net.minecraftforge:forge:1.20.1-47.4.5"}]
+            }"#,
+        );
+        let mut repo = DefaultGameRepository::new(dir.clone());
+        repo.refresh().unwrap();
+
+        let resolved = repo.get_resolved("1.20.1-forge-47.4.5").unwrap();
+        resolved.validate().unwrap();
+        // assetIndex 必须继承父版本（id=17, url 非空），而不是伪造的子版本 id。
+        assert_eq!(resolved.launch.asset_index.id, "17");
+        assert!(!resolved.launch.asset_index.url.is_empty());
+        // mainClass 由子版本覆盖。
+        assert_eq!(
+            resolved.launch.main_class,
+            "cpw.mods.bootstraplauncher.BootstrapLauncher"
+        );
+        // 父版本自身的解析不受影响。
+        let parent = repo.get_resolved("1.20.1").unwrap();
+        assert_eq!(parent.launch.asset_index.id, "17");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     #[test]
     fn test_resolve_cycle_detection() {
         let dir = temp_dir("cycle");
