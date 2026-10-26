@@ -15,8 +15,8 @@
 use rmccc_error::{Result, RmcccError};
 use rmccc_platform::PlatformDescriptor;
 use std::collections::{HashMap, HashSet};
-use std::sync::Arc;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use super::compatibility;
 use super::file_layout;
@@ -350,10 +350,8 @@ impl GameRepository for DefaultGameRepository {
             };
 
             // Compatibility filter (HMCL `CompatibilityRule.appliesToCurrentEnvironment`).
-            if !compatibility::applies_to_environment(
-                &manifest.compatibility_rules,
-                &self.platform,
-            ) {
+            if !compatibility::applies_to_environment(&manifest.compatibility_rules, &self.platform)
+            {
                 tracing::debug!(
                     folder = %folder_id,
                     "Instance filtered by compatibility rules (not applicable on this OS)"

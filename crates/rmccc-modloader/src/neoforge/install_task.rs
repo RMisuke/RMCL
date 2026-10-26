@@ -22,7 +22,7 @@
 //! 自行下载），功能等价、不走镜像。
 
 use crate::analyzer::LibraryType;
-use crate::forge::new_install::{ForgeNewInstallTask, InstallerArchive, open_installer_zip};
+use crate::forge::new_install::{open_installer_zip, ForgeNewInstallTask, InstallerArchive};
 use crate::install_task::InstallTask;
 use crate::patch::GameInstancePatch;
 use rmccc_error::{Result, RmcccError};

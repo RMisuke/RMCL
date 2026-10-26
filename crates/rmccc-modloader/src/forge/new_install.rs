@@ -32,7 +32,8 @@ pub(crate) type InstallerArchive = zip::ZipArchive<std::fs::File>;
 pub(crate) fn open_installer_zip(path: &Path) -> Result<InstallerArchive> {
     let file = std::fs::File::open(path)
         .map_err(|e| RmcccError::Other(format!("Cannot open installer: {e}")))?;
-    zip::ZipArchive::new(file).map_err(|e| RmcccError::Other(format!("Installer is not a valid ZIP: {e}")))
+    zip::ZipArchive::new(file)
+        .map_err(|e| RmcccError::Other(format!("Installer is not a valid ZIP: {e}")))
 }
 
 /// Installs Forge using the new (1.13+) processor-based method.
@@ -491,9 +492,8 @@ async fn fetch_processor_lib(
     let bytes = match downloaded {
         Some(bytes) => bytes,
         None => {
-            return Err(last_error.unwrap_or_else(|| {
-                RmcccError::Other(format!("no candidates for {}", item.name))
-            }));
+            return Err(last_error
+                .unwrap_or_else(|| RmcccError::Other(format!("no candidates for {}", item.name))));
         }
     };
     if !item.sha1.is_empty() {

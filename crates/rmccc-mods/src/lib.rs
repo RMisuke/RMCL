@@ -117,7 +117,9 @@ pub trait ModSource: Send + Sync {
 
         let mut response = self.fetch_stream(&url).await?;
         if let Some(parent) = dest.parent() {
-            tokio::fs::create_dir_all(parent).await.map_err(RmcccError::Io)?;
+            tokio::fs::create_dir_all(parent)
+                .await
+                .map_err(RmcccError::Io)?;
         }
         let file_name = dest
             .file_name()
@@ -159,7 +161,9 @@ pub trait ModSource: Send + Sync {
             }
         }
 
-        tokio::fs::rename(&part, dest).await.map_err(RmcccError::Io)?;
+        tokio::fs::rename(&part, dest)
+            .await
+            .map_err(RmcccError::Io)?;
         Ok(())
     }
 }

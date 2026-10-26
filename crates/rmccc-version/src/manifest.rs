@@ -52,7 +52,10 @@ impl MojangVersionProvider {
             if let Ok(cache) = serde_json::from_str::<DiskManifestCache>(&text) {
                 *self.etag.lock().unwrap_or_else(|p| p.into_inner()) = cache.etag;
                 if !cache.versions.is_empty() {
-                    *self.cached_versions.lock().unwrap_or_else(|p| p.into_inner()) =
+                    *self
+                        .cached_versions
+                        .lock()
+                        .unwrap_or_else(|p| p.into_inner()) =
                         Some(std::sync::Arc::new(cache.versions));
                 }
                 tracing::info!(path = %path.display(), "Loaded persisted version manifest cache");
@@ -173,8 +176,7 @@ impl VersionProvider for MojangVersionProvider {
         *self
             .cached_versions
             .lock()
-            .unwrap_or_else(|p| p.into_inner()) =
-            Some(std::sync::Arc::new(versions.clone()));
+            .unwrap_or_else(|p| p.into_inner()) = Some(std::sync::Arc::new(versions.clone()));
         self.persist_disk_cache(&versions).await;
         Ok(versions)
     }

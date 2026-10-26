@@ -174,7 +174,12 @@ impl VersionList for FabricVersionList {
                 return rvs.clone();
             }
         }
-        let Some(meta) = self.meta.read().ok().and_then(|m| m.as_ref().map(Clone::clone)) else {
+        let Some(meta) = self
+            .meta
+            .read()
+            .ok()
+            .and_then(|m| m.as_ref().map(Clone::clone))
+        else {
             return Vec::new();
         };
         if !meta.game_versions.contains(game_version) {
