@@ -621,7 +621,9 @@ pub async fn call(app: &tauri::AppHandle, name: &str, args: Value) -> Result<Val
             Ok(json!({ "ok": true }))
         }
         "profiles.delete" => {
-            commands::profile::profile_delete(state(app), arg_str(&args, "profile_id")?).await?;
+            // MCP surface keeps the conservative default: record-only removal.
+            commands::profile::profile_delete(state(app), arg_str(&args, "profile_id")?, false)
+                .await?;
             Ok(json!({ "ok": true }))
         }
         "instances.remove" => {

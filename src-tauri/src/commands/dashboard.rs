@@ -1,13 +1,15 @@
-//! Dashboard layout/theme IPC commands (Phase 3, ADR-005).
+//! Dashboard theme/widget IPC commands (Phase 3, ADR-005).
 //!
-//! The backend owns layout normalization and theme-token validation; the
-//! frontend only renders the normalized grid and applies CSS variables.
+//! The layout CRUD commands (get/save/reset) were retired with the
+//! HomeDashboard grid (frontend audit B3-1): the hero home persists its
+//! layout locally, and the registry guard requires every registered command
+//! to have a frontend caller.
 
 use crate::state::AppState;
 use rmccc_core::rmccc_dashboard::{
     builtin_dark, builtin_ember, builtin_forest, builtin_light, builtin_list, builtin_ocean,
-    builtin_paper, builtin_sakura, builtin_sky, extract_tokens, DashboardLayout,
-    NormalizationResult, ThemeInfo, ThemeJson, ThemeTokens, WidgetDescriptor, WidgetRegistry,
+    builtin_paper, builtin_sakura, builtin_sky, extract_tokens, ThemeInfo, ThemeJson, ThemeTokens,
+    WidgetDescriptor, WidgetRegistry,
 };
 use rmccc_error::IpcError;
 use serde_json::Value;
@@ -15,46 +17,6 @@ use serde_json::Value;
 fn registry(core: &rmccc_core::CoreContext) -> WidgetRegistry {
     let cards = core.plugin_manager.contributions().dashboard_cards;
     WidgetRegistry::from_contributions(&cards)
-}
-
-#[tauri::command]
-#[tracing::instrument(skip(state))]
-pub async fn dashboard_get_layout(
-    state: tauri::State<'_, AppState>,
-    layout_id: Option<String>,
-) -> Result<DashboardLayout, IpcError> {
-    let core = state.core.read().await;
-    let id = layout_id.unwrap_or_else(|| "default".to_string());
-    let reg = registry(&core);
-    let (layout, _) = core
-        .dashboard
-        .load_or_init_with(&id, &reg.constraint_map())?;
-    Ok(layout)
-}
-
-#[tauri::command]
-#[tracing::instrument(skip(state, layout))]
-pub async fn dashboard_save_layout(
-    state: tauri::State<'_, AppState>,
-    layout: DashboardLayout,
-) -> Result<NormalizationResult, IpcError> {
-    let core = state.core.read().await;
-    let reg = registry(&core);
-    let mut layout = layout;
-    Ok(core
-        .dashboard
-        .save_with(&mut layout, &reg.constraint_map())?)
-}
-
-#[tauri::command]
-#[tracing::instrument(skip(state))]
-pub async fn dashboard_reset_layout(
-    state: tauri::State<'_, AppState>,
-    layout_id: Option<String>,
-) -> Result<DashboardLayout, IpcError> {
-    let core = state.core.read().await;
-    let id = layout_id.unwrap_or_else(|| "default".to_string());
-    Ok(core.dashboard.reset(&id)?)
 }
 
 #[tauri::command]

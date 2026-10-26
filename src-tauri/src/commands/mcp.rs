@@ -72,6 +72,8 @@ pub struct McpRecentCallView {
     #[ts(type = "unknown")]
     pub input: serde_json::Value,
     pub outcome: String,
+    // JSON serializes u64 as number; without this ts-rs would emit `bigint`.
+    #[ts(type = "number")]
     pub duration_ms: u64,
     pub error: Option<String>,
 }

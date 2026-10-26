@@ -7,6 +7,7 @@
  * 最近 8 条细节行供 Task Center 展开，完成/失败转入 recent 摘要。
  */
 import { createRoot, createSignal } from "solid-js";
+import { createStore, produce } from "solid-js/store";
 import { EVENTS } from "../ipc/events";
 import { listen } from "@tauri-apps/api/event";
 
@@ -34,7 +35,9 @@ export interface LoaderOutcome {
 const DETAILS_CAP = 8;
 
 export const modloadersStore = createRoot(() => {
-  const [installs, setInstalls] = createSignal<Map<string, LoaderInstall>>(new Map());
+  // Fine-grained store (perf audit 2.1, same as downloads): per-install path
+  // updates instead of cloning the whole Map per progress event.
+  const [installs, setInstalls] = createStore<Record<string, LoaderInstall>>({});
   const [recent, setRecent] = createSignal<LoaderOutcome[]>([]);
 
   function keyOf(profileId: string, loaderType: string): string {
@@ -53,11 +56,7 @@ export const modloadersStore = createRoot(() => {
       const p = event.payload;
       const key = keyOf(p.profile_id, p.loader_type);
       if (p.stage === "completed" || p.stage === "failed") {
-        setInstalls((map) => {
-          const next = new Map(map);
-          next.delete(key);
-          return next;
-        });
+        setInstalls(produce((m) => { delete m[key]; }));
         setRecent((list) =>
           [
             {
@@ -73,30 +72,25 @@ export const modloadersStore = createRoot(() => {
         );
         return;
       }
-      setInstalls((map) => {
-        const next = new Map(map);
-        const current = next.get(key);
-        next.set(key, {
-          profileId: p.profile_id,
-          loaderType: p.loader_type,
-          gameVersion: p.game_version,
-          stage: p.stage,
-          percent: p.percent,
-          message: p.message,
-          // 细节阶段追加成日志；阶段行覆盖当前 message 即可。
-          details:
-            p.stage === "detail"
-              ? [...(current?.details ?? []), p.message].slice(-DETAILS_CAP)
-              : (current?.details ?? []),
-          updatedAt: Date.now(),
-        });
-        return next;
-      });
+      setInstalls(key, (current) => ({
+        profileId: p.profile_id,
+        loaderType: p.loader_type,
+        gameVersion: p.game_version,
+        stage: p.stage,
+        percent: p.percent,
+        message: p.message,
+        // 细节阶段追加成日志；阶段行覆盖当前 message 即可。
+        details:
+          p.stage === "detail"
+            ? [...(current?.details ?? []), p.message].slice(-DETAILS_CAP)
+            : (current?.details ?? []),
+        updatedAt: Date.now(),
+      }));
     });
   }
 
   function forProfile(profileId: string): LoaderInstall[] {
-    return [...installs().values()].filter((i) => i.profileId === profileId);
+    return Object.values(installs).filter((i) => i.profileId === profileId);
   }
 
   return {

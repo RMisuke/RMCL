@@ -84,15 +84,37 @@ export const aiStore = createRoot(() => {
   }
 
   function attachEvents(): void {
+    // Coalesce streaming deltas (perf audit 2.3): growing `text` once per
+    // 150ms instead of per token keeps the downstream markdown re-render
+    // O(n) per frame instead of O(n²) over the whole stream. AI_DONE /
+    // AI_ERROR flush the buffer first so the stream tail is never lost.
+    let deltaId: string | null = null;
+    let deltaBuf = "";
+    let deltaTimer: ReturnType<typeof setTimeout> | null = null;
+    const flushDeltas = (): void => {
+      if (deltaTimer) {
+        clearTimeout(deltaTimer);
+        deltaTimer = null;
+      }
+      if (!deltaBuf) return;
+      const id = deltaId;
+      const text = deltaBuf;
+      deltaBuf = "";
+      setAnalysis((current) =>
+        current && current.analysisId === id ? { ...current, text: current.text + text } : current
+      );
+    };
     void listen<{ analysisId: string; text: string }>(EVENTS.AI_DELTA, (event) => {
       const { analysisId, text } = event.payload;
-      setAnalysis((current) =>
-        current && current.analysisId === analysisId
-          ? { ...current, text: current.text + text }
-          : current
-      );
+      if (deltaId !== analysisId) {
+        flushDeltas();
+        deltaId = analysisId;
+      }
+      deltaBuf += text;
+      if (!deltaTimer) deltaTimer = setTimeout(flushDeltas, 150);
     });
     void listen<{ analysisId: string }>(EVENTS.AI_DONE, (event) => {
+      flushDeltas();
       setAnalysis((current) =>
         current && current.analysisId === event.payload.analysisId
           ? { ...current, state: "done" }
@@ -100,6 +122,7 @@ export const aiStore = createRoot(() => {
       );
     });
     void listen<{ analysisId: string; message: string }>(EVENTS.AI_ERROR, (event) => {
+      flushDeltas();
       setAnalysis((current) =>
         current && current.analysisId === event.payload.analysisId
           ? { ...current, state: "error", error: event.payload.message }

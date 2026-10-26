@@ -233,8 +233,8 @@ export function RmInheritLock(props: {
   return (
     <button
       class={`rm-inherit-lock${props.overridden ? " is-overridden" : ""}`}
-      aria-label={props.overridden ? "override" : "inherit"}
-      title={props.overridden ? "override" : "inherit"}
+      aria-label={props.overridden ? t("instanceDetail.settings.lockOverride") : t("instanceDetail.settings.lockInherit")}
+      title={props.overridden ? t("instanceDetail.settings.lockOverride") : t("instanceDetail.settings.lockInherit")}
       disabled={props.disabled}
       onClick={() => props.onToggle()}
     >

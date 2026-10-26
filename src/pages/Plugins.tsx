@@ -12,7 +12,7 @@ import { RmCard, RmListRow, RmTabs, RmEmptyState, RmErrorState, RmAdvancedSectio
 import { plugins as pluginsApi, pluginUi, logic } from "../ipc/api";
 import type { PluginSummary, PluginDetail, CapabilityInfo, InstallReport } from "../ipc/types";
 import { pluginsStore } from "../stores/plugins";
-import { uiStore, toast, confirmDanger } from "../stores/ui";
+import { toast } from "../stores/ui";
 import { t } from "../i18n";
 import type { TranslationKey } from "../i18n/locales/messages";
 import type { PluginContributions } from "../ipc/types";
@@ -26,6 +26,9 @@ export default function Plugins(): JSX.Element {
   const [detailTab, setDetailTab] = createSignal("overview");
   const [ignoredPending, setIgnoredPending] = createSignal<Set<string>>(loadIgnored());
   const [dragOver, setDragOver] = createSignal(false);
+  // Remove dialog: the "also delete data" choice lives here (P2-15).
+  const [removeTarget, setRemoveTarget] = createSignal<PluginSummary | null>(null);
+  const [removeData, setRemoveData] = createSignal(false);
 
   onMount(async () => {
     await pluginsStore.refresh();
@@ -94,18 +97,23 @@ export default function Plugins(): JSX.Element {
     }
   }
 
-  async function remove(summary: PluginSummary): Promise<void> {
-    const allowed = await confirmDanger({
-      title: t("plugins.remove.title"),
-      body: t("plugins.remove.body", { name: summary.name }),
-      confirmLabel: t("plugins.remove.confirm"),
-    });
-    if (!allowed) return;
-    const res = await pluginsApi.remove(summary.id, false);
+  async function remove(summary: PluginSummary, deleteData: boolean): Promise<void> {
+    const res = await pluginsApi.remove(summary.id, deleteData);
     if (res.ok) {
       setDetail(null);
       setSelectedId(null);
       await pluginsStore.refresh();
+    } else {
+      toast({ message: res.error.message, tone: "error" });
+    }
+  }
+
+  async function rollback(summary: PluginSummary): Promise<void> {
+    const res = await pluginsApi.rollback(summary.id);
+    if (res.ok) {
+      toast({ message: t("plugins.rollback.done"), tone: "success" });
+      await pluginsStore.refresh();
+      await select(summary.id);
     } else {
       toast({ message: res.error.message, tone: "error" });
     }
@@ -180,7 +188,7 @@ export default function Plugins(): JSX.Element {
                       selected={selectedId() === summary.id}
                       onClick={() => void select(summary.id)}
                       title={summary.name}
-                      subtitle={`v${summary.version} · ${summary.state}`}
+                      subtitle={`v${summary.version}`}
                       trailing={
                         <div class="btn-row">
                           <Show when={summary.lastError}>
@@ -222,7 +230,22 @@ export default function Plugins(): JSX.Element {
                   <RmMenu
                     align="right"
                     items={[
-                      { label: t("plugins.remove.title"), icon: "trash", danger: true, onSelect: () => void remove(d.summary) },
+                      ...(d.summary.previousVersion
+                        ? [{
+                            label: t("plugins.rollback", { version: d.summary.previousVersion }),
+                            icon: "refresh" as const,
+                            onSelect: () => void rollback(d.summary),
+                          }]
+                        : []),
+                      {
+                        label: t("plugins.remove.title"),
+                        icon: "trash" as const,
+                        danger: true,
+                        onSelect: () => {
+                          setRemoveData(false);
+                          setRemoveTarget(d.summary);
+                        },
+                      },
                     ]}
                   >
                     <RmIconButton icon="more-horizontal" label={t("common.more")} />
@@ -263,6 +286,42 @@ export default function Plugins(): JSX.Element {
           </Show>
         </div>
       </div>
+
+      <RmDialog
+        open={removeTarget() !== null}
+        title={t("plugins.remove.title")}
+        alertRole
+        onClose={() => setRemoveTarget(null)}
+        footer={
+          <>
+            <RmButton variant="ghost" onClick={() => setRemoveTarget(null)}>
+              {t("common.cancel")}
+            </RmButton>
+            <RmButton
+              variant="danger"
+              icon="trash"
+              onClick={() => {
+                const target = removeTarget();
+                if (target) void remove(target, removeData());
+              }}
+            >
+              {t("plugins.remove.confirm")}
+            </RmButton>
+          </>
+        }
+      >
+        <div class="rm-confirm-body">
+          {t("plugins.remove.body", { name: removeTarget()?.name ?? "" })}
+        </div>
+        <div class="path-row">
+          <span class="path-row-value">{t("plugins.remove.deleteData")}</span>
+          <RmSwitch
+            checked={removeData()}
+            onChange={setRemoveData}
+            label={t("plugins.remove.deleteData")}
+          />
+        </div>
+      </RmDialog>
     </div>
   );
 }
@@ -275,6 +334,9 @@ function OverviewSection(props: { detail: PluginDetail }): JSX.Element {
         <span>{t("plugins.overview.description")}</span><span>{props.detail.summary.description ?? "—"}</span>
         <span>{t("plugins.overview.path")}</span><span class="rm-input-mono">{props.detail.installedPath}</span>
         <span>{t("plugins.overview.installedAt")}</span><span>{props.detail.summary.installedAt}</span>
+        <Show when={props.detail.summary.previousVersion}>
+          <span>{t("plugins.overview.previousVersion")}</span><span>v{props.detail.summary.previousVersion}</span>
+        </Show>
       </div>
       <Show when={props.detail.summary.lastError}>
         <div class="warning-note">{props.detail.summary.lastError}</div>
@@ -376,6 +438,8 @@ function ConfigSection(props: { pluginId: string; hasSchema: boolean }): JSX.Ele
     if (res.ok) {
       setValuesText(JSON.stringify((res.data.config as { values?: unknown }).values ?? {}, null, 2));
       setSchema((res.data.schema as Record<string, unknown>) ?? null);
+    } else {
+      toast({ message: res.error.message, tone: "error" });
     }
   });
 
@@ -512,6 +576,7 @@ function ContributionsSection(props: { pluginId: string }): JSX.Element {
   onMount(async () => {
     const res = await pluginsApi.contributions();
     if (res.ok) setContributions(res.data);
+    else toast({ message: res.error.message, tone: "error" });
   });
 
   const cards = createMemo(() => (contributions()?.dashboardCards ?? []).filter((c) => c.pluginId === props.pluginId));

@@ -62,6 +62,8 @@ export const authStore = createRoot(() => {
 
   let loaded = false;
   const loadedAt = () => loaded;
+  /** True while a Microsoft login flow may legitimately emit device codes. */
+  let deviceCodeOpen = false;
 
   async function refresh(): Promise<void> {
     const [sessionRes, accountsRes] = await Promise.all([auth.getSession(), auth.listAccounts()]);
@@ -71,6 +73,10 @@ export const authStore = createRoot(() => {
   }
 
   async function startMicrosoftLogin(): Promise<AuthResult> {
+    // Backend has no cancel for the polling flow yet (P2-22): mark the
+    // device-code dialog active so events from a stale closed flow are
+    // ignored instead of resurrecting the code.
+    deviceCodeOpen = true;
     setLoggingIn(true);
     const res = await auth.microsoftLogin();
     setLoggingIn(false);
@@ -123,7 +129,14 @@ export const authStore = createRoot(() => {
       setSession(res.data);
       return { ok: true };
     }
-    if (res.ok) return { ok: false, error: { code: "not_found", message: "no session", retryable: false } as unknown as IpcError };
+    if (res.ok) {
+      // No session on record: surface it as a proper IpcError-shaped object
+      // (P3-2) instead of a blind double cast.
+      return {
+        ok: false,
+        error: { code: "not_found", message: "no session", retryable: false },
+      };
+    }
     return { ok: false, error: res.error };
   }
 
@@ -144,6 +157,7 @@ export const authStore = createRoot(() => {
     void listen<{ user_code: string; verification_uri: string }>(
       EVENTS.AUTH_DEVICE_CODE,
       (event) => {
+        if (!deviceCodeOpen) return; // stale flow after the dialog was closed
         setDeviceCode({
           userCode: event.payload.user_code,
           verificationUri: event.payload.verification_uri,
@@ -170,6 +184,7 @@ export const authStore = createRoot(() => {
   }
 
   function clearDeviceCode(): void {
+    deviceCodeOpen = false;
     setDeviceCode(null);
   }
 

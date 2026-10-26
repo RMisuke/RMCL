@@ -45,8 +45,21 @@ interface SkinStage {
 let stage: SkinStage | null = null;
 let stageInit: Promise<SkinStage> | null = null;
 
-/** url → blob: URL 记忆化（WebGL 纹理需要同源；同一皮肤不重复请求协议）。 */
+/** url → blob: URL 记忆化（WebGL 纹理需要同源；同一皮肤不重复请求协议）。
+ *  上限 8 条（P2-8）：淘汰最旧条目时 revoke，blob 不再无界驻留。 */
 const blobUrls = new Map<string, string>();
+const BLOB_CACHE_MAX = 8;
+
+function rememberBlob(url: string, obj: string): string {
+  blobUrls.set(url, obj);
+  while (blobUrls.size > BLOB_CACHE_MAX) {
+    const oldest = blobUrls.keys().next().value;
+    if (oldest === undefined) break;
+    URL.revokeObjectURL(blobUrls.get(oldest)!);
+    blobUrls.delete(oldest);
+  }
+  return obj;
+}
 
 async function toObjectUrl(url: string): Promise<string | null> {
   const memo = blobUrls.get(url);
@@ -54,9 +67,7 @@ async function toObjectUrl(url: string): Promise<string | null> {
   try {
     const res = await fetch(cacheStore.iconSrc(url));
     if (res.ok) {
-      const obj = URL.createObjectURL(await res.blob());
-      blobUrls.set(url, obj);
-      return obj;
+      return rememberBlob(url, URL.createObjectURL(await res.blob()));
     }
   } catch {
     /* 缓存协议不可用时直连 */
@@ -64,9 +75,7 @@ async function toObjectUrl(url: string): Promise<string | null> {
   try {
     const res = await fetch(url, { mode: "cors" });
     if (res.ok) {
-      const obj = URL.createObjectURL(await res.blob());
-      blobUrls.set(url, obj);
-      return obj;
+      return rememberBlob(url, URL.createObjectURL(await res.blob()));
     }
   } catch {
     /* 直连也失败（离线）→ 由调用方回退 */
@@ -218,6 +227,9 @@ export function SkinViewer(): JSX.Element {
     }
   }
 
+  /** Init failure message (P2-13): replaces the eternal "loading" placeholder. */
+  const [failed, setFailed] = createSignal<string | null>(null);
+
   /** 挂接常驻舞台（幂等；占位尺寸就绪后才执行）。 */
   function scheduleAttach(): void {
     if (attached || attaching || !slot) return;
@@ -225,6 +237,7 @@ export function SkinViewer(): JSX.Element {
     const h = slot.clientHeight;
     if (w < 50 || h < 80) return; // 布局未就绪，等 ResizeObserver 下一次回调
     attaching = (async () => {
+      setFailed(null);
       try {
         const st = await ensureStage(w, h);
         // await 期间组件可能已卸载（快速切页）：立刻隐藏，保持舞台静默。
@@ -244,6 +257,7 @@ export function SkinViewer(): JSX.Element {
         attached = true;
         void loadCurrentSkin();
       } catch (e) {
+        setFailed(String(e));
         diag(`stage init failed: ${String(e)}`);
       } finally {
         attaching = null;
@@ -327,7 +341,17 @@ export function SkinViewer(): JSX.Element {
       {/* 占位元素：决定舞台层的几何位置（自身不承载 canvas） */}
       <div class="skin-canvas-host" ref={slot}>
         <Show when={!ready()}>
-          <div class="hero-empty">{t("common.loading")}</div>
+          <Show when={failed()} fallback={<div class="hero-empty">{t("common.loading")}</div>}>
+            {(err) => (
+              <div class="skin-error">
+                <div class="hero-empty">{t("skin.error.title")}</div>
+                <div class="muted-line">{err()}</div>
+                <RmButton size="sm" onClick={() => { setFailed(null); scheduleAttach(); }}>
+                  {t("common.retry")}
+                </RmButton>
+              </div>
+            )}
+          </Show>
         </Show>
       </div>
       <input

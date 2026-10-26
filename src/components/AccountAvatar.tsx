@@ -18,13 +18,15 @@ import steveFace from "../assets/steve-face.png";
 
 const textureCache = new Map<string, Promise<string | null>>();
 
-/** profile UUID (any dash format) → skin texture URL, or null when unavailable. */
-function faceTextureUrl(uuid: string): Promise<string | null> {
-  const undashed = uuid.replace(/-/g, "").toLowerCase();
-  let pending = textureCache.get(undashed);
+/** Cache key `uuid@rev` → skin texture URL, or null when unavailable. The rev
+ *  comes from cacheStore.avatarRev (bumped on warmAvatar), so a changed skin
+ *  re-resolves instead of serving the old texture until restart (P2-9). */
+function faceTextureUrl(key: string): Promise<string | null> {
+  let pending = textureCache.get(key);
   if (!pending) {
+    const uuid = key.split("@")[0];
     pending = auth.skinUrl(uuid).then((res) => (res.ok ? res.data?.skin ?? null : null));
-    textureCache.set(undashed, pending);
+    textureCache.set(key, pending);
   }
   return pending;
 }
@@ -53,8 +55,10 @@ export function AccountAvatar(props: {
   const useSkin = () =>
     props.provider === "microsoft" && !!props.uuid && props.uuid.trim() !== "";
   const undashed = () => (useSkin() ? (props.uuid as string).replace(/-/g, "").toLowerCase() : null);
+  const cacheKey = () =>
+    undashed() ? `${undashed()}@${cacheStore.avatarRev()[undashed()!] ?? 0}` : null;
 
-  const [texture] = createResource(undashed, async (id) => faceTextureUrl(id));
+  const [texture] = createResource(cacheKey, faceTextureUrl);
 
   // URL 解析失败/未完成时用上次记住的 URL（首帧命中磁盘缓存）。
   const effective = (): string | null =>

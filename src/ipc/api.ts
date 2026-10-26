@@ -37,12 +37,9 @@ export type {
   PluginConfig,
   CapabilityInfo,
   PluginContributions,
-  DashboardLayout,
-  NormalizationResult,
   WidgetDescriptor,
   ThemeInfo,
   ThemeTokens,
-  WidgetInstance,
   BridgeReply,
   AiConfigView,
   AiAnalysisHandle,
@@ -84,12 +81,9 @@ import type { AppInfoView,
   PluginConfig,
   CapabilityInfo,
   PluginContributions,
-  DashboardLayout,
-  NormalizationResult,
   WidgetDescriptor,
   ThemeInfo,
   ThemeTokens,
-  WidgetInstance,
   BridgeReply,
   AiConfigView,
   AiAnalysisHandle,
@@ -117,7 +111,16 @@ export async function safeInvoke<T>(
     const data = await invoke<T>(cmd, args);
     return { ok: true, data };
   } catch (e) {
-    return { ok: false, error: e as IpcError };
+    // Commands always resolve Result<T, IpcError>, but Tauri-layer failures
+    // (plugin panics, missing handler) reject with plain strings (P3-3):
+    // normalize so `error.message` is never undefined.
+    if (e && typeof e === "object" && "code" in e && "message" in e) {
+      return { ok: false, error: e as IpcError };
+    }
+    return {
+      ok: false,
+      error: { code: "unknown", message: String(e), retryable: false },
+    };
   }
 }
 
@@ -148,7 +151,8 @@ export const profiles = {
     safeInvoke<Profile>("profile_create", { name, gameVersion }),
   update: (id: string, opts: ProfileUpdateOpts) =>
     safeInvoke<Profile>("profile_update", { id, opts }),
-  delete: (id: string) => safeInvoke<void>("profile_delete", { id }),
+  delete: (id: string, cleanupGameDir: boolean) =>
+    safeInvoke<void>("profile_delete", { id, cleanupGameDir }),
 };
 
 // ── Versions ──
@@ -329,15 +333,9 @@ export const plugins = {
     safeInvoke<PluginContributions>("plugin_contributions"),
 };
 
-// ── Dashboard layout & themes（Phase 3）──
+// ── Dashboard themes（布局协议已随 HomeDashboard 下线，B3-1）──
 
 export const dashboard = {
-  getLayout: (layoutId?: string) =>
-    safeInvoke<DashboardLayout>("dashboard_get_layout", { layoutId }),
-  saveLayout: (layout: DashboardLayout) =>
-    safeInvoke<NormalizationResult>("dashboard_save_layout", { layout }),
-  resetLayout: (layoutId?: string) =>
-    safeInvoke<DashboardLayout>("dashboard_reset_layout", { layoutId }),
   listWidgets: () =>
     safeInvoke<WidgetDescriptor[]>("dashboard_list_widgets"),
   listThemes: () => safeInvoke<ThemeInfo[]>("dashboard_list_themes"),

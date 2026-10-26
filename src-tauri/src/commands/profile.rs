@@ -221,8 +221,12 @@ pub async fn profile_update(
 
 #[tauri::command]
 #[tracing::instrument(skip(state))]
-pub async fn profile_delete(state: tauri::State<'_, AppState>, id: String) -> Result<(), IpcError> {
+pub async fn profile_delete(
+    state: tauri::State<'_, AppState>,
+    id: String,
+    cleanup_game_dir: bool,
+) -> Result<(), IpcError> {
     let core = state.core.read().await;
-    core.profile_store.delete(&id, false)?;
+    core.profile_store.delete(&id, cleanup_game_dir)?;
     Ok(())
 }

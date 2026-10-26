@@ -8,6 +8,9 @@
 use ts_rs::TS;
 
 /// 生成 `src/ipc/types.ts` 的内容（含所有 IPC 类型 + 依赖类型）。
+// Release 构建下无人调用（main 仅在 debug_assertions 写盘、测试只读比较），
+// 属预期死代码；dev/test 构建均在用。
+#[cfg_attr(all(not(debug_assertions), not(test)), allow(dead_code))]
 pub fn generate_types() -> Result<String, String> {
     fn ts<T: TS + ?Sized + 'static>() -> Result<String, String> {
         T::export_to_string().map_err(|e| format!("ts-rs export failed: {e}"))
@@ -141,6 +144,7 @@ pub fn generate_types() -> Result<String, String> {
 }
 
 /// 将生成的类型写入 `src/ipc/types.ts`（相对 src-tauri manifest 目录）。
+#[cfg_attr(all(not(debug_assertions), not(test)), allow(dead_code))]
 pub fn write_types_file() -> Result<(), String> {
     let content = generate_types()?;
     let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -158,13 +162,12 @@ pub fn write_types_file() -> Result<(), String> {
 mod tests {
     use super::*;
 
-    /// P2-15：重新生成 types.ts 并校验与仓库内文件一致（保证生成文件最新）。
-    /// 运行 `cargo test -p rmccc test_types_binding_up_to_date` 会重写 types.ts；
-    /// CI 中该测试若因字段变更失败，提示提交更新后的生成文件。
+    /// P1-9（旧 P2-15）：只读比较仓库内 types.ts 与最新生成内容。
+    /// 不再写盘——`cargo test` 不得改写工作区；types.ts 的再生成由
+    /// `main.rs` 启动时的 `write_types_file()` 负责。字段/类型变更后需
+    /// 重新生成并提交该文件，本测试才会通过。
     #[test]
     fn test_types_binding_up_to_date() {
-        // 写盘生成最新内容（保证开发/CI 后文件最新）
-        write_types_file().expect("write types.ts");
         let content = generate_types().expect("generate types");
         let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .parent()

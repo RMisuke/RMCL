@@ -6,6 +6,9 @@ import { createRoot, createSignal } from "solid-js";
 import { launch, instances } from "../ipc/api";
 import { EVENTS } from "../ipc/events";
 import { listen } from "@tauri-apps/api/event";
+import { profilesStore } from "./profiles";
+import { uiStore } from "./ui";
+import { t } from "../i18n";
 
 const MAX_LINES = 1000;
 
@@ -41,8 +44,11 @@ export const launchStore = createRoot(() => {
   const [starting, setStarting] = createSignal<Set<string>>(new Set());
   /** Cleared when its drawer closes (ui-design 10 §4). */
   const keepBuffers = new Set<string>();
+  /** Profiles the user stopped from the UI — distinguishes kill from crash (P1-7). */
+  const userKilled = new Set<string>();
   const [flow, setFlow] = createSignal<LaunchFlow | null>(null);
   let flowClearTimer: ReturnType<typeof setTimeout> | null = null;
+  let flowStartTimer: ReturnType<typeof setTimeout> | null = null;
 
   function scheduleFlowClear(delayMs: number): void {
     if (flowClearTimer) clearTimeout(flowClearTimer);
@@ -103,11 +109,14 @@ export const launchStore = createRoot(() => {
     });
     if (!res.ok) {
       setFlow((f) => (f && f.profileId === profileId ? { ...f, stage: "failed", error: res.error.message } : f));
-      scheduleFlowClear(5000);
+      // P2-19: the failed bubble stays until dismissed — a 5s auto-clear
+      // dropped the error whenever the user glanced away.
       return { ok: false, message: res.error.message };
     }
     // LAUNCH_STARTED 事件通常先到；45s 兜底（进程拉起但事件丢失时仍收尾）。
-    setTimeout(() => {
+    // 句柄存下来：dismissFlow 时一并取消（P3-10）。
+    flowStartTimer = setTimeout(() => {
+      flowStartTimer = null;
       setFlow((f) =>
         f && f.profileId === profileId && f.stage === "launching" ? { ...f, stage: "started" } : f
       );
@@ -127,7 +136,30 @@ export const launchStore = createRoot(() => {
     });
   }
 
+  /**
+   * Confirm first (P1-11: every UI stop entry point funnels through here),
+   * then kill; the exit is marked user-initiated so it is not treated as a
+   * crash (P1-7).
+   */
+  async function stop(profileId: string): Promise<void> {
+    const name = profilesStore.items()?.find((p) => p.id === profileId)?.name ?? profileId;
+    const allowed = await uiStore.confirm({
+      title: t("launch.stopConfirm.title"),
+      body: t("launch.stopConfirm.body", { name }),
+      confirmLabel: t("common.stop"),
+      danger: true,
+    });
+    if (!allowed) return;
+    await kill(profileId);
+  }
+
+  /** Consume the user-kill marker once; true when this exit was user-initiated. */
+  function consumeUserKill(profileId: string): boolean {
+    return userKilled.delete(profileId);
+  }
+
   async function kill(profileId: string): Promise<void> {
+    userKilled.add(profileId);
     // 乐观更新：UI 立即停止显示运行中；退出事件晚到也无害（幂等）。
     setRunning((map) => {
       const next = new Map(map);
@@ -164,6 +196,7 @@ export const launchStore = createRoot(() => {
   function attachEvents(): void {
     void listen<{ profile_id: string; pid: number }>(EVENTS.LAUNCH_STARTED, (event) => {
       const { profile_id, pid } = event.payload;
+      userKilled.delete(profile_id); // a fresh run clears any stale kill marker
       markStarted(profile_id);
       setRunning((map) => {
         const next = new Map(map);
@@ -171,8 +204,10 @@ export const launchStore = createRoot(() => {
         return next;
       });
     });
-    void listen<{ profile_id: string; text: string }>(EVENTS.LAUNCH_OUTPUT, (event) => {
-      appendLines(event.payload.profile_id, [event.payload.text]);
+    // Backend coalesces stdout lines into batches (~10 events/s at high
+    // rates) — append the whole batch in one signal update.
+    void listen<{ profile_id: string; lines: string[] }>(EVENTS.LAUNCH_OUTPUT, (event) => {
+      appendLines(event.payload.profile_id, event.payload.lines);
     });
     void listen<{ profile_id: string; exit_code: number; exit_type: string }>(
       EVENTS.LAUNCH_EXITED,
@@ -214,10 +249,15 @@ export const launchStore = createRoot(() => {
     flow,
     dismissFlow: () => {
       if (flowClearTimer) clearTimeout(flowClearTimer);
+      flowClearTimer = null;
+      if (flowStartTimer) clearTimeout(flowStartTimer);
+      flowStartTimer = null;
       setFlow(null);
     },
     start,
+    stop,
     kill,
+    consumeUserKill,
     restoreStatus,
     attachEvents,
     dropBuffer,

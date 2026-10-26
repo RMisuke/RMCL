@@ -35,16 +35,23 @@ export function LogDrawer(): JSX.Element {
   const [autoscroll, setAutoscroll] = createSignal(true);
   let scrollBox: HTMLDivElement | undefined;
 
-  const lines = createMemo(() => launchStore.buffers().get(profileId() ?? "") ?? []);
-  const filtered = createMemo(() =>
-    lines().filter((line) => {
+  // Lazy subscriptions (perf audit 1.2): both memos gate on `drawer()` and
+  // return early while the drawer is hidden, so Solid drops the `buffers`
+  // dependency entirely and the 1000-line filter does not re-run per log
+  // batch while the drawer is closed (it is mounted app-wide in App.tsx).
+  const lines = createMemo(() =>
+    drawer() ? (launchStore.buffers().get(profileId() ?? "") ?? []) : []
+  );
+  const filtered = createMemo(() => {
+    if (!drawer()) return [];
+    return lines().filter((line) => {
       if (filter() && !line.toLowerCase().includes(filter().toLowerCase())) return false;
       const lvl = levelOf(line);
       if (level() === "error") return lvl === "error";
       if (level() === "warn") return lvl === "warn" || lvl === "error";
       return true;
-    })
-  );
+    });
+  });
 
   const exit = createMemo(() => {
     const last = launchStore.lastExit();
@@ -84,12 +91,30 @@ export function LogDrawer(): JSX.Element {
     };
     window.addEventListener("pointermove", onMove);
     window.addEventListener("pointerup", onUp);
+    // P3-9: if the drawer unmounts mid-drag the listeners must go too.
+    onCleanup(() => {
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", onUp);
+    });
   }
 
+  // Autoscroll via rAF (perf audit 2.2): reading `scrollHeight` forces a
+  // layout; coalesce bursts of log batches into one read per frame.
+  let autoscrollRaf = 0;
   createEffect(() => {
     if (autoscroll() && scrollBox) {
-      scrollBox.scrollTop = scrollBox.scrollHeight;
+      if (!autoscrollRaf) {
+        autoscrollRaf = requestAnimationFrame(() => {
+          autoscrollRaf = 0;
+          if (autoscroll() && scrollBox) {
+            scrollBox.scrollTop = scrollBox.scrollHeight;
+          }
+        });
+      }
     }
+  });
+  onCleanup(() => {
+    if (autoscrollRaf) cancelAnimationFrame(autoscrollRaf);
   });
 
   // Keep the buffer alive while the drawer is open; drop it on close

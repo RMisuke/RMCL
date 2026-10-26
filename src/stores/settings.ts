@@ -11,6 +11,8 @@ export const settingsStore = createRoot(() => {
   const [user, setUser] = createSignal<UserSettings | null>(null);
   const [themePreference, setThemePreference] = createSignal<string | null>(null);
   const [loaded, setLoaded] = createSignal(false);
+  /** Non-null when the initial config fetch failed (Settings shows a retry). */
+  const [loadError, setLoadError] = createSignal<string | null>(null);
 
   // ── 动态效果开关（宿主统一发布：主题/插件动画都必须跟随此状态）──
   // 发布形式：<html data-motion="on|off"> + CSS 变量 --rmccc-motion-enabled；
@@ -56,7 +58,11 @@ export const settingsStore = createRoot(() => {
   }
 
   const [motionEnabled, setMotionEnabled_] = createSignal(readMotion());
-  applyMotion(motionEnabled());
+  // Guarded for non-DOM environments (tests, workers): P3-11 — module import
+  // must not write to `document`.
+  if (typeof document !== "undefined") {
+    applyMotion(motionEnabled());
+  }
 
   function setMotionEnabled(enabled: boolean): void {
     setMotionEnabled_(enabled);
@@ -74,7 +80,12 @@ export const settingsStore = createRoot(() => {
       userSettings.get(),
       dashboard.getThemePreference(),
     ]);
-    if (cfg.ok) setConfig(cfg.data);
+    if (cfg.ok) {
+      setConfig(cfg.data);
+      setLoadError(null);
+    } else {
+      setLoadError(cfg.error.message);
+    }
     if (usr.ok) setUser(usr.data);
     if (pref.ok) setThemePreference(pref.data);
     setLoaded(true);
@@ -108,6 +119,7 @@ export const settingsStore = createRoot(() => {
     user,
     themePreference,
     loaded,
+    loadError,
     motionEnabled,
     debugMode,
     setDebugMode,

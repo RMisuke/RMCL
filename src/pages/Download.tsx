@@ -5,13 +5,13 @@
  */
 import type { JSX } from "solid-js";
 import { Show, For, createMemo, createSignal, createEffect, onMount, Switch, Match } from "solid-js";
-import { useNavigate, useSearchParams, useLocation } from "@solidjs/router";
+import { useNavigate, useSearchParams } from "@solidjs/router";
 import { PageHeader } from "../components/PageHeader";
-import { RmButton, RmIconButton, RmInput, RmSelect, RmTag, RmProgress, RmSwitch } from "../components/rm/controls";
+import { RmButton, RmIconButton, RmInput, RmSelect, RmTag, RmProgress } from "../components/rm/controls";
 import { RmDialog } from "../components/rm/overlays";
 import { RmSideTabs, RmListRow, RmEmptyState, RmErrorState, RmCard, RmFieldRow } from "../components/rm/surfaces";
 import { VirtualList } from "../components/rm/VirtualList";
-import { versions, profiles, modLoader, mods, external } from "../ipc/api";
+import { versions, profiles, instances, modLoader, mods, external } from "../ipc/api";
 import type {
   VersionInfo,
   ReleaseType,
@@ -26,12 +26,13 @@ import { profilesStore } from "../stores/profiles";
 import * as versionCache from "../stores/versionCache";
 import { cacheStore } from "../stores/cache";
 import { downloadsStore } from "../stores/downloads";
-import { uiStore, toast, confirmDanger } from "../stores/ui";
+import { uiStore, toast } from "../stores/ui";
 import { t } from "../i18n";
 import type { TranslationKey } from "../i18n/locales/messages";
-import { abbreviateCount, formatDate, initialOf, formatBytes } from "../lib/format";
+import { abbreviateCount, formatDate, initialOf } from "../lib/format";
 import { versionTypeIcon, loaderIcon } from "../lib/mcIcons";
-import { loaderLabel } from "../lib/loaders";
+import { LOADER_CARDS, loaderLabel } from "../lib/loaders";
+import { useHashTab } from "../lib/useHashTab";
 
 const TABS: { id: string; icon: "download" | "package" | "layers"; label: TranslationKey }[] = [
   { id: "install", icon: "download", label: "download.tab.install" },
@@ -40,10 +41,7 @@ const TABS: { id: string; icon: "download" | "package" | "layers"; label: Transl
 ];
 
 export default function Download(): JSX.Element {
-  const location = useLocation();
-  const [tab, setTab] = createSignal(
-    location.hash.includes("mods") ? "mods" : location.hash.includes("modpack") ? "modpack" : "install"
-  );
+  const [tab, setTab] = useHashTab("install", TABS.map((x) => x.id));
 
   return (
     <div class="page">
@@ -79,7 +77,9 @@ function InstallWizard(): JSX.Element {
   const [searchParams] = useSearchParams();
   const [step, setStep] = createSignal(1);
   const [versions_, setVersions_] = createSignal<VersionInfo[] | null>(null);
-  const [error, setError] = createSignal<string | null>(null);
+  // Offline fallback: versions already on disk, picked via the advanced dialog.
+  const [localVersions, setLocalVersions] = createSignal<InstanceInfo[]>([]);
+  const [bindLocalOpen, setBindLocalOpen] = createSignal(false);
   const [typeFilter, setTypeFilter] = createSignal<"release" | "snapshot" | "old" | "all">("release");
   type VersionTypeFilter = "release" | "snapshot" | "old" | "all";
   const [search, setSearch] = createSignal(String(searchParams.version ?? ""));
@@ -95,7 +95,6 @@ function InstallWizard(): JSX.Element {
   );
   const [loaderVersions, setLoaderVersions] = createSignal<LoaderVersion[]>([]);
   const [loaderVersion, setLoaderVersion] = createSignal("");
-  const [loaderDialog, setLoaderDialog] = createSignal<string | null>(null);
   /** loader 版本加载代际：快速连点不同 loader 时，晚到的旧结果不得覆盖新结果。 */
   let loaderGen = 0;
 
@@ -118,7 +117,17 @@ function InstallWizard(): JSX.Element {
     void versionCache.refreshGameVersions().then((list) => {
       if (list) setVersions_(list);
     });
+    const local = await instances.list();
+    if (local.ok) setLocalVersions(local.data);
   });
+
+  // Error surfaces only when there is nothing to render — a stale cache keeps
+  // the list usable while the background refresh retries.
+  const error = () => ((versions_() ?? []).length > 0 ? null : versionCache.gameVersionsError());
+  const retryVersions = async (): Promise<void> => {
+    const list = await versionCache.refreshGameVersions();
+    if (list) setVersions_(list);
+  };
 
   const filtered = createMemo(() => {
     const list = versions_() ?? [];
@@ -315,14 +324,37 @@ function InstallWizard(): JSX.Element {
               )}
             />
           }>
-            <RmErrorState message={error()!} />
+            <RmErrorState message={error()!} onRetry={() => void retryVersions()} />
           </Show>
           <div class="wizard-actions">
-            <span />
+            <RmButton variant="ghost" onClick={() => setBindLocalOpen(true)}>{t("download.wizard.bindLocal")}</RmButton>
             <RmButton variant="primary" disabled={!selectedVersion()} onClick={() => setStep(2)}>
               {t("common.next")}
             </RmButton>
           </div>
+          <RmDialog open={bindLocalOpen()} title={t("download.wizard.bindLocal")} onClose={() => setBindLocalOpen(false)}>
+            <div class="rm-list">
+              <For each={localVersions()}>
+                {(local) => (
+                  <RmListRow
+                    title={local.id}
+                    subtitle={`${local.game_version}${local.modded ? ` · ${t("common.modded")}` : ""}`}
+                    trailing={
+                      <RmTag tone={local.missing_count === 0 ? "success" : "warning"}>
+                        {local.missing_count === 0
+                          ? t("download.wizard.localComplete")
+                          : t("download.wizard.localMissing", { count: String(local.missing_count) })}
+                      </RmTag>
+                    }
+                    onClick={() => {
+                      setSelectedVersion(local.id);
+                      setBindLocalOpen(false);
+                    }}
+                  />
+                )}
+              </For>
+            </div>
+          </RmDialog>
           </div>
         </Match>
 
@@ -483,10 +515,12 @@ function InstallWizard(): JSX.Element {
 function ModStore(): JSX.Element {
   const [searchParams] = useSearchParams();
   const navigate = useNavigate();
-  const instanceId = searchParams.instance ? String(searchParams.instance) : null;
-  const contextProfile = createMemo(
-    () => (profilesStore.items() ?? []).find((p) => p.id === instanceId) ?? null
-  );
+  // Reactive so the ⚓ exit chip (navigate without ?instance=) clears the
+  // context without remounting the page.
+  const contextProfile = createMemo(() => {
+    const id = searchParams.instance ? String(searchParams.instance) : null;
+    return id ? (profilesStore.items() ?? []).find((p) => p.id === id) ?? null : null;
+  });
 
   const [source, setSource] = createSignal<"modrinth" | "curseforge">("modrinth");
   const [query, setQuery] = createSignal("");
@@ -643,7 +677,9 @@ function ModStore(): JSX.Element {
           onChange={setGameVersion}
           options={[
             { value: "", label: t("modStore.filter.anyVersion") },
-            ...(profilesStore.items() ?? []).map((p) => ({ value: p.game_version, label: p.game_version })),
+            ...[...new Set((profilesStore.items() ?? []).map((p) => p.game_version))].map(
+              (v) => ({ value: v, label: v })
+            ),
           ]}
         />
         <RmSelect
@@ -652,9 +688,8 @@ function ModStore(): JSX.Element {
           onChange={setLoader}
           options={[
             { value: "", label: t("modStore.filter.anyLoader") },
-            { value: "fabric", label: "Fabric" },
-            { value: "forge", label: "Forge" },
-            { value: "quilt", label: "Quilt" },
+            // Same source as the wizard grid (P2-21): 6 loaders, not 3.
+            ...LOADER_CARDS.map((l) => ({ value: l.id, label: l.label })),
           ]}
         />
         <RmButton size="sm" variant="primary" icon="search" onClick={() => void runSearch(1)}>
@@ -771,11 +806,8 @@ function ModDetail(props: {
   onCopyLink: (version: ModVersion) => void;
   onOpenBrowser: (version: ModVersion) => void;
 }): JSX.Element {
-  const contextProfile = () => {
-    const params = new URLSearchParams(window.location.hash.split("?")[1] ?? "");
-    const id = params.get("instance");
-    return id ? (profilesStore.items() ?? []).find((p) => p.id === id) ?? null : null;
-  };
+  // P1-14: full version list behind a toggle instead of a silent slice(0, 30).
+  const [showAll, setShowAll] = createSignal(false);
   return (
     <div class="mod-detail">
       <button class="rm-btn rm-btn-ghost rm-btn-sm" onClick={props.onBack}>
@@ -804,7 +836,7 @@ function ModDetail(props: {
       </Show>
 
       <div class="rm-list">
-        <For each={props.versions.slice(0, 30)}>
+        <For each={props.versions.slice(0, showAll() ? props.versions.length : 30)}>
           {(version) => (
             <RmListRow
               title={version.version_number}
@@ -819,6 +851,11 @@ function ModDetail(props: {
             />
           )}
         </For>
+        <Show when={props.versions.length > 30}>
+          <RmButton size="sm" variant="ghost" onClick={() => setShowAll(!showAll())}>
+            {showAll() ? t("modStore.showLess") : t("modStore.showAll", { n: props.versions.length })}
+          </RmButton>
+        </Show>
       </div>
       <div class="muted-line">{t("modStore.dependencyHint")}</div>
     </div>

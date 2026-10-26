@@ -109,8 +109,14 @@ export function nativeNameFor(code: string): string {
  * the system language.
  */
 export async function initI18n(): Promise<void> {
+  // The persisted preference and the supported-locale list are independent;
+  // fetch them concurrently (perf audit 3.1: this used to be two serial IPC
+  // round-trips gating the first paint).
+  const [stored, supported] = await Promise.all([
+    userSettings.get(),
+    userSettings.supportedLocales(),
+  ]);
   let pref: LocalePreference = null;
-  const stored = await userSettings.get();
   if (stored.ok) {
     pref = stored.data.locale && stored.data.locale.trim() !== "" ? stored.data.locale : null;
   } else {
@@ -119,7 +125,6 @@ export async function initI18n(): Promise<void> {
   setPreference_(pref);
   apply(pref ? normalizeLocale(pref) : systemLocale());
 
-  const supported = await userSettings.supportedLocales();
   if (supported.ok) {
     setSupported_(supported.data);
   } else {

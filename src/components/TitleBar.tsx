@@ -4,6 +4,7 @@ import { Icon, type IconName } from "./icons";
 import { TaskIndicator } from "./TaskCenter";
 import { launchStore } from "../stores/launch";
 import { downloadsStore } from "../stores/downloads";
+import { uiStore } from "../stores/ui";
 import { t } from "../i18n";
 import type { TranslationKey } from "../i18n/locales/messages";
 
@@ -27,6 +28,10 @@ const TitleBar: Component = () => {
   const [maximized, setMaximized] = createSignal(false);
   const location = useLocation();
   const navigate = useNavigate();
+  // Registered in the synchronous component scope: an onCleanup after an
+  // awaited onMount has no owner and silently never runs (P1-6).
+  let unlistenResized: (() => void) | undefined;
+  onCleanup(() => unlistenResized?.());
 
   onMount(async () => {
     try {
@@ -34,12 +39,11 @@ const TitleBar: Component = () => {
       appWindow = mod.getCurrentWindow();
       setMaximized(await appWindow.isMaximized());
 
-      const unlisten = await appWindow.onResized(async () => {
+      unlistenResized = await appWindow.onResized(async () => {
         try {
           setMaximized(await appWindow.isMaximized());
         } catch {}
       });
-      onCleanup(unlisten);
     } catch (e) {
       console.warn("TitleBar: window API unavailable", e);
     }
@@ -47,7 +51,22 @@ const TitleBar: Component = () => {
 
   const minimize = () => { try { appWindow?.minimize(); } catch {} };
   const toggleMax = () => { try { appWindow?.toggleMaximize(); } catch {} };
-  const close = () => { try { appWindow?.close(); } catch {} };
+  // P1-11: closing the launcher while games are still running needs a confirm.
+  const close = async () => {
+    try {
+      const running = launchStore.running().size;
+      if (running > 0) {
+        const allowed = await uiStore.confirm({
+          title: t("titlebar.closeConfirm.title"),
+          body: t("titlebar.closeConfirm.body", { n: running }),
+          confirmLabel: t("titlebar.close"),
+          danger: true,
+        });
+        if (!allowed) return;
+      }
+      await appWindow?.close();
+    } catch {}
+  };
 
   const isActive = (href: string): boolean => {
     if (href === "/") return location.pathname === "/";
@@ -55,7 +74,7 @@ const TitleBar: Component = () => {
   };
 
   const runningCount = () => launchStore.running().size;
-  const downloadCount = () => downloadsStore.batches().size;
+  const downloadCount = () => Object.keys(downloadsStore.batches).length;
 
   // `data-tauri-drag-region="deep"` makes the whole bar draggable (Tauri walks
   // the composed path); the dock/window buttons are clickable elements and stay

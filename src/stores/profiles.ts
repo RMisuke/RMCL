@@ -20,13 +20,25 @@ export const profilesStore = createRoot(() => {
   let inflight: Promise<void> | null = null;
 
   async function refresh(force = false): Promise<void> {
-    if (inflight) return inflight;
+    // A forced refresh must not be swallowed by an in-flight stale request
+    // (P2-11): chain a fresh one after it settles instead.
+    if (inflight) return force ? inflight.then(() => refresh(true)) : inflight;
     if (!force && items() !== undefined && Date.now() - lastFetch < TTL_MS) return;
     setLoading(true);
     inflight = (async () => {
       const res = await profiles.list();
       if (res.ok) {
-        setItems(res.data);
+        // Preserve object references for unchanged instances (perf audit
+        // 2.5): a fresh object per refresh re-triggered every effect keyed
+        // on `props.profile` identity and re-sent its IPCs.
+        setItems((prev) => {
+          if (!prev) return res.data;
+          const oldById = new Map(prev.map((p) => [p.id, p]));
+          return res.data.map((p) => {
+            const old = oldById.get(p.id);
+            return old && JSON.stringify(old) === JSON.stringify(p) ? old : p;
+          });
+        });
         setError(null);
         lastFetch = Date.now();
       } else {

@@ -4,6 +4,7 @@
  * (the backend owns batch_id) or on install start via `beginInstall`.
  */
 import { createRoot, createSignal } from "solid-js";
+import { createStore, produce } from "solid-js/store";
 import type { DownloadProgressPayload, IpcError } from "../ipc/types";
 import { EVENTS } from "../ipc/events";
 import { listen } from "@tauri-apps/api/event";
@@ -34,34 +35,36 @@ export interface DownloadOutcome {
 }
 
 export const downloadsStore = createRoot(() => {
-  const [batches, setBatches] = createSignal<Map<string, DownloadBatch>>(new Map());
+  // Fine-grained store (perf audit 2.1): per-batch path updates mean a
+  // progress tick only re-renders the row reading the changed fields, instead
+  // of cloning the whole Map + recreating every `<For>` row at ~10 Hz.
+  const [batches, setBatches] = createStore<Record<string, DownloadBatch>>({});
   const [recent, setRecent] = createSignal<DownloadOutcome[]>([]);
   const [paused, setPaused] = createSignal<Set<string>>(new Set());
   let lastProgressAt = new Map<string, { at: number; bytes: number }>();
   let outcomeId = 1;
 
+  const BATCH_DEFAULTS: Omit<DownloadBatch, "batchId" | "startedAt"> = {
+    profileId: null,
+    version: null,
+    label: "",
+    completedFiles: 0,
+    totalFiles: 0,
+    downloadedBytes: 0,
+    totalBytes: 0,
+    currentFile: null,
+    state: "running",
+    speed: 0,
+  };
+
   function upsertBatch(batchId: string, patch: Partial<DownloadBatch>): void {
-    setBatches((map) => {
-      const next = new Map(map);
-      const existing = next.get(batchId);
-      next.set(batchId, {
-        batchId,
-        profileId: null,
-        version: null,
-        label: "",
-        completedFiles: 0,
-        totalFiles: 0,
-        downloadedBytes: 0,
-        totalBytes: 0,
-        currentFile: null,
-        state: "running",
-        speed: 0,
-        startedAt: existing?.startedAt ?? Date.now(),
-        ...existing,
-        ...patch,
-      });
-      return next;
-    });
+    setBatches(batchId, (prev) => ({
+      ...BATCH_DEFAULTS,
+      ...prev,
+      batchId,
+      startedAt: prev?.startedAt ?? Date.now(),
+      ...patch,
+    }));
   }
 
   function beginInstall(opts: { batchId: string; profileId: string; version: string; label: string }): void {
@@ -91,37 +94,42 @@ export const downloadsStore = createRoot(() => {
    * The backend assigns real batch ids asynchronously; a wizard-created
    * "pending" entry is keyed by a synthetic id. When the first progress event
    * with the real batch id arrives, migrate the pending entry onto it.
+   *
+   * Progress events carry no profile id, so a blank `profileId` is only safe
+   * to match when exactly one pending entry exists (P2-12: no mislabeling
+   * when several installs run concurrently; the complete/error events carry
+   * the profile and still close the entry).
    */
   function rekeyPending(profileId: string, realBatchId: string): void {
-    if (!realBatchId || batches().has(realBatchId)) return;
-    setBatches((map) => {
-      const pendingEntry = [...map.values()]
-        .filter((b) => b.state === "pending" && (profileId === "" || b.profileId === profileId))
-        .sort((a, b) => a.startedAt - b.startedAt)[0];
-      if (!pendingEntry) return map;
-      const next = new Map(map);
-      next.delete(pendingEntry.batchId);
-      next.set(realBatchId, { ...pendingEntry, batchId: realBatchId, state: "running" });
-      return next;
-    });
+    if (!realBatchId || batches[realBatchId]) return;
+    const pendings = Object.values(batches).filter((b) => b.state === "pending");
+    let target: DownloadBatch | undefined;
+    if (profileId !== "") {
+      target = pendings.find((b) => b.profileId === profileId);
+    } else if (pendings.length === 1) {
+      target = pendings[0];
+    }
+    if (!target) return;
+    const picked = target;
+    setBatches(
+      produce((b) => {
+        delete b[picked.batchId];
+        b[realBatchId] = { ...picked, batchId: realBatchId, state: "running" };
+      })
+    );
+  }
+
+  /** Push a recent outcome; kept outside signal updaters (P2-6). */
+  function pushOutcome(label: string, ok: boolean, detail?: string): void {
+    const id = outcomeId++;
+    setRecent((list) => [{ id, label, ok, detail, at: Date.now() }, ...list].slice(0, 6));
   }
 
   function finishBatch(batchId: string, ok: boolean, detail?: string): void {
-    setBatches((map) => {
-      const next = new Map(map);
-      const batch = next.get(batchId);
-      if (batch) {
-        setRecent((list) =>
-          [
-            { id: outcomeId++, label: batch.label || batch.version || batchId, ok, detail, at: Date.now() },
-            ...list,
-          ].slice(0, 6)
-        );
-      }
-      next.delete(batchId);
-      lastProgressAt.delete(batchId);
-      return next;
-    });
+    const batch = batches[batchId];
+    if (batch) pushOutcome(batch.label || batch.version || batchId, ok, detail);
+    setBatches(produce((b) => { delete b[batchId]; }));
+    lastProgressAt.delete(batchId);
     setPaused((set) => {
       const next = new Set(set);
       next.delete(batchId);
@@ -135,21 +143,12 @@ export const downloadsStore = createRoot(() => {
    * batch_id, matched here by profile.
    */
   function finishPendingFor(profileId: string, ok: boolean, detail?: string): void {
-    setBatches((map) => {
-      const pending = [...map.values()].find(
-        (b) => b.state === "pending" && b.profileId === profileId
-      );
-      if (!pending) return map;
-      const next = new Map(map);
-      next.delete(pending.batchId);
-      setRecent((list) =>
-        [
-          { id: outcomeId++, label: pending.label || pending.version || pending.batchId, ok, detail, at: Date.now() },
-          ...list,
-        ].slice(0, 6)
-      );
-      return next;
-    });
+    const pending = Object.values(batches).find(
+      (b) => b.state === "pending" && b.profileId === profileId
+    );
+    if (!pending) return;
+    pushOutcome(pending.label || pending.version || pending.batchId, ok, detail);
+    setBatches(produce((b) => { delete b[pending.batchId]; }));
   }
 
   function attachEvents(): void {
@@ -161,7 +160,7 @@ export const downloadsStore = createRoot(() => {
       let speed = 0;
       if (prev && now > prev.at) {
         const instant = ((p.downloaded_bytes - prev.bytes) / (now - prev.at)) * 1000;
-        const existing = batches().get(p.batch_id)?.speed ?? 0;
+        const existing = batches[p.batch_id]?.speed ?? 0;
         // EMA smoothing (α = 0.3).
         speed = existing === 0 ? instant : existing * 0.7 + instant * 0.3;
       }
@@ -213,11 +212,11 @@ export const downloadsStore = createRoot(() => {
     beginTask,
     finishTask,
     finishBatch,
-    activeCount: () => batches().size,
+    activeCount: () => Object.keys(batches).length,
     totalBytesProgress: () => {
       let downloaded = 0;
       let total = 0;
-      for (const batch of batches().values()) {
+      for (const batch of Object.values(batches)) {
         if (batch.totalBytes > 0) {
           downloaded += batch.downloadedBytes;
           total += batch.totalBytes;

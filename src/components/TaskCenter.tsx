@@ -4,9 +4,10 @@
  * installs, running games, and the recent-outcomes fold.
  */
 import type { JSX } from "solid-js";
-import { Show, For, createMemo, createSignal } from "solid-js";
+import { Show, For, createMemo, createSignal, onMount, onCleanup } from "solid-js";
 import { Icon } from "./icons";
 import { RmButton, RmIconButton, RmProgress, RmTag } from "./rm/controls";
+import type { DownloadBatch } from "../stores/downloads";
 import { downloadsStore } from "../stores/downloads";
 import { downloads } from "../ipc/api";
 import { modloadersStore, type LoaderInstall } from "../stores/modloaders";
@@ -23,8 +24,8 @@ import type { McpConfirmationView } from "../ipc/types";
 
 export function TaskIndicator(props?: { compact?: boolean }): JSX.Element {
   const activeCount = createMemo(() => {
-    const downloadsCount = downloadsStore.batches().size;
-    const loaders = modloadersStore.installs().size;
+    const downloadsCount = Object.keys(downloadsStore.batches).length;
+    const loaders = Object.keys(modloadersStore.installs).length;
     const games = launchStore.running().size;
     return downloadsCount + loaders + games;
   });
@@ -77,12 +78,20 @@ export function TaskIndicator(props?: { compact?: boolean }): JSX.Element {
 
 export function TaskCenterPanel(): JSX.Element {
   const open = () => uiStore.taskCenterOpen();
-  const batches = () => [...downloadsStore.batches().values()];
-  const loaders = () => [...modloadersStore.installs().values()];
+  const batches = createMemo(() => Object.values(downloadsStore.batches) as DownloadBatch[]);
+  const loaders = createMemo(() => Object.values(modloadersStore.installs) as LoaderInstall[]);
   const games = () => [...launchStore.running().values()];
   const hasContent = createMemo(
     () => open() && (batches().length + loaders().length + games().length + mcpStore.confirmations().length > 0)
   );
+
+  // Loader details fold state lives at panel level: the modloaders store emits
+  // a fresh object per progress event, so <For> recreates LoaderRow and a
+  // row-local signal would collapse the fold on every progress tick.
+  const [loaderDetailsOpen, setLoaderDetailsOpen] = createSignal<Record<string, boolean>>({});
+  const loaderKey = (install: LoaderInstall) => `${install.profileId}|${install.loaderType}`;
+  const toggleLoaderDetails = (install: LoaderInstall) =>
+    setLoaderDetailsOpen((map) => ({ ...map, [loaderKey(install)]: !map[loaderKey(install)] }));
 
   return (
     <Show when={open()}>
@@ -108,7 +117,15 @@ export function TaskCenterPanel(): JSX.Element {
 
             <Show when={loaders().length > 0}>
               <div class="task-section-title">{t("tasks.sectionLoaders")}</div>
-              <For each={loaders()}>{(install) => <LoaderRow install={install} />}</For>
+              <For each={loaders()}>
+                {(install) => (
+                  <LoaderRow
+                    install={install}
+                    detailsOpen={!!loaderDetailsOpen()[loaderKey(install)]}
+                    onToggleDetails={() => toggleLoaderDetails(install)}
+                  />
+                )}
+              </For>
             </Show>
 
             <Show when={games().length > 0}>
@@ -128,7 +145,7 @@ export function TaskCenterPanel(): JSX.Element {
                       <RmButton size="sm" icon="terminal" onClick={() => uiStore.openLogDrawer(game.profileId)}>
                         {t("tasks.game.log")}
                       </RmButton>
-                      <RmButton size="sm" variant="danger" icon="square" onClick={() => void launchStore.kill(game.profileId)}>
+                      <RmButton size="sm" variant="danger" icon="square" onClick={() => void launchStore.stop(game.profileId)}>
                         {t("tasks.game.stop")}
                       </RmButton>
                     </div>
@@ -177,9 +194,12 @@ function profileName(profileId: string): string {
   return profilesStore.items()?.find((p) => p.id === profileId)?.name ?? profileId;
 }
 
-/** Loader 安装行：进度条 + 当前阶段 + 安装器细节日志（可折叠）。 */
-function LoaderRow(props: { install: LoaderInstall }): JSX.Element {
-  const [showDetails, setShowDetails] = createSignal(false);
+/** Loader 安装行：进度条 + 当前阶段 + 安装器细节日志（可折叠，状态存面板层）。 */
+function LoaderRow(props: {
+  install: LoaderInstall;
+  detailsOpen: boolean;
+  onToggleDetails: () => void;
+}): JSX.Element {
   const percent = () => Math.min(100, Math.max(0, props.install.percent));
   const indeterminate = () => props.install.percent <= 0;
 
@@ -195,12 +215,12 @@ function LoaderRow(props: { install: LoaderInstall }): JSX.Element {
       <Show when={props.install.details.length > 0}>
         <button
           class="task-row-detail-toggle"
-          onClick={() => setShowDetails(!showDetails())}
+          onClick={() => props.onToggleDetails()}
         >
-          <Icon name={showDetails() ? "chevron-down" : "chevron-right"} size={12} />
+          <Icon name={props.detailsOpen ? "chevron-down" : "chevron-right"} size={12} />
           {t("tasks.loader.details", { count: String(props.install.details.length) })}
         </button>
-        <Show when={showDetails()}>
+        <Show when={props.detailsOpen}>
           <div class="task-row-detail-log">
             <For each={props.install.details}>
               {(line) => <div class="task-row-detail-line">{line}</div>}
@@ -276,14 +296,13 @@ function DownloadRow(props: { batch: { batchId: string; label: string; version: 
 /** Destructive-tool confirmation card (ui-design 07 §3.3). */
 function ConfirmationCard(props: { confirmation: McpConfirmationView }): JSX.Element {
   const [countdown, setCountdown] = createSignal(120);
-  createMemo(() => {
+  onMount(() => {
     const created = Date.parse(props.confirmation.createdAt);
     const tick = setInterval(() => {
       const elapsed = Math.floor((Date.now() - created) / 1000);
       setCountdown(Math.max(0, 120 - elapsed));
     }, 1000);
-    setTimeout(() => clearInterval(tick), 125_000);
-    return created;
+    onCleanup(() => clearInterval(tick));
   });
 
   const impact = createMemo(() => describeConfirmation(props.confirmation));

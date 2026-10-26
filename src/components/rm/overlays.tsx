@@ -5,7 +5,7 @@
  * `confirmDanger()` without prop drilling (ui-design 10 §5).
  */
 import type { JSX } from "solid-js";
-import { Show, For, onMount, onCleanup, createSignal } from "solid-js";
+import { Show, For, onMount, onCleanup, createSignal, createEffect } from "solid-js";
 import { Icon, type IconName } from "../icons";
 import { RmButton, RmInput } from "./controls";
 import { t } from "../../i18n";
@@ -49,7 +49,7 @@ export function RmDialog(props: {
         >
           <header class="rm-dialog-head">
             <h3>{props.title}</h3>
-            <button class="rm-icon-btn" aria-label="close" onClick={() => props.onClose()}>
+            <button class="rm-icon-btn" aria-label={t("common.close")} onClick={() => props.onClose()}>
               <Icon name="x" size={16} />
             </button>
           </header>
@@ -125,6 +125,12 @@ export function RmConfirmHost(): JSX.Element {
 export function RmPromptHost(): JSX.Element {
   const [value, setValue] = createSignal("");
   const request = () => uiStore.promptRequest();
+  // Prefill the input with `initial` for each new request (P1-5): rename
+  // flows edit the current value instead of retyping it from scratch.
+  createEffect(() => {
+    const req = request();
+    if (req) setValue(req.initial ?? "");
+  });
   const settle = (result: string | null) => {
     uiStore.resolvePrompt(result);
     setValue("");

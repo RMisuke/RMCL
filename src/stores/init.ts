@@ -57,7 +57,8 @@ export function initStores(): void {
 
   // ── Cross-domain reactions ──
   void listen<{ profile_id: string; exit_code: number }>(EVENTS.LAUNCH_EXITED, (event) => {
-    if (event.payload.exit_code !== 0) {
+    // User-initiated stops (P1-7) are not crashes — don't pop the log drawer.
+    if (event.payload.exit_code !== 0 && !launchStore.consumeUserKill(event.payload.profile_id)) {
       // Abnormal exit: open the log drawer with the crash highlighted (10 §4).
       uiStore.openLogDrawer(event.payload.profile_id);
     }

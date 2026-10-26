@@ -108,26 +108,6 @@ export function RmInput(props: InputProps): JSX.Element {
   );
 }
 
-interface TextareaProps {
-  value: string;
-  onInput: (value: string) => void;
-  rows?: number;
-  placeholder?: string;
-  mono?: boolean;
-}
-
-export function RmTextarea(props: TextareaProps): JSX.Element {
-  return (
-    <textarea
-      class={`rm-textarea${props.mono ? " rm-input-mono" : ""}`}
-      rows={props.rows ?? 3}
-      value={props.value}
-      placeholder={props.placeholder}
-      onInput={(e) => props.onInput(e.currentTarget.value)}
-    />
-  );
-}
-
 interface SelectProps {
   value: string;
   onChange: (value: string) => void;
@@ -207,7 +187,7 @@ export function RmSwitch(props: {
   );
 }
 
-// ── Tags / badges / progress ──
+// ── Tags / progress ──
 
 type TagTone = "neutral" | "accent" | "success" | "warning" | "danger";
 
@@ -219,19 +199,6 @@ export function RmTag(props: {
   return (
     <span class={`rm-tag rm-tag-${props.tone ?? "neutral"}`} title={props.title}>
       {props.children}
-    </span>
-  );
-}
-
-export function RmBadge(props: {
-  count?: number;
-  tone?: "accent" | "danger";
-}): JSX.Element {
-  return (
-    <span class={`rm-badge rm-badge-${props.tone ?? "accent"}`}>
-      <Show when={props.count} fallback={<span class="rm-badge-dot" />}>
-        {props.count}
-      </Show>
     </span>
   );
 }

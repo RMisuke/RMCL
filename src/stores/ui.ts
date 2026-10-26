@@ -1,12 +1,11 @@
 /**
- * UI store: toasts, confirm host, overlay open state, rail collapse.
+ * UI store: toasts, confirm host, overlay open state.
  *
  * The single place for cross-page overlay state (ui-design 10): pages never
  * own dialog open flags for global surfaces (task center, log drawer).
  */
 import { createRoot, createSignal } from "solid-js";
 import type { ConfirmRequest } from "../components/rm/overlays";
-import { readPref, writePref } from "../lib/prefs";
 
 export interface ToastItem {
   id: number;
@@ -33,11 +32,10 @@ export const uiStore = createRoot(() => {
   const [promptRequest, setPromptRequest] = createSignal<PromptRequest | null>(null);
   const [taskCenterOpen, setTaskCenterOpen] = createSignal(false);
   const [logDrawer, setLogDrawer] = createSignal<{ profileId: string | null } | null>(null);
-  const [railCollapsed, setRailCollapsed] = createSignal(readPref("rail.collapsed", false));
 
   let nextId = 1;
 
-  /** Show a toast; one action per message, auto-dismiss 4s. */
+  /** Show a toast; one action per message, auto-dismiss 5s. */
   function toast(input: ToastInput): void {
     const spec: ToastItem =
       typeof input === "string"
@@ -91,13 +89,6 @@ export const uiStore = createRoot(() => {
     pending.resolve(value);
   }
 
-  function toggleRail(): void {
-    setRailCollapsed((v) => {
-      writePref("rail.collapsed", !v);
-      return !v;
-    });
-  }
-
   function openLogDrawer(profileId: string | null = null): void {
     setLogDrawer({ profileId });
   }
@@ -122,8 +113,6 @@ export const uiStore = createRoot(() => {
     logDrawer,
     openLogDrawer,
     closeLogDrawer,
-    railCollapsed,
-    toggleRail,
   };
 });
 

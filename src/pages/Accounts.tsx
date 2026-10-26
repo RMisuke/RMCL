@@ -115,7 +115,11 @@ export default function Accounts(): JSX.Element {
                   <div class="account-card-name">{current().username}</div>
                   <RmTag tone="accent">{current().provider}</RmTag>
                 </div>
-                <RmIconButton icon="refresh" label={t("accounts.refresh")} onClick={() => void refreshLogin()} />
+                {/* Token refresh only applies to Microsoft accounts (P2-22):
+                    offline sessions have nothing to refresh. */}
+                <Show when={current().provider === "microsoft"}>
+                  <RmIconButton icon="refresh" label={t("accounts.refresh")} onClick={() => void refreshLogin()} />
+                </Show>
               </div>
             </RmCard>
           )}
@@ -199,11 +203,11 @@ export default function Accounts(): JSX.Element {
         >
           {(code) => (
             <div class="device-code">
-              <div class="muted-line">1. {t("accounts.ms.step1")}</div>
+              <div class="muted-line">{t("accounts.ms.step1")}</div>
               <RmButton icon="external" onClick={() => void external.openUrl(code().verificationUri)}>
                 {t("accounts.ms.openLink")}
               </RmButton>
-              <div class="muted-line">2. {t("accounts.ms.step2")}</div>
+              <div class="muted-line">{t("accounts.ms.step2")}</div>
               <div class="device-code-value">
                 {code().userCode}
                 <RmIconButton

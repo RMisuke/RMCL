@@ -42,11 +42,13 @@ export function VirtualList<T>(props: {
   });
 
   const onScroll = (e: Event) => {
-    const top = (e.currentTarget as HTMLElement).scrollTop;
+    const target = e.currentTarget as HTMLElement;
     if (!raf) {
       raf = requestAnimationFrame(() => {
         raf = 0;
-        setScrollTop(top);
+        // Read the live position inside the frame: positions of scroll events
+        // that arrived while a frame was pending must not be dropped (N-13).
+        setScrollTop(target.scrollTop);
       });
     }
   };
@@ -77,6 +79,28 @@ export function VirtualList<T>(props: {
       class={`vlist${props.height === "fill" ? " vlist-fill" : ""}${props.class ? ` ${props.class}` : ""}`}
       style={{ height: props.height === "fill" ? undefined : (props.height ?? `${fallbackH()}px`) }}
       onScroll={onScroll}
+      role="listbox"
+      aria-rowcount={props.items.length}
+      tabindex={0}
+      onKeyDown={(e) => {
+        // Keyboard reachability (N-6): rows outside the window are not in the
+        // DOM, so the container itself owns arrow/page scrolling; scrolling
+        // materializes the rows, and Tab then reaches them.
+        if (!el) return;
+        if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+          e.preventDefault();
+          el.scrollTop += (e.key === "ArrowDown" ? 1 : -1) * props.itemHeight;
+        } else if (e.key === "PageDown" || e.key === "PageUp") {
+          e.preventDefault();
+          el.scrollTop += (e.key === "PageDown" ? 1 : -1) * el.clientHeight;
+        } else if (e.key === "Home") {
+          e.preventDefault();
+          el.scrollTop = 0;
+        } else if (e.key === "End") {
+          e.preventDefault();
+          el.scrollTop = el.scrollHeight;
+        }
+      }}
     >
       <div
         class="vlist-spacer"

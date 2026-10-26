@@ -1,8 +1,10 @@
 /**
  * 删除实例对话框（唯一的删除入口组件）。
  *
- * 语义：删除 = 删除**全部游戏资源**（版本目录 + 实例配置，独立游戏目录一并
- * 删除）——不存在"只删记录"的轻量删除。
+ * 语义：删除 = 删除版本目录（versions/{id}，含版本 JSON / JAR / Natives）
+ * 与实例配置；独立游戏目录（mods / 存档等）默认一并删除，可通过开关保留。
+ * 后端对目录清理有双守卫：共享游戏根与不像游戏目录的路径一律拒删
+ * （rmccc-profile delete 的 is_shared_game_root / looks_like_game_dir）。
  *
  * 三重防误触：删除键在左/取消在右（与全局确认框布局相反，打破肌肉记忆）、
  * 强制 5 秒冷静期（倒计时内禁用）、冷却结束后需**第二次点击**才执行。
@@ -12,7 +14,7 @@ import type { JSX } from "solid-js";
 import { createSignal, createEffect, onMount, onCleanup } from "solid-js";
 import { useNavigate } from "@solidjs/router";
 import { RmDialog } from "./rm/overlays";
-import { RmButton } from "./rm/controls";
+import { RmButton, RmSwitch } from "./rm/controls";
 import { profiles, instances } from "../ipc/api";
 import type { Profile } from "../ipc/api";
 import { profilesStore } from "../stores/profiles";
@@ -28,6 +30,9 @@ export function DeleteInstanceDialog(props: {
   const [count, setCount] = createSignal(5);
   const [armed, setArmed] = createSignal(false);
   const [busy, setBusy] = createSignal(false);
+  // Also remove the isolated game dir (mods / saves); backend guards reject
+  // shared roots and non-game-looking paths either way.
+  const [deleteDir, setDeleteDir] = createSignal(true);
 
   // 每次打开重置冷静期与武装态（关闭后残留状态不得带入下一次）。
   createEffect(() => {
@@ -35,6 +40,7 @@ export function DeleteInstanceDialog(props: {
       setCount(5);
       setArmed(false);
       setBusy(false);
+      setDeleteDir(true);
     }
   });
 
@@ -46,6 +52,16 @@ export function DeleteInstanceDialog(props: {
 
   const execute = async () => {
     setBusy(true);
+    // Order matters: remove the profile record first. If the later version-dir
+    // step fails we keep a clean, retryable state instead of a deleted
+    // directory with a dangling profile entry.
+    const res = await profiles.delete(props.profile.id, deleteDir());
+    if (!res.ok) {
+      toast({ message: res.error.message, tone: "error" });
+      setBusy(false);
+      return;
+    }
+    profilesStore.removeItem(props.profile.id);
     // 共享版本保护：版本目录仍被其他实例引用时保留文件（ADR-002 决策 3 同思路）。
     const shared = (profilesStore.items() ?? []).some(
       (p) => p.id !== props.profile.id && p.game_version === props.profile.game_version
@@ -53,21 +69,18 @@ export function DeleteInstanceDialog(props: {
     if (!shared) {
       const removed = await instances.remove(props.profile.game_version);
       if (!removed.ok) {
-        toast({ message: removed.error.message, tone: "error" });
-        setBusy(false);
+        toast({
+          message: t("instanceDetail.deleteAll.versionDirFailed", { message: removed.error.message }),
+          tone: "error",
+        });
+        props.onClose();
+        navigate("/instances");
         return;
       }
     }
-    const res = await profiles.delete(props.profile.id);
-    if (res.ok) {
-      profilesStore.removeItem(props.profile.id);
-      toast({ message: t("instances.deleted"), tone: "success" });
-      props.onClose();
-      navigate("/instances");
-    } else {
-      toast({ message: res.error.message, tone: "error" });
-      setBusy(false);
-    }
+    toast({ message: t("instances.deleted"), tone: "success" });
+    props.onClose();
+    navigate("/instances");
   };
 
   const label = () =>
@@ -106,6 +119,10 @@ export function DeleteInstanceDialog(props: {
       }
     >
       <div class="rm-confirm-body">{t("instanceDetail.deleteAll.body", { name: props.profile.name })}</div>
+      <div class="path-row">
+        <span class="path-row-value">{t("instanceDetail.deleteAll.deleteDir")}</span>
+        <RmSwitch checked={deleteDir()} onChange={setDeleteDir} label={t("instanceDetail.deleteAll.deleteDir")} />
+      </div>
       <div class="rm-confirm-body muted-line">{t("instanceDetail.deleteAll.shared")}</div>
     </RmDialog>
   );

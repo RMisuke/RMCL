@@ -1155,7 +1155,7 @@ export const auth = {
 export const profiles = {
   list: () => invoke<Profile[]>("profile_list"),
   create: (opts: CreateProfileOpts) => invoke<Profile>("profile_create", { opts }),
-  delete: (id: string) => invoke<void>("profile_delete", { id }),
+  delete: (id: string, cleanupGameDir: boolean) => invoke<void>("profile_delete", { id, cleanupGameDir }),
   update: (id: string, opts: UpdateProfileOpts) => invoke<void>("profile_update", { id, opts }),
   import: (filePath: string) => invoke<Profile>("profile_import", { filePath }),
   export: (id: string, destPath: string) => invoke<void>("profile_export", { id, destPath }),
@@ -1231,7 +1231,7 @@ pub mod events {
 
     // Launch
     pub const LAUNCH_STARTED: &str = "launch://started";
-    pub const LAUNCH_OUTPUT: &str = "launch://output";    // stdout/stderr stream
+    pub const LAUNCH_OUTPUT: &str = "launch://output";    // coalesced stdout/stderr lines (batched)
     pub const LAUNCH_EXITED: &str = "launch://exited";
 
     // Mod Loader
@@ -1382,7 +1382,7 @@ User clicks "Launch" on a profile
 
 ## 11. IPC Command Table
 
-93 commands, all defined in `src-tauri/src/commands/` and registered via
+97 commands, all defined in `src-tauri/src/commands/` and registered via
 `IPC_COMMANDS` + `generate_handler!` in `src-tauri/src/handlers.rs`
 （数量由 `ipc_tests.rs` 的计数断言守护；ADR-013 迁移后 agent_* 9 条已由
 ai_* 5 条 + mods 纯逻辑 2 条取代，S4/S5 再加 mcp_* 9 条）。
@@ -1436,7 +1436,7 @@ ai_* 5 条 + mods 纯逻辑 2 条取代，S4/S5 再加 mcp_* 9 条）。
 | `profile_list` | `profile.rs` | List all profiles |
 | `profile_create` | `profile.rs` | Create new profile |
 | `profile_update` | `profile.rs` | Update profile settings |
-| `profile_delete` | `profile.rs` | Delete profile + cleanup game dir |
+| `profile_delete` | `profile.rs` | Delete profile; `cleanup_game_dir` optionally removes the isolated game dir (guarded against shared roots) |
 | `settings_get` | `settings.rs` | Get global settings |
 | `settings_set` | `settings.rs` | Update global settings (debounced `FileSaver` write) |
 | `settings_get_user` | `settings.rs` | Get user-level settings (UI language, update check) |
@@ -1468,9 +1468,6 @@ ai_* 5 条 + mods 纯逻辑 2 条取代，S4/S5 再加 mcp_* 9 条）。
 | `plugin_ui_invoke` | `plugin_ui.rs` | Isolated UI container bridge invoke (ADR-006) |
 | `plugin_logic_invoke` | `plugin_logic.rs` | Read-only logic call behind `logic.invoke` (ADR-007) |
 | `plugin_logic_cancel` | `plugin_logic.rs` | Cancel a running logic call |
-| `dashboard_get_layout` | `dashboard.rs` | Load persisted dashboard layout |
-| `dashboard_save_layout` | `dashboard.rs` | Save dashboard layout (normalized, ADR-005) |
-| `dashboard_reset_layout` | `dashboard.rs` | Reset layout to defaults |
 | `dashboard_list_widgets` | `dashboard.rs` | List available widgets (incl. plugin contributions) |
 | `dashboard_list_themes` | `dashboard.rs` | List themes (builtin + plugin) |
 | `dashboard_get_theme_tokens` | `dashboard.rs` | Resolve active theme tokens |

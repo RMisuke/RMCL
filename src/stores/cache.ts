@@ -11,6 +11,12 @@ import type { IconCacheStats } from "../ipc/types";
 export const cacheStore = createRoot(() => {
   const [enabled, setEnabled] = createSignal(true);
   const [stats, setStats] = createSignal<IconCacheStats | null>(null);
+  /** Undashed uuid → rev; bumped when a fresh skin URL is learned so avatar
+   *  texture caches re-resolve instead of serving the old skin forever (P2-9). */
+  const [avatarRev, setAvatarRev] = createSignal<Record<string, number>>({});
+  function bumpAvatarRev(undashed: string): void {
+    setAvatarRev((m) => ({ ...m, [undashed]: (m[undashed] ?? 0) + 1 }));
+  }
 
   async function refreshStats(): Promise<void> {
     const res = await cache.stats();
@@ -50,9 +56,11 @@ export const cacheStore = createRoot(() => {
     if (!url) return;
     const last = inFlight.get(url) ?? 0;
     if (Date.now() - last < 60_000) return;
-    inFlight.set(url, Date.now());
+    const now = Date.now();
+    inFlight.set(url, now);
     void cache.iconFetch(url, kind).then(() => {
-      if (inFlight.get(url) === last) inFlight.delete(url);
+      // Compare against the value we set, not the stale `last` (P2-5).
+      if (inFlight.get(url) === now) inFlight.delete(url);
     });
   }
 
@@ -61,7 +69,7 @@ export const cacheStore = createRoot(() => {
    * 记入 localStorage 供下次启动首帧直读，然后条件刷新缓存文件。
    */
   async function warmAvatar(uuid: string): Promise<void> {
-    const undashed = uuid.replace(/-/g, "");
+    const undashed = uuid.replace(/-/g, "").toLowerCase();
     const res = await auth.skinUrl(uuid);
     const skin = res.ok ? res.data?.skin ?? null : null;
     if (!skin) return;
@@ -74,11 +82,13 @@ export const cacheStore = createRoot(() => {
     // 披风一并刷新（3D 预览与缓存共用）。
     const cape = res.ok ? res.data?.cape ?? null : null;
     if (cape) refreshIcon(cape, "avatar");
+    bumpAvatarRev(undashed);
   }
 
   return {
     enabled,
     stats,
+    avatarRev,
     refreshStats,
     setConfig,
     clearAll,

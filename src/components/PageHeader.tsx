@@ -4,7 +4,6 @@
  */
 import type { JSX } from "solid-js";
 import { Show, For } from "solid-js";
-import { Icon } from "./icons";
 
 export interface Crumb {
   label: string;
@@ -39,15 +38,5 @@ export function PageHeader(props: {
       </div>
       <div class="page-header-actions">{props.actions}</div>
     </header>
-  );
-}
-
-/** Nav back button used inside breadcrumbs (‹ 实例 / sodium). */
-export function BackLink(props: { label: string; href: string }): JSX.Element {
-  return (
-    <a class="page-crumb-link page-crumb-back" href={props.href}>
-      <Icon name="chevron-left" size={14} />
-      {props.label}
-    </a>
   );
 }

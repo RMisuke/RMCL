@@ -270,65 +270,7 @@ html[data-motion="on"] .rm-dialog {
 }
 .page-body.narrow { max-width: 720px; }
 
-/* ── Rail ──────────────────────────────────────────────────── */
-
-.rail {
-  width: 200px;
-  flex-shrink: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  padding: var(--rmccc-space-2);
-  border-right: 1px solid var(--rmccc-border);
-  background: var(--rmccc-surface);
-  transition: width 150ms ease;
-}
-.rail.is-collapsed { width: 64px; }
-.rail-item {
-  position: relative;
-  display: flex;
-  align-items: center;
-  gap: var(--rmccc-space-3);
-  height: 40px;
-  padding: 0 var(--rmccc-space-3);
-  border-radius: var(--rmccc-radius-control);
-  color: var(--rmccc-text-muted);
-  white-space: nowrap;
-  width: 100%;
-}
-.rail-item:hover { background: var(--rmccc-hover); color: var(--rmccc-text); }
-.rail-item.is-active {
-  background: var(--rmccc-accent-soft);
-  color: var(--rmccc-accent);
-  font-weight: 600;
-}
-.rail.is-collapsed .rail-item-label { display: none; }
-.rail.is-collapsed .rail-item { justify-content: center; padding: 0; }
-.rail-item-label { font-size: 13px; }
-.rail-badge {
-  margin-left: auto;
-  min-width: 18px;
-  height: 18px;
-  padding: 0 5px;
-  border-radius: 9px;
-  background: var(--rmccc-accent);
-  color: var(--rmccc-accent-contrast);
-  font-size: 11px;
-  font-weight: 600;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-}
-.rail.is-collapsed .rail-badge {
-  position: absolute;
-  top: 2px;
-  right: 2px;
-  margin: 0;
-  min-width: 14px;
-  height: 14px;
-  font-size: 10px;
-}
-.rail-footer { margin-top: auto; display: flex; flex-direction: column; gap: 2px; }
+/* ── Task indicator（沿用 rail- 前缀；Rail 导航本体已由标题栏 Dock 取代）── */
 
 .rail-task-indicator {
   display: flex;
@@ -341,7 +283,6 @@ html[data-motion="on"] .rm-dialog {
   width: 100%;
 }
 .rail-task-indicator:hover { background: var(--rmccc-hover); color: var(--rmccc-text); }
-.rail.is-collapsed .rail-task-label { display: none; }
 .rail-task-ring { position: relative; display: inline-flex; }
 .rail-task-alert {
   position: absolute;
@@ -518,9 +459,6 @@ html[data-motion="on"] .rm-dialog {
 .rm-tag-success { color: var(--rmccc-success); border-color: var(--rmccc-success); }
 .rm-tag-warning { color: var(--rmccc-warning); border-color: var(--rmccc-warning); }
 .rm-tag-danger { color: var(--rmccc-danger); border-color: var(--rmccc-danger); }
-
-.rm-badge { display: inline-flex; }
-.rm-badge-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--rmccc-danger); }
 
 .rm-progress {
   height: 6px;
@@ -870,91 +808,9 @@ html[data-motion="on"] .toast {
 .toast-action { color: var(--rmccc-accent); font-weight: 600; }
 .toast-close { color: var(--rmccc-text-muted); display: inline-flex; }
 
-/* ── Dashboard ─────────────────────────────────────────────── */
-
-.dashboard-grid {
-  display: grid;
-  grid-template-columns: repeat(var(--grid-cols, 12), 1fr);
-  gap: var(--rmccc-space-4);
-  grid-auto-rows: minmax(64px, auto);
-  grid-auto-flow: dense;
-}
-.dash-widget {
-  min-height: 0;
-  min-width: 0;
-  position: relative;
-  display: flex;
-  flex-direction: column;
-}
-/* 统一卡片外壳：清晰边界 + 圆角 + 阴影 */
-.dash-card {
-  flex: 1;
-  min-height: 0;
-  display: flex;
-  flex-direction: column;
-  background: var(--rmccc-surface);
-  border: 1px solid var(--rmccc-border);
-  border-radius: var(--rmccc-radius-card);
-  box-shadow: var(--rmccc-shadow-card);
-  overflow: hidden;
-}
-.dash-card-content { flex: 1; min-height: 0; display: flex; flex-direction: column; padding: var(--rmccc-space-4); overflow: auto; }
-.dash-card-plugin { padding: 0; }
-.dash-plugin-frame { flex: 1; min-height: 0; display: flex; }
-.dash-plugin-frame > * { flex: 1; min-height: 0; }
-.dash-edit-bar {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: var(--rmccc-space-2);
-  padding: 4px var(--rmccc-space-2) 4px var(--rmccc-space-3);
-  background: var(--rmccc-accent-soft);
-  border-bottom: 1px dashed var(--rmccc-accent);
-  font-size: 12px;
-  color: var(--rmccc-accent);
-  flex-shrink: 0;
-}
-.dash-edit-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.dash-widget.is-editing .dash-card { border-style: dashed; }
-.dash-widget-error { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: var(--rmccc-space-2); }
-.dash-unknown-widget { display: flex; align-items: center; justify-content: center; color: var(--rmccc-text-muted); border: 1px dashed var(--rmccc-border); border-radius: var(--rmccc-radius-card); }
-
-.quick-launch {
-  display: flex;
-  flex-direction: column;
-  background: var(--rmccc-surface);
-  border: 1px solid var(--rmccc-border);
-  border-radius: var(--rmccc-radius-card);
-  box-shadow: var(--rmccc-shadow-card);
-  padding: var(--rmccc-space-4);
-  gap: var(--rmccc-space-3);
-  overflow: auto;
-}
-.quick-launch-body { display: flex; flex-direction: column; gap: var(--rmccc-space-3); flex: 1; min-height: 0; }
-.quick-launch-main { display: flex; gap: var(--rmccc-space-3); align-items: center; }
-.quick-launch-hint { color: var(--rmccc-text-muted); font-size: 13px; }
-.quick-launch-meta { color: var(--rmccc-text-muted); font-size: 13px; }
-.quick-launch-recent { display: flex; flex-direction: column; border-top: 1px solid var(--rmccc-border); overflow-y: auto; }
-.quick-launch-recent-row {
-  display: flex;
-  justify-content: space-between;
-  padding: var(--rmccc-space-2) var(--rmccc-space-1);
-  border-radius: var(--rmccc-radius-control);
-  font-size: 13px;
-}
-.quick-launch-recent-row:hover { background: var(--rmccc-hover); }
-.quick-launch-recent-time { color: var(--rmccc-text-muted); }
 
 .account-card { display: flex; height: 100%; }
 .account-card-body { display: flex; align-items: flex-start; gap: var(--rmccc-space-3); width: 100%; }
-.account-avatar-img {
-  width: 40px;
-  height: 40px;
-  border-radius: var(--rmccc-radius-control);
-  background: var(--rmccc-surface-sunken);
-  flex-shrink: 0;
-  image-rendering: pixelated;
-}
 /* 皮肤脸部裁剪：64×64 皮肤图，脸部在 (8,8)-(16,16)；800% 缩放 + 14.2857% 偏移 */
 .account-avatar-face {
   width: 48px;
@@ -1169,9 +1025,9 @@ html[data-motion="on"] .toast {
 
 /* 虚拟滚动列表：行高固定（与 itemHeight 对齐），窗口平移定位 */
 .vlist { overflow-y: auto; overscroll-behavior: contain; }
+.vlist:focus-visible { outline: 2px solid var(--rmccc-accent); outline-offset: -2px; }
 .vlist-spacer { position: relative; }
 .vlist-window { position: absolute; top: 0; left: 0; right: 0; will-change: transform; }
-.vlist .rm-row { height: 44px; min-height: 44px; }
 /* fill 模式：由父级 flex 决定高度（ResizeObserver 实测滚动窗口） */
 .vlist-fill { flex: 1; min-height: 240px; max-height: none; }
 /* loader 版本选择区：填满剩余高度 */
@@ -1602,16 +1458,6 @@ html[data-motion="on"] .toast {
 .perm-group-title { font-size: 12px; font-weight: 600; color: var(--rmccc-text-muted); padding: var(--rmccc-space-2) 0; }
 .token-display { flex: 1; overflow: hidden; text-overflow: ellipsis; display: inline-flex; align-items: center; height: 32px; padding: 0 10px; background: var(--rmccc-surface-sunken); border: 1px solid var(--rmccc-border); border-radius: var(--rmccc-radius-control); font-size: 12.5px; }
 .plugin-settings-frame iframe { width: 100%; height: 400px; border: 1px solid var(--rmccc-border); border-radius: var(--rmccc-radius-control); background: #fff; }
-
-/* ── Responsive grid breakpoints (dashboard) ───────────────── */
-@media (max-width: 1280px) {
-  .dashboard-grid { --grid-cols: 8; }
-}
-@media (max-width: 768px) {
-  .dashboard-grid { --grid-cols: 4; }
-  .rail { width: 64px; }
-  .rail .rail-item-label { display: none; }
-}
 
 /* ── Hero home（ui/home-hero-dock 试验分支，仅主页）──────────
    全部颜色走主题令牌 + color-mix，深浅主题自动适配。 */
@@ -2583,3 +2429,8 @@ html[data-motion="off"] .hero-glow { display: none; }
 .skin-note { text-align: center; font-size: 11px; padding-top: var(--rmccc-space-2); }
 .about-credits { margin-top: var(--rmccc-space-3); padding-top: var(--rmccc-space-3); border-top: 1px solid var(--rmccc-border); }
 .about-credits a { color: var(--rmccc-accent); }
+
+/* ── Home 回捞件（B3-1）── */
+.hero-plugin-error { display: flex; flex-direction: column; align-items: stretch; gap: var(--rmccc-space-2); padding: var(--rmccc-space-3); }
+.hero-launch-guide { flex: 1; display: flex; flex-direction: column; gap: var(--rmccc-space-2); justify-content: center; }
+.hero-paste-row { display: flex; padding: 2px 0 4px; }

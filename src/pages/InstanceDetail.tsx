@@ -4,8 +4,8 @@
  * field-level inherit locks, dependency scan + one-click apply (pure logic).
  */
 import type { JSX } from "solid-js";
-import { Show, For, createMemo, createSignal, createEffect, onMount, onCleanup, Switch, Match } from "solid-js";
-import { useParams, useNavigate, useLocation } from "@solidjs/router";
+import { Show, For, createMemo, createSignal, createEffect, onMount, onCleanup, Switch, Match, on } from "solid-js";
+import { useParams, useNavigate } from "@solidjs/router";
 import { PageHeader } from "../components/PageHeader";
 import { DeleteInstanceDialog } from "../components/DeleteInstanceDialog";
 import { Icon } from "../components/icons";
@@ -44,6 +44,7 @@ import { relativeTime, elidePath } from "../lib/format";
 import { LOADER_CARDS } from "../lib/loaders";
 import { loaderIcon } from "../lib/mcIcons";
 import * as versionCache from "../stores/versionCache";
+import { useHashTab } from "../lib/useHashTab";
 
 const TABS: { id: string; icon: "list" | "package" | "layers" | "sliders" | "wrench"; label: TranslationKey }[] = [
   { id: "overview", icon: "list", label: "instanceDetail.tab.overview" },
@@ -56,18 +57,34 @@ const TABS: { id: string; icon: "list" | "package" | "layers" | "sliders" | "wre
 export default function InstanceDetail(): JSX.Element {
   const params = useParams();
   const navigate = useNavigate();
-  const location = useLocation();
-  const [tab, setTab] = createSignal(location.hash.replace("#", "") || "overview");
+  const [tab, setTab] = useHashTab("overview", TABS.map((x) => x.id));
 
   const profileId = () => params.id ?? "";
   const profile = createMemo(
     () => profilesStore.items()?.find((p) => p.id === profileId()) ?? null
   );
 
-  createEffect(() => {
-    // Keep the hash in sync so refresh/back returns to the same tab.
-    history.replaceState(null, "", `#${tab()}`);
-  });
+  // Unsaved-settings guard (P1-13): SettingsTab reports dirty upward so a tab
+  // switch confirms before the Switch unmounts the draft.
+  const [settingsDirty, setSettingsDirty] = createSignal(false);
+  const changeTab = (next: string) => {
+    if (next === tab() || !settingsDirty()) {
+      setTab(next);
+      return;
+    }
+    void uiStore
+      .confirm({
+        title: t("instanceDetail.settings.unsaved.title"),
+        body: t("instanceDetail.settings.unsaved.body"),
+        confirmLabel: t("instanceDetail.settings.unsaved.discard"),
+        danger: true,
+      })
+      .then((allowed) => {
+        if (!allowed) return;
+        setSettingsDirty(false);
+        setTab(next);
+      });
+  };
 
   async function launch(): Promise<void> {
     const res = await launchStore.start(profileId(), profile()?.name);
@@ -89,7 +106,7 @@ export default function InstanceDetail(): JSX.Element {
                 </RmButton>
               }
             >
-              <RmButton size="sm" variant="danger" icon="square" onClick={() => void launchStore.kill(profileId())}>
+              <RmButton size="sm" variant="danger" icon="square" onClick={() => void launchStore.stop(profileId())}>
                 {t("common.stop")}
               </RmButton>
               <RmButton size="sm" icon="terminal" onClick={() => uiStore.openLogDrawer(params.id)}>
@@ -115,10 +132,10 @@ export default function InstanceDetail(): JSX.Element {
               <RmSideTabs
                 items={TABS.map((tab_) => ({ ...tab_, label: t(tab_.label) }))}
                 active={tab()}
-                onSelect={setTab}
+                onSelect={changeTab}
                 footer={
                   <div class="instance-toolbar">
-                    <RmButton size="sm" icon={launchStore.isRunning(p().id) ? "square" : "play"} variant={launchStore.isRunning(p().id) ? "danger" : "primary"} onClick={() => (launchStore.isRunning(p().id) ? void launchStore.kill(p().id) : void launch())}>
+                    <RmButton size="sm" icon={launchStore.isRunning(p().id) ? "square" : "play"} variant={launchStore.isRunning(p().id) ? "danger" : "primary"} onClick={() => (launchStore.isRunning(p().id) ? void launchStore.stop(p().id) : void launch())}>
                       {launchStore.isRunning(p().id) ? t("common.stop") : t("common.launch")}
                     </RmButton>
                     <BrowseMenu profile={p()} />
@@ -128,10 +145,10 @@ export default function InstanceDetail(): JSX.Element {
               />
               <div class="side-tab-content">
                 <Switch>
-                  <Match when={tab() === "overview"}><OverviewTab profile={p()} /></Match>
+                  <Match when={tab() === "overview"}><OverviewTab profile={p()} onGoTab={changeTab} /></Match>
                   <Match when={tab() === "mods"}><ModsTab profile={p()} /></Match>
                   <Match when={tab() === "loaders"}><LoadersTab profile={p()} /></Match>
-                  <Match when={tab() === "settings"}><SettingsTab profile={p()} /></Match>
+                  <Match when={tab() === "settings"}><SettingsTab profile={p()} onDirtyChange={setSettingsDirty} /></Match>
                   <Match when={tab() === "maintenance"}><MaintenanceTab profile={p()} /></Match>
                 </Switch>
               </div>
@@ -147,11 +164,19 @@ export default function InstanceDetail(): JSX.Element {
 
 function BrowseMenu(props: { profile: Profile }): JSX.Element {
   const [paths, setPaths] = createSignal<InstancePaths | null>(null);
-  createEffect(() => {
-    void instances.paths(props.profile.id).then((res) => {
-      if (res.ok) setPaths(res.data);
-    });
-  });
+  // Key on the profile id, not the object: the store refreshes produce new
+  // objects even when nothing changed (perf audit 2.5).
+  createEffect(
+    on(
+      () => props.profile.id,
+      (id) => {
+        void instances.paths(id).then((res) => {
+          if (res.ok) setPaths(res.data);
+          else toast({ message: res.error.message, tone: "error" });
+        });
+      }
+    )
+  );
   const copy = (value: string) => {
     void navigator.clipboard.writeText(value);
     toast({ message: t("common.copied"), tone: "success" });
@@ -180,7 +205,7 @@ function ManageMenu(props: { profile: Profile }): JSX.Element {
         side="up"
         items={[
           { label: t("instances.menu.rename"), icon: "edit", onSelect: () => void renameProfile(props.profile) },
-          { label: t("instances.menu.browseMods"), icon: "package", onSelect: () => navigate(`/download#mods?instance=${props.profile.id}`) },
+          { label: t("instances.menu.browseMods"), icon: "package", onSelect: () => navigate(`/download?instance=${props.profile.id}#mods`) },
           { label: t("instanceDetail.manage.delete"), icon: "trash", danger: true, onSelect: () => setDeleteOpen(true) },
         ]}
       >
@@ -211,15 +236,27 @@ async function renameProfile(profile: Profile): Promise<void> {
 
 // ── Tab 1 · Overview ──
 
-function OverviewTab(props: { profile: Profile }): JSX.Element {
+function OverviewTab(props: { profile: Profile; onGoTab: (tab: string) => void }): JSX.Element {
   const navigate = useNavigate();
   const [paths, setPaths] = createSignal<InstancePaths | null>(null);
   const [resolved, setResolved] = createSignal<ResolvedInstanceSettings | null>(null);
 
-  createEffect(() => {
-    void instances.paths(props.profile.id).then((r) => r.ok && setPaths(r.data));
-    void instances.resolvedSettings(props.profile.id).then((r) => r.ok && setResolved(r.data));
-  });
+  // Key on the profile id, not the object (perf audit 2.5).
+  createEffect(
+    on(
+      () => props.profile.id,
+      (id) => {
+        void instances.paths(id).then((r) => {
+          if (r.ok) setPaths(r.data);
+          else toast({ message: r.error.message, tone: "error" });
+        });
+        void instances.resolvedSettings(id).then((r) => {
+          if (r.ok) setResolved(r.data);
+          else toast({ message: r.error.message, tone: "error" });
+        });
+      }
+    )
+  );
 
   const copy = (value: string) => {
     void navigator.clipboard.writeText(value);
@@ -267,24 +304,19 @@ function OverviewTab(props: { profile: Profile }): JSX.Element {
 
       <RmCard title={t("instanceDetail.overview.quickActions")}>
         <div class="btn-row">
-          <RmButton icon="package" onClick={() => navigate(`/download#mods?instance=${props.profile.id}`)}>
+          <RmButton icon="package" onClick={() => navigate(`/download?instance=${props.profile.id}#mods`)}>
             {t("instanceDetail.overview.goMods")}
           </RmButton>
-          <RmButton icon="shield" onClick={() => setTab("mods")}>
+          <RmButton icon="shield" onClick={() => props.onGoTab("mods")}>
             {t("instanceDetail.mods.missingScan")}
           </RmButton>
-          <RmButton icon="sliders" onClick={() => setTab("settings")}>
+          <RmButton icon="sliders" onClick={() => props.onGoTab("settings")}>
             {t("instanceDetail.tab.settings")}
           </RmButton>
         </div>
       </RmCard>
     </div>
   );
-}
-
-function setTab(id: string): void {
-  history.replaceState(null, "", `#${id}`);
-  window.dispatchEvent(new HashChangeEvent("hashchange"));
 }
 
 // ── Tab 2 · Mods management ──
@@ -317,6 +349,10 @@ function ModsTab(props: { profile: Profile }): JSX.Element {
 
   const filteredEnabled = createMemo(() =>
     enabled().filter((f) => f.toLowerCase().includes(search().toLowerCase()))
+  );
+  // The search filter applies to disabled mods too (P2-20).
+  const filteredDisabled = createMemo(() =>
+    disabled().filter((f) => f.toLowerCase().includes(search().toLowerCase()))
   );
 
   async function toggle(file: string, nextEnabled: boolean): Promise<void> {
@@ -401,7 +437,7 @@ function ModsTab(props: { profile: Profile }): JSX.Element {
       <div class="toolbar">
         <RmButton size="sm" icon="refresh" onClick={() => void refreshMods()}>{t("common.refresh")}</RmButton>
         <RmButton size="sm" icon="plus" onClick={() => void addLocal()}>{t("instanceDetail.mods.addLocal")}</RmButton>
-        <RmButton size="sm" icon="package" onClick={() => navigate(`/download#mods?instance=${props.profile.id}`)}>
+        <RmButton size="sm" icon="package" onClick={() => navigate(`/download?instance=${props.profile.id}#mods`)}>
           {t("instanceDetail.mods.goStore")}
         </RmButton>
         <RmButton size="sm" icon="shield" onClick={() => void runScan()}>{t("instanceDetail.mods.missingScan")}</RmButton>
@@ -439,7 +475,7 @@ function ModsTab(props: { profile: Profile }): JSX.Element {
         </For>
         <Show when={disabled().length > 0}>
           <div class="rm-list-divider">{t("instanceDetail.mods.disabledSection")}</div>
-          <For each={disabled()}>
+          <For each={filteredDisabled()}>
             {(file) => (
               <RmListRow
                 icon={<Icon name="package" size={18} />}
@@ -499,10 +535,31 @@ function ModsTab(props: { profile: Profile }): JSX.Element {
                   )}
                 </For>
               </div>
-              <div class="scan-section">
-                {t("instanceDetail.mods.scan.conflicts", { n: data().report.conflicts.length })} ·{" "}
-                {t("instanceDetail.mods.scan.unparsed", { n: data().report.unparsed.length })}
-              </div>
+              <Show when={data().report.conflicts.length > 0}>
+                <div class="scan-section">
+                  <div class="scan-section-title">{t("instanceDetail.mods.scan.conflicts", { n: data().report.conflicts.length })}</div>
+                  <For each={data().report.conflicts}>
+                    {(conflict) => (
+                      <div class="scan-row">
+                        <span class="scan-mod">{conflict.mod_id}</span>
+                        <span class="scan-required-by">{t("instanceDetail.mods.scan.requiredBy", { by: conflict.declared_by })}</span>
+                      </div>
+                    )}
+                  </For>
+                </div>
+              </Show>
+              <Show when={data().report.unparsed.length > 0}>
+                <div class="scan-section">
+                  <div class="scan-section-title">{t("instanceDetail.mods.scan.unparsed", { n: data().report.unparsed.length })}</div>
+                  <For each={data().report.unparsed}>
+                    {(item) => (
+                      <div class="scan-row">
+                        <span class="scan-mod">{String(item)}</span>
+                      </div>
+                    )}
+                  </For>
+                </div>
+              </Show>
             </div>
           )}
         </Show>
@@ -553,8 +610,14 @@ function LoadersTab(props: { profile: Profile }): JSX.Element {
     setLoadingVersions(false);
     if (res.length > 0) {
       setVersions_(res);
-      const firstStable = res.find((v) => v.stable) ?? res[0];
-      setSelectedVersion(firstStable?.version ?? "");
+      // Keep the user's current pick when it still exists (N-10, mirrors the
+      // wizard's applyLoaderVersions); fall back to the newest stable.
+      const current = selectedVersion();
+      setSelectedVersion(
+        current && res.some((v) => v.version === current)
+          ? current
+          : (res.find((v) => v.stable) ?? res[0])?.version ?? ""
+      );
     } else if (!cached) {
       toast({ message: t("instanceDetail.loader.loadFailed"), tone: "error" });
     }
@@ -729,13 +792,23 @@ function InstanceIconCard(props: { profile: Profile }): JSX.Element {
   );
 }
 
-function SettingsTab(props: { profile: Profile }): JSX.Element {
+function SettingsTab(props: { profile: Profile; onDirtyChange: (dirty: boolean) => void }): JSX.Element {
   const [resolved, setResolved] = createSignal<ResolvedInstanceSettings | null>(null);
   const [javas, setJavas] = createSignal<JavaInfo[]>([]);
   const [draftOverrides, setDraftOverrides] = createSignal<Set<string>>(
     new Set(props.profile.override_properties)
   );
   const [dirty, setDirty] = createSignal(false);
+  // env_vars is a plain (non-inherited) profile field (P2-15): KEY=VALUE lines.
+  const initialEnvText = Object.entries(props.profile.env_vars ?? {})
+    .map(([k, v]) => `${k}=${v}`)
+    .join("\n");
+  let envInitial = initialEnvText;
+  const [envText, setEnvText] = createSignal(initialEnvText);
+  // Report dirty upward so the parent guards tab switches before this
+  // component unmounts and the draft is lost (P1-13).
+  createEffect(() => props.onDirtyChange(dirty()));
+  onCleanup(() => props.onDirtyChange(false));
 
   // Local draft of the overridable values (initialized from the profile; the
   // displayed value for inherited fields comes from `resolved`).
@@ -763,8 +836,14 @@ function SettingsTab(props: { profile: Profile }): JSX.Element {
   });
 
   onMount(() => {
-    void instances.resolvedSettings(props.profile.id).then((r) => r.ok && setResolved(r.data));
-    void settingsApi.detectJava().then((r) => r.ok && setJavas(r.data));
+    void instances.resolvedSettings(props.profile.id).then((r) => {
+      if (r.ok) setResolved(r.data);
+      else toast({ message: r.error.message, tone: "error" });
+    });
+    void settingsApi.detectJava().then((r) => {
+      if (r.ok) setJavas(r.data);
+      else toast({ message: r.error.message, tone: "error" });
+    });
   });
 
   const overridden = (field: string): boolean => draftOverrides().has(field);
@@ -772,6 +851,24 @@ function SettingsTab(props: { profile: Profile }): JSX.Element {
     if (overridden(field)) return values()[field];
     return (resolved() as unknown as Record<string, unknown>)?.[field];
   };
+
+  // Resolution is one logical field: the lock covers width+height as a pair
+  // (P1-4) — a half-locked state must never silently drop the height edit.
+  const resolutionOn = () => overridden("width") || overridden("height");
+  function toggleResolutionLock(): void {
+    setDraftOverrides((set) => {
+      const next = new Set(set);
+      if (next.has("width") || next.has("height")) {
+        next.delete("width");
+        next.delete("height");
+      } else {
+        next.add("width");
+        next.add("height");
+      }
+      return next;
+    });
+    setDirty(true);
+  }
 
   function toggleLock(field: string): void {
     setDraftOverrides((set) => {
@@ -798,7 +895,15 @@ function SettingsTab(props: { profile: Profile }): JSX.Element {
     const opts: ProfileUpdateOpts = {
       override_properties: [...draftOverrides()],
     };
-    for (const field of draftOverrides()) {
+    const overrides = new Set(draftOverrides());
+    // Resolution lock is a pair: keep width/height overrides in lockstep so
+    // the save loop below always writes both fields.
+    if (overrides.has("width") || overrides.has("height")) {
+      overrides.add("width");
+      overrides.add("height");
+    }
+    opts.override_properties = [...overrides];
+    for (const field of overrides) {
       switch (field) {
         case "java_path": opts.java_path = String(v.java_path) || null; break;
         case "memory_mb": opts.memory_mb = Number(v.memory_mb); break;
@@ -825,6 +930,21 @@ function SettingsTab(props: { profile: Profile }): JSX.Element {
     const res = await profiles.update(props.profile.id, opts);
     if (res.ok) {
       profilesStore.upsert(res.data);
+      // env_vars is a plain field: follow the textarea, but only when it
+      // actually changed (no second IPC on untouched saves).
+      if (envText() !== envInitial) {
+        const env: Record<string, string> = {};
+        for (const line of envText().split("\n")) {
+          const idx = line.indexOf("=");
+          if (idx <= 0) continue;
+          env[line.slice(0, idx).trim()] = line.slice(idx + 1).trim();
+        }
+        const envRes = await profiles.update(props.profile.id, { env_vars: env });
+        if (envRes.ok) {
+          profilesStore.upsert(envRes.data);
+          envInitial = envText();
+        }
+      }
       setDirty(false);
       toast({ message: t("common.saved"), tone: "success" });
       void instances.resolvedSettings(props.profile.id).then((r) => r.ok && setResolved(r.data));
@@ -883,15 +1003,43 @@ function SettingsTab(props: { profile: Profile }): JSX.Element {
             />
           </div>
         </RmFieldRow>
+        <RmFieldRow label={t("instanceDetail.settings.minMemory")} hint={subtitle("min_memory_mb")}>
+          <div class="btn-row">
+            {lock("min_memory_mb")}
+            <input
+              class="rm-input"
+              type="number"
+              min={128}
+              step={128}
+              disabled={!overridden("min_memory_mb")}
+              value={Number(overridden("min_memory_mb") ? values().min_memory_mb : effective("min_memory_mb") ?? 0)}
+              onInput={(e) => setValue("min_memory_mb", Number(e.currentTarget.value))}
+            />
+          </div>
+        </RmFieldRow>
+        <RmFieldRow label={t("instanceDetail.settings.metaspace")} hint={subtitle("metaspace_mb")}>
+          <div class="btn-row">
+            {lock("metaspace_mb")}
+            <input
+              class="rm-input"
+              type="number"
+              min={0}
+              step={64}
+              disabled={!overridden("metaspace_mb")}
+              value={Number(overridden("metaspace_mb") ? values().metaspace_mb : effective("metaspace_mb") ?? 0)}
+              onInput={(e) => setValue("metaspace_mb", Number(e.currentTarget.value))}
+            />
+          </div>
+        </RmFieldRow>
       </RmCard>
 
       <RmCard title={t("instanceDetail.settings.window")}>
         <RmFieldRow label={t("instanceDetail.settings.resolution")} hint={subtitle("width")}>
           <div class="btn-row">
-            {lock("width")}
-            <input class="rm-input" type="number" style={{ width: "100px" }} disabled={!overridden("width")} value={Number(overridden("width") ? values().width : effective("width"))} onInput={(e) => setValue("width", Number(e.currentTarget.value))} />
+            <RmInheritLock overridden={resolutionOn()} onToggle={() => toggleResolutionLock()} />
+            <input class="rm-input" type="number" style={{ width: "100px" }} disabled={!resolutionOn()} value={Number(overridden("width") ? values().width : effective("width"))} onInput={(e) => setValue("width", Number(e.currentTarget.value))} />
             ×
-            <input class="rm-input" type="number" style={{ width: "100px" }} disabled={!overridden("width")} value={Number(overridden("width") ? values().height : effective("height"))} onInput={(e) => setValue("height", Number(e.currentTarget.value))} />
+            <input class="rm-input" type="number" style={{ width: "100px" }} disabled={!resolutionOn()} value={Number(overridden("height") ? values().height : effective("height"))} onInput={(e) => setValue("height", Number(e.currentTarget.value))} />
           </div>
         </RmFieldRow>
         <RmFieldRow label={t("instanceDetail.settings.fullscreen")} hint={subtitle("fullscreen")}>
@@ -908,11 +1056,11 @@ function SettingsTab(props: { profile: Profile }): JSX.Element {
               disabled={!overridden("process_priority")}
               onChange={(v) => setValue("process_priority", v)}
               options={[
-                { value: "low", label: "low" },
-                { value: "below_normal", label: "below_normal" },
-                { value: "normal", label: "normal" },
-                { value: "above_normal", label: "above_normal" },
-                { value: "high", label: "high" },
+                { value: "low", label: t("instanceDetail.settings.priority.low") },
+                { value: "below_normal", label: t("instanceDetail.settings.priority.below_normal") },
+                { value: "normal", label: t("instanceDetail.settings.priority.normal") },
+                { value: "above_normal", label: t("instanceDetail.settings.priority.above_normal") },
+                { value: "high", label: t("instanceDetail.settings.priority.high") },
               ]}
             />
           </div>
@@ -931,6 +1079,28 @@ function SettingsTab(props: { profile: Profile }): JSX.Element {
         <RmFieldRow label={t("instanceDetail.settings.wrapper")} hint={subtitle("wrapper")}>
           <div class="btn-row">{lock("wrapper")}</div>
           <input class="rm-input rm-input-mono" disabled={!overridden("wrapper")} value={String(overridden("wrapper") ? values().wrapper : effective("wrapper") ?? "")} onInput={(e) => setValue("wrapper", e.currentTarget.value)} />
+        </RmFieldRow>
+        <RmFieldRow label={t("instanceDetail.settings.preCommand")} hint={subtitle("pre_launch_command")}>
+          <div class="btn-row">{lock("pre_launch_command")}</div>
+          <input class="rm-input rm-input-mono" disabled={!overridden("pre_launch_command")} value={String(overridden("pre_launch_command") ? values().pre_launch_command : effective("pre_launch_command") ?? "")} onInput={(e) => setValue("pre_launch_command", e.currentTarget.value)} />
+        </RmFieldRow>
+        <RmFieldRow label={t("instanceDetail.settings.postCommand")} hint={subtitle("post_exit_command")}>
+          <div class="btn-row">{lock("post_exit_command")}</div>
+          <input class="rm-input rm-input-mono" disabled={!overridden("post_exit_command")} value={String(overridden("post_exit_command") ? values().post_exit_command : effective("post_exit_command") ?? "")} onInput={(e) => setValue("post_exit_command", e.currentTarget.value)} />
+        </RmFieldRow>
+        <RmFieldRow
+          label={t("instanceDetail.settings.envVars")}
+          hint={<span class="muted-line">{t("instanceDetail.settings.envVarsHint")}</span>}
+        >
+          <textarea
+            class="rm-textarea rm-input-mono"
+            rows={2}
+            value={envText()}
+            onInput={(e) => {
+              setEnvText(e.currentTarget.value);
+              setDirty(true);
+            }}
+          />
         </RmFieldRow>
       </RmAdvancedSection>
 
@@ -970,9 +1140,15 @@ function MaintenanceTab(props: { profile: Profile }): JSX.Element {
   const [paths, setPaths] = createSignal<InstancePaths | null>(null);
   const [deleteOpen, setDeleteOpen] = createSignal(false);
 
-  createEffect(() => {
-    void instances.paths(props.profile.id).then((r) => r.ok && setPaths(r.data));
-  });
+  // Key on the profile id, not the object (perf audit 2.5).
+  createEffect(
+    on(
+      () => props.profile.id,
+      (id) => {
+        void instances.paths(id).then((r) => r.ok && setPaths(r.data));
+      }
+    )
+  );
 
   async function check(): Promise<void> {
     setChecking(true);
