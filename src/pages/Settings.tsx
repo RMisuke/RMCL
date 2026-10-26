@@ -5,24 +5,25 @@
  */
 import type { JSX } from "solid-js";
 import { Show, For, createMemo, createSignal, createEffect, onMount, Switch, Match } from "solid-js";
-import { useLocation, useNavigate } from "@solidjs/router";
+import { useNavigate } from "@solidjs/router";
 import { PageHeader } from "../components/PageHeader";
 import { RmButton, RmIconButton, RmInput, RmSelect, RmSwitch, RmTag } from "../components/rm/controls";
 import { RmDialog, RmMenu } from "../components/rm/overlays";
-import { RmCard, RmSideTabs, RmListRow, RmAdvancedSection, RmFieldRow, RmEmptyState } from "../components/rm/surfaces";
+import { RmCard, RmSideTabs, RmListRow, RmAdvancedSection, RmFieldRow, RmEmptyState, RmErrorState } from "../components/rm/surfaces";
 import { settings as settingsApi, userSettings, instances, logs, external, mcp as mcpApi, ai as aiApi, plugins as pluginsApi, dashboard } from "../ipc/api";
-import type { AppInfoView, JavaInfo, InstanceInfo, LocaleInfo, McpToolView } from "../ipc/types";
+import type { AppInfoView, JavaInfo, InstanceInfo, LocaleInfo, McpToolView, ThemeTokens } from "../ipc/types";
 import { settingsStore } from "../stores/settings";
 import { aiStore } from "../stores/ai";
 import { mcpStore } from "../stores/mcp";
 import { pluginsStore } from "../stores/plugins";
 import { uiStore, toast, confirmDanger, promptText } from "../stores/ui";
-import { listThemes } from "../theme";
+import { listThemes, visualPaletteFor } from "../theme";
 import { cacheStore } from "../stores/cache";
 import { formatBytes } from "../lib/format";
 import { t } from "../i18n";
 import type { TranslationKey } from "../i18n/locales/messages";
 import { elidePath } from "../lib/format";
+import { useHashTab } from "../lib/useHashTab";
 
 const SECTIONS: { id: string; icon: "list" | "settings" | "download" | "bot" | "extension" | "wrench" | "info" | "sparkles"; label: TranslationKey }[] = [
   { id: "game-defaults", icon: "list", label: "settings.nav.gameDefaults" },
@@ -36,12 +37,7 @@ const SECTIONS: { id: string; icon: "list" | "settings" | "download" | "bot" | "
 ];
 
 export default function Settings(): JSX.Element {
-  const location = useLocation();
-  const [section, setSection] = createSignal(location.hash.replace("#", "") || "game-defaults");
-
-  createEffect(() => {
-    history.replaceState(null, "", `#${section()}`);
-  });
+  const [section, setSection] = useHashTab("game-defaults", SECTIONS.map((s) => s.id));
 
   onMount(() => {
     void settingsStore.refresh();
@@ -78,30 +74,78 @@ export default function Settings(): JSX.Element {
 function GameDefaults(): JSX.Element {
   const config = () => settingsStore.config();
   const [rootDir, setRootDir] = createSignal("");
+  const [rootDirty, setRootDirty] = createSignal(false);
   const [javas, setJavas] = createSignal<JavaInfo[]>([]);
   const [autoMemory, setAutoMemory] = createSignal(false);
 
+  // Explicit-save drafts (P1-12): edit locally, one IPC per Save click. The
+  // `touched` flags stop the config backfill below from clobbering in-progress
+  // edits when another section's save returns a fresh config (P1-1).
+  const [minMem, setMinMem] = createSignal(1024);
+  const [maxMem, setMaxMem] = createSignal(4096);
+  const [winW, setWinW] = createSignal(854);
+  const [winH, setWinH] = createSignal(480);
+  const [jvmText, setJvmText] = createSignal("");
+  const [gameText, setGameText] = createSignal("");
+  const touched = { memory: false, window: false, jvm: false, game: false };
+
   createEffect(() => {
-    if (config()) {
-      setRootDir(config()!.game_root_dir ?? "");
-      setAutoMemory(config()!.auto_memory);
+    const c = config();
+    if (!c) return;
+    if (!rootDirty()) setRootDir(c.game_root_dir ?? "");
+    setAutoMemory(c.auto_memory);
+    if (!touched.memory) {
+      setMinMem(c.default_min_memory_mb ?? 1024);
+      setMaxMem(c.default_max_memory_mb ?? 4096);
     }
+    if (!touched.window) {
+      setWinW(c.default_window_width ?? 854);
+      setWinH(c.default_window_height ?? 480);
+    }
+    if (!touched.jvm) setJvmText((c.default_jvm_args ?? []).join("\n"));
+    if (!touched.game) setGameText((c.default_game_args ?? []).join("\n"));
   });
 
   onMount(() => void settingsApi.detectJava().then((r) => r.ok && setJavas(r.data)));
 
-  async function patch(update: Parameters<typeof settingsStore.update>[0]): Promise<void> {
+  async function patch(update: Parameters<typeof settingsStore.update>[0]): Promise<boolean> {
     const res = await settingsStore.update(update);
     if (!res.ok) toast({ message: res.message ?? "", tone: "error" });
+    return res.ok;
   }
 
   return (
     <div class="tab-stack">
+      <Show
+        when={config()}
+        fallback={
+          <Show
+            when={settingsStore.loadError()}
+            fallback={<div class="muted-line">{t("common.loading")}</div>}
+          >
+            <RmErrorState message={settingsStore.loadError()!} />
+          </Show>
+        }
+      >
       <div class="info-note">{t("settings.game.intro")}</div>
       <RmCard title={t("settings.game.rootDir")}>
         <div class="btn-row">
-          <RmInput value={rootDir()} onInput={setRootDir} placeholder={t("settings.game.rootDirPlaceholder")} />
-          <RmButton size="sm" variant="primary" onClick={() => void patch({ game_root_dir: rootDir().trim() || null })}>
+          <RmInput
+            value={rootDir()}
+            onInput={(v) => {
+              setRootDir(v);
+              setRootDirty(v !== (config()?.game_root_dir ?? ""));
+            }}
+            placeholder={t("settings.game.rootDirPlaceholder")}
+          />
+          <RmButton
+            size="sm"
+            variant="primary"
+            disabled={!rootDirty()}
+            onClick={() =>
+              void patch({ game_root_dir: rootDir().trim() || null }).then((ok) => ok && setRootDirty(false))
+            }
+          >
             {t("common.save")}
           </RmButton>
         </div>
@@ -155,18 +199,34 @@ function GameDefaults(): JSX.Element {
                 class="rm-input"
                 type="number"
                 style={{ width: "110px" }}
-                value={config()?.default_min_memory_mb ?? 1024}
-                onInput={(e) => void patch({ default_min_memory_mb: Number(e.currentTarget.value) })}
+                value={minMem()}
+                onInput={(e) => {
+                  touched.memory = true;
+                  setMinMem(Number(e.currentTarget.value));
+                }}
               />
               <span>–</span>
               <input
                 class="rm-input"
                 type="number"
                 style={{ width: "110px" }}
-                value={config()?.default_max_memory_mb ?? 4096}
-                onInput={(e) => void patch({ default_max_memory_mb: Number(e.currentTarget.value) })}
+                value={maxMem()}
+                onInput={(e) => {
+                  touched.memory = true;
+                  setMaxMem(Number(e.currentTarget.value));
+                }}
               />
               <span>MiB</span>
+              <RmButton
+                size="sm"
+                variant="primary"
+                onClick={() =>
+                  void patch({ default_min_memory_mb: minMem(), default_max_memory_mb: maxMem() })
+                    .then((ok) => ok && (touched.memory = false))
+                }
+              >
+                {t("common.save")}
+              </RmButton>
             </div>
           </RmFieldRow>
         </Show>
@@ -174,9 +234,37 @@ function GameDefaults(): JSX.Element {
 
       <RmCard title={t("settings.game.window")}>
         <div class="btn-row">
-          <input class="rm-input" type="number" style={{ width: "100px" }} value={config()?.default_window_width ?? 854} onInput={(e) => void patch({ default_window_width: Number(e.currentTarget.value) })} />
+          <input
+            class="rm-input"
+            type="number"
+            style={{ width: "100px" }}
+            value={winW()}
+            onInput={(e) => {
+              touched.window = true;
+              setWinW(Number(e.currentTarget.value));
+            }}
+          />
           ×
-          <input class="rm-input" type="number" style={{ width: "100px" }} value={config()?.default_window_height ?? 480} onInput={(e) => void patch({ default_window_height: Number(e.currentTarget.value) })} />
+          <input
+            class="rm-input"
+            type="number"
+            style={{ width: "100px" }}
+            value={winH()}
+            onInput={(e) => {
+              touched.window = true;
+              setWinH(Number(e.currentTarget.value));
+            }}
+          />
+          <RmButton
+            size="sm"
+            variant="primary"
+            onClick={() =>
+              void patch({ default_window_width: winW(), default_window_height: winH() })
+                .then((ok) => ok && (touched.window = false))
+            }
+          >
+            {t("common.save")}
+          </RmButton>
           <RmSwitch checked={config()?.default_fullscreen ?? false} onChange={(v) => void patch({ default_fullscreen: v })} />
           <span>{t("instanceDetail.settings.fullscreen")}</span>
         </div>
@@ -187,19 +275,50 @@ function GameDefaults(): JSX.Element {
           <textarea
             class="rm-textarea rm-input-mono"
             rows={3}
-            value={(config()?.default_jvm_args ?? []).join("\n")}
-            onInput={(e) => void patch({ default_jvm_args: e.currentTarget.value.split("\n").map((l) => l.trim()).filter(Boolean) })}
+            value={jvmText()}
+            onInput={(e) => {
+              touched.jvm = true;
+              setJvmText(e.currentTarget.value);
+            }}
           />
+          <div class="btn-row">
+            <RmButton
+              size="sm"
+              variant="primary"
+              onClick={() =>
+                void patch({ default_jvm_args: jvmText().split("\n").map((l) => l.trim()).filter(Boolean) })
+                  .then((ok) => ok && (touched.jvm = false))
+              }
+            >
+              {t("common.save")}
+            </RmButton>
+          </div>
         </RmFieldRow>
         <RmFieldRow label={t("settings.game.gameArgs")}>
           <textarea
             class="rm-textarea rm-input-mono"
             rows={2}
-            value={(config()?.default_game_args ?? []).join("\n")}
-            onInput={(e) => void patch({ default_game_args: e.currentTarget.value.split("\n").map((l) => l.trim()).filter(Boolean) })}
+            value={gameText()}
+            onInput={(e) => {
+              touched.game = true;
+              setGameText(e.currentTarget.value);
+            }}
           />
+          <div class="btn-row">
+            <RmButton
+              size="sm"
+              variant="primary"
+              onClick={() =>
+                void patch({ default_game_args: gameText().split("\n").map((l) => l.trim()).filter(Boolean) })
+                  .then((ok) => ok && (touched.game = false))
+              }
+            >
+              {t("common.save")}
+            </RmButton>
+          </div>
         </RmFieldRow>
       </RmAdvancedSection>
+      </Show>
     </div>
   );
 }
@@ -307,12 +426,12 @@ function General(): JSX.Element {
       </RmCard>
 
       <RmCard title={t("settings.general.updates")}>
+        {/* "Check now" stays hidden until the updater endpoint is real
+            (P2-17, release-blocked): a permanently-disabled button is worse
+            than no button. */}
         <div class="btn-row">
           <RmSwitch checked={settingsStore.user()?.check_updates ?? false} onChange={(v) => void settingsStore.updateUser({ check_updates: v, locale: null, theme: null })} />
           <span>{t("settings.general.updates.autoCheck")}</span>
-          <RmButton size="sm" disabled title={t("settings.general.updates.soon")}>
-            {t("settings.general.updates.checkNow")}
-          </RmButton>
         </div>
       </RmCard>
     </div>
@@ -379,9 +498,9 @@ function Appearance(): JSX.Element {
   );
 }
 
-/** 4-color palette strip from `dashboard_get_theme_tokens` (ui-design 01 §3). */
+/** Miniature three-color scene preview; decorative palette is host-derived. */
 function ThemeSwatch(props: { key_: string }): JSX.Element {
-  const [tokens, setTokens] = createSignal<{ background: string; surface: string; accent: string; text: string } | null>(null);
+  const [tokens, setTokens] = createSignal<ThemeTokens | null>(null);
   createEffect(() => {
     void import("../ipc/api").then(({ dashboard }) =>
       dashboard.getThemeTokens(props.key_).then((res) => {
@@ -389,17 +508,31 @@ function ThemeSwatch(props: { key_: string }): JSX.Element {
       })
     );
   });
+  const palette = () => {
+    const value = tokens();
+    return value ? visualPaletteFor(props.key_, value) : null;
+  };
   return (
     <div class="theme-swatch">
-      <Show when={tokens()}>
-        {(tk) => (
-          <>
-            <span style={{ background: tk().background }} />
-            <span style={{ background: tk().surface }} />
-            <span style={{ background: tk().accent }} />
-            <span style={{ background: tk().text }} />
-          </>
-        )}
+      <Show when={tokens() && palette()}>
+        <div
+          class="theme-swatch-scene"
+          style={{
+            background: tokens()!.background,
+            "border-color": tokens()!.border,
+          }}
+        >
+          <i class="theme-swatch-orb is-a" style={{ background: palette()!.primary }} />
+          <i class="theme-swatch-orb is-b" style={{ background: palette()!.secondary }} />
+          <i class="theme-swatch-orb is-c" style={{ background: palette()!.tertiary }} />
+          <i class="theme-swatch-cube" style={{ background: palette()!.primary }} />
+          <span class="theme-swatch-panel" style={{ background: tokens()!.surfaceElevated }} />
+        </div>
+        <div class="theme-swatch-colors">
+          <span style={{ background: palette()!.primary }} />
+          <span style={{ background: palette()!.secondary }} />
+          <span style={{ background: palette()!.tertiary }} />
+        </div>
       </Show>
     </div>
   );
@@ -409,6 +542,12 @@ function ThemeSwatch(props: { key_: string }): JSX.Element {
 
 function DownloadSection(): JSX.Element {
   const config = () => settingsStore.config();
+  const [conc, setConc] = createSignal(16);
+  let concTouched = false;
+  createEffect(() => {
+    const c = config();
+    if (c && !concTouched) setConc(c.download_concurrency ?? 16);
+  });
   return (
     <div class="tab-stack">
       <RmCard title={t("settings.download.mirror")}>
@@ -450,10 +589,25 @@ function DownloadSection(): JSX.Element {
             min={1}
             max={64}
             style={{ width: "110px" }}
-            value={config()?.download_concurrency ?? 16}
-            onInput={(e) => void settingsStore.update({ download_concurrency: Number(e.currentTarget.value) })}
+            value={conc()}
+            onInput={(e) => {
+              concTouched = true;
+              setConc(Number(e.currentTarget.value));
+            }}
           />
           <span class="muted-line">{t("settings.download.concurrencyHint")}</span>
+          <RmButton
+            size="sm"
+            variant="primary"
+            onClick={() =>
+              void settingsStore.update({ download_concurrency: conc() }).then((res) => {
+                if (!res.ok) toast({ message: res.message ?? "", tone: "error" });
+                else concTouched = false;
+              })
+            }
+          >
+            {t("common.save")}
+          </RmButton>
         </div>
       </RmCard>
     </div>
@@ -549,7 +703,7 @@ function AiSection(): JSX.Element {
     const list = aiStore.models().map((m) => ({ value: m, label: m }));
     const current = model().trim();
     if (current && !list.some((o) => o.value === current)) {
-      return [{ value: current, label: `${current} (saved)` }, ...list];
+      return [{ value: current, label: t("settings.ai.modelSaved", { model: current }) }, ...list];
     }
     return list;
   });
@@ -739,6 +893,14 @@ function McpSection(): JSX.Element {
                         size="sm"
                         variant="ghost"
                         onClick={async () => {
+                          // P2-16: dropping an external session deserves a confirm.
+                          const allowed = await uiStore.confirm({
+                            title: t("settings.mcp.disconnectConfirm.title"),
+                            body: t("settings.mcp.disconnectConfirm.body", { client: session.client }),
+                            confirmLabel: t("settings.mcp.disconnect"),
+                            danger: true,
+                          });
+                          if (!allowed) return;
                           await mcpApi.disconnect(session.sessionId);
                           await mcpStore.refreshStatus();
                         }}
@@ -767,6 +929,25 @@ function McpSection(): JSX.Element {
                         <RmSelect
                           value={tool.overridePolicy ?? "default"}
                           onChange={async (v) => {
+                            // P2-16: switching an external Agent tool to
+                            // allow/deny changes live permissions — confirm it.
+                            if (v === "allow" || v === "deny") {
+                              const allowed = await uiStore.confirm({
+                                title: t("settings.mcp.perms.changeTitle"),
+                                body: t("settings.mcp.perms.changeBody", {
+                                  tool: tool.name,
+                                  policy: t(`settings.mcp.perms.${v}`),
+                                }),
+                                confirmLabel: t("common.confirm"),
+                                danger: v === "deny",
+                              });
+                              if (!allowed) {
+                                // Snap the native select back to the stored value.
+                                setTools([]);
+                                setTools(mcpStore.tools());
+                                return;
+                              }
+                            }
                             await mcpApi.toolsSet(tool.name, v === "default" ? null : v);
                             await mcpStore.refreshTools().then(() => setTools(mcpStore.tools()));
                           }}
@@ -795,7 +976,7 @@ function McpSection(): JSX.Element {
                   subtitle={call.error ?? ""}
                   trailing={
                     <RmTag tone={call.outcome === "ok" ? "success" : call.outcome === "denied" ? "warning" : "danger"}>
-                      {call.outcome}
+                      {t(`settings.mcp.outcome.${call.outcome}` as TranslationKey)}
                     </RmTag>
                   }
                 />
@@ -811,6 +992,7 @@ function McpSection(): JSX.Element {
 // ── Plugins host ──
 
 function PluginsHost(): JSX.Element {
+  const navigate = useNavigate();
   onMount(() => void pluginsStore.refresh());
   const hosts = createMemo(() => (pluginsStore.list()?.plugins ?? []).filter((p) => p.settingsPages > 0));
   return (
@@ -819,7 +1001,7 @@ function PluginsHost(): JSX.Element {
         <RmEmptyState
           icon="extension"
           title={t("settings.plugins.host.empty")}
-          action={<RmButton onClick={() => (window.location.hash = "#/plugins")}>{t("settings.plugins.host.manage")}</RmButton>}
+          action={<RmButton onClick={() => navigate("/plugins")}>{t("settings.plugins.host.manage")}</RmButton>}
         />
       }>
         <For each={hosts()}>
@@ -910,7 +1092,7 @@ function Advanced(): JSX.Element {
               {(instance) => (
                 <RmListRow
                   title={instance.id}
-                  subtitle={`${instance.game_version}${instance.modded ? " · modded" : ""}`}
+                  subtitle={`${instance.game_version}${instance.modded ? ` · ${t("common.modded")}` : ""}`}
                   trailing={
                     <div class="btn-row">
                       <RmTag tone={instance.missing_count === 0 ? "success" : "warning"}>

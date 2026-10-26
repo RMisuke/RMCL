@@ -17,6 +17,7 @@ import { Router, Route, Navigate } from "@solidjs/router";
 import { lazy } from "solid-js";
 import App from "./App";
 import "./styles/app.css";
+import "./styles/visual-system.css";
 
 const Home = lazy(() => import("./pages/Home"));
 const Instances = lazy(() => import("./pages/Instances"));

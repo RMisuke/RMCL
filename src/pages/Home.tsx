@@ -9,21 +9,25 @@
  * 启动链路与主分支一致：launchStore.start → 检查/补全资源 → 启动气泡。
  */
 import type { JSX } from "solid-js";
-import { Show, For, createMemo, createSignal, createRoot, onMount, Switch, Match } from "solid-js";
+import { Show, For, createMemo, createSignal, createRoot, createEffect, onMount, Switch, Match, ErrorBoundary } from "solid-js";
 import { useNavigate } from "@solidjs/router";
 import { RmButton, RmIconButton, RmInput, RmProgress, RmTag } from "../components/rm/controls";
 import { RmDialog, RmMenu } from "../components/rm/overlays";
+import { RmEmptyState } from "../components/rm/surfaces";
 import { Icon, type IconName } from "../components/icons";
 import { AccountAvatar } from "../components/AccountAvatar";
 import { PluginFrame } from "../plugin-ui/PluginFrame";
-import { versions, dashboard, type WidgetDescriptor } from "../ipc/api";
+import { dashboard, external, downloads, type WidgetDescriptor } from "../ipc/api";
 import type { VersionInfo } from "../ipc/types";
 import { profilesStore } from "../stores/profiles";
 import { authStore } from "../stores/auth";
 import { launchStore } from "../stores/launch";
 import { downloadsStore } from "../stores/downloads";
+import type { DownloadBatch } from "../stores/downloads";
+import * as versionCache from "../stores/versionCache";
 import { uiStore, toast, confirmDanger, promptText } from "../stores/ui";
 import { settingsStore } from "../stores/settings";
+import { themeMode } from "../theme";
 import { t } from "../i18n";
 import type { TranslationKey } from "../i18n/locales/messages";
 import { relativeTime, formatBytes, groupDigits, formatDate } from "../lib/format";
@@ -81,12 +85,9 @@ function saveLayout(layout: HeroLayout): void {
 
 type ParticleSpec = {
   left: string;      // 水平起点
-  size: number;      // 主尺寸 px
   delay: number;     // 动画延迟（负值 = 开局即处于中段）
-  duration: number;  // 单轮时长 s
   sway?: string;     // 水平摆动幅度
   spin?: string;     // 旋转角
-  opacity?: number;
 };
 
 /** 伪随机粒子参数（固定种子序列，布局稳定不跳变）。 */
@@ -97,12 +98,9 @@ function specs(count: number, salt: number): ParticleSpec[] {
   };
   return Array.from({ length: count }, (_, i) => ({
     left: `${Math.round(r(i + 1) * 96)}%`,
-    size: 0,
     delay: -r(i + 31) * 24,
-    duration: 0,
     sway: `${Math.round(20 + r(i + 51) * 70)}px`,
     spin: `${Math.round(220 + r(i + 71) * 260)}deg`,
-    opacity: 0,
   }));
 }
 
@@ -115,7 +113,6 @@ function particleStyle(p: ParticleSpec, size: number, duration: [number, number]
     "animation-duration": `${(duration[0] + (p.delay % 1 + 1) % 1 * (duration[1] - duration[0])).toFixed(2)}s`,
     "--sway": p.sway,
     "--spin": p.spin,
-    opacity: p.opacity || undefined,
   };
 }
 
@@ -135,14 +132,13 @@ function ambientThemeClass(key: string): string {
   return "t-dark"; // 插件主题等未知 key 沿用暗色底光
 }
 
-/** 当前生效的内置主题 key（null/跟随系统按已应用的明暗模式解析）。 */
+/** 当前生效的内置主题 key（null/跟随系统按已应用的明暗模式解析；mode 来自
+ *  theme 模块的 signal，OS 明暗切换时氛围层随之更新——N-11）。 */
 function useAmbientKey() {
   return createMemo(() => {
     const pref = settingsStore.themePreference();
     if (pref && pref !== "system") return pref;
-    return document.documentElement.dataset.themeMode === "light"
-      ? "builtin:light"
-      : "builtin:dark";
+    return themeMode() === "light" ? "builtin:light" : "builtin:dark";
   });
 }
 
@@ -159,6 +155,8 @@ function ThemeAmbient(props: { themeKey: string }): JSX.Element {
       <Match when={key() === "builtin:paper"}><><PaperAmbient /><PaperGlow /></></Match>
       {/* 晨白（light）：无粒子，只保留令牌驱动的三团光斑 */}
       <Match when={key() === "builtin:light"}><DefaultGlow /></Match>
+      {/* 插件/未知主题回退暗色意象（N-5）——氛围层不再整层消失。 */}
+      <Match when={true}><><StarAmbient /><DefaultGlow /></></Match>
     </Switch>
   );
 }
@@ -367,6 +365,36 @@ function PaperAmbient(): JSX.Element {
   );
 }
 
+/** Decorative three-color voxel scene. Pure CSS geometry; never receives input. */
+function VoxelScene(): JSX.Element {
+  return (
+    <div class="hero-voxel-scene" aria-hidden="true">
+      <div class="hero-grid-plane" />
+      <div class="hero-orbit is-outer"><i /><i /><i /></div>
+      <div class="hero-orbit is-inner"><i /><i /></div>
+      <div class="voxel-stage">
+        <div class="voxel-cube">
+          <i class="voxel-face is-front" />
+          <i class="voxel-face is-back" />
+          <i class="voxel-face is-right" />
+          <i class="voxel-face is-left" />
+          <i class="voxel-face is-top" />
+          <i class="voxel-face is-bottom" />
+        </div>
+        <i class="voxel-satellite is-a" />
+        <i class="voxel-satellite is-b" />
+        <i class="voxel-satellite is-c" />
+        <div class="voxel-shadow" />
+      </div>
+      <div class="hero-signature">
+        <span class="hero-signature-mark">SNGL</span>
+        <span class="hero-signature-line" />
+        <span class="hero-signature-sub">CRAFT · EXPLORE · REPEAT</span>
+      </div>
+    </div>
+  );
+}
+
 export default function Home(): JSX.Element {
   const ambientKey = useAmbientKey();
   const navigate = useNavigate();
@@ -377,10 +405,21 @@ export default function Home(): JSX.Element {
   onMount(() => {
     void profilesStore.refresh();
     void authStore.refresh();
-    void dashboard.listWidgets().then((res) => res.ok && setCatalog(res.data));
+    void dashboard.listWidgets().then((res) => {
+      if (res.ok) setCatalog(res.data);
+      else toast({ message: res.error.message, tone: "error" });
+    });
   });
-  // 默认选中最近游玩的实例。
-  createMemo(() => {
+  // Copied before sort: `.sort()` on the store's array would mutate it in
+  // place (perf audit 2.4); memoized so it recomputes only on change.
+  const sortedByLastPlayed = createMemo(() =>
+    [...(profilesStore.items() ?? [])].sort((a, b) =>
+      (b.last_played ?? "").localeCompare(a.last_played ?? "")
+    )
+  );
+
+  // 默认选中最近游玩的实例。Effects, not memos, own side effects (perf audit 2.8).
+  createEffect(() => {
     if (!profilesStore.selectedId() && (profilesStore.items() ?? []).length > 0) {
       const latest = [...(profilesStore.items() ?? [])].sort((a, b) =>
         (b.last_played ?? "").localeCompare(a.last_played ?? "")
@@ -459,6 +498,20 @@ export default function Home(): JSX.Element {
     }
   }
 
+  function cardIcon(id: string): IconName {
+    if (id.startsWith(pluginPrefix)) return "extension";
+    const icons: Record<BuiltinCardId, IconName> = {
+      server: "activity",
+      compare: "refresh",
+      announcements: "info",
+      instances: "gamepad",
+      versions: "package",
+      downloads: "download",
+      games: "terminal",
+    };
+    return icons[id as BuiltinCardId] ?? "package";
+  }
+
   const addableCards = createMemo(() => {
     const current = layout();
     const builtins = HERO_DEFAULTS.order
@@ -515,6 +568,14 @@ export default function Home(): JSX.Element {
         icon: "person" as const,
         onSelect: () => void switchAccount(a.account_id),
       })),
+    // B3-1 salvage: official accounts get the skin page shortcut back.
+    ...(session()?.provider === "microsoft"
+      ? [{
+          label: t("home.account.skin"),
+          icon: "external" as const,
+          onSelect: () => void external.openUrl("https://www.minecraft.net/msaprofile/mygames/editskin"),
+        }]
+      : []),
     { label: t("accounts.manage"), icon: "settings" as const, onSelect: () => navigate("/accounts") },
     ...(session()
       ? [{ label: t("accounts.logout"), icon: "log-out" as const, danger: true, onSelect: () => void authStore.logout() }]
@@ -527,6 +588,7 @@ export default function Home(): JSX.Element {
       <div class={`hero-flow ${ambientThemeClass(ambientKey())}`} aria-hidden="true">
         <ThemeAmbient themeKey={ambientKey()} />
       </div>
+      <VoxelScene />
 
       {/* 编辑模式工具条 */}
       <div class="hero-toolbar">
@@ -563,6 +625,11 @@ export default function Home(): JSX.Element {
         <For each={layout().order}>
           {(id) => (
             <section class="hero-card hero-module" data-card={id}>
+              <div class="hero-module-heading">
+                <span class="hero-module-heading-icon"><Icon name={cardIcon(id)} size={14} /></span>
+                <span>{cardTitle(id)}</span>
+                <i />
+              </div>
               <Show when={editing()}>
                 <div class="hero-module-bar">
                   <span class="hero-module-name">{cardTitle(id)}</span>
@@ -574,7 +641,27 @@ export default function Home(): JSX.Element {
                 </div>
               </Show>
               <div class="hero-module-body">
-                <Switch fallback={<PluginCard pluginId={id.slice(pluginPrefix.length)} />}>
+                <Switch
+                  fallback={
+                    // B3-1 salvage: a crashed plugin card degrades to a
+                    // retry/hide panel instead of taking the page down.
+                    <ErrorBoundary
+                      fallback={(err, reset) => (
+                        <div class="hero-plugin-error">
+                          <RmEmptyState icon="alert" title={t("home.card.broken")} hint={String(err)} />
+                          <div class="btn-row">
+                            <RmButton size="sm" onClick={reset}>{t("common.retry")}</RmButton>
+                            <RmButton size="sm" variant="danger" onClick={() => hideCard(id)}>
+                              {t("home.card.hideBroken")}
+                            </RmButton>
+                          </div>
+                        </div>
+                      )}
+                    >
+                      <PluginCard pluginId={id.slice(pluginPrefix.length)} />
+                    </ErrorBoundary>
+                  }
+                >
                   <Match when={id === "server"}><ServerCard /></Match>
                   <Match when={id === "compare"}><CompareCard /></Match>
                   <Match when={id === "announcements"}><AnnouncementsCard /></Match>
@@ -643,12 +730,12 @@ export default function Home(): JSX.Element {
             <RmButton size="sm" icon="terminal" onClick={() => uiStore.openLogDrawer(selected()?.id ?? null)}>
               {t("home.viewLog")}
             </RmButton>
-            {/* 一键强制关闭：terminate_tree 整组终止，无二次确认 */}
+            {/* 一键强制关闭：terminate_tree 整组终止，经 stop() 统一确认 */}
             <RmButton
               size="sm"
               variant="danger"
               icon="square"
-              onClick={() => void launchStore.kill(selected()?.id ?? "")}
+              onClick={() => void launchStore.stop(selected()?.id ?? "")}
             >
               {t("home.forceStop")}
             </RmButton>
@@ -657,40 +744,59 @@ export default function Home(): JSX.Element {
 
         <div class="hero-card hero-module hero-launch">
           <div class="hero-launch-main">
-            <RmMenu
-              align="left"
-              side="up"
-              items={[
-                ...(profilesStore.items() ?? [])
-                  .sort((a, b) => (b.last_played ?? "").localeCompare(a.last_played ?? ""))
-                  .map((p) => ({
-                    label: `${p.name} · ${p.game_version}`,
-                    icon: "gamepad" as const,
-                    onSelect: () => profilesStore.setSelectedId(p.id),
-                  })),
-                { label: t("download.wizard.bindLocal"), icon: "download" as const, onSelect: () => navigate("/download#install") },
-                ...(selected()
-                  ? [{ label: t("home.instanceSettings"), icon: "sliders" as const, onSelect: () => navigate(`/instances/${selected()!.id}#settings`) }]
-                  : []),
-              ]}
+            {/* B3-1 salvage: no instances yet → guide CTA instead of a dead
+                launch button (delegates to the install wizard). */}
+            <Show
+              when={(profilesStore.items() ?? []).length > 0}
+              fallback={
+                <div class="hero-launch-guide">
+                  <RmButton size="lg" variant="primary" icon="download" onClick={() => navigate("/download#install")}>
+                    {t("home.noInstance.cta")}
+                  </RmButton>
+                  <span class="muted-line">{t("home.noInstance.hint")}</span>
+                </div>
+              }
             >
-              <button class="hero-launch-picker">
-                {/* 只显示实例名称（过长换行，最多两行）；宽度固定，见 CSS */}
-                <span class="hero-launch-picker-main">
-                  {selected()?.name ?? t("home.pickInstance")}
-                </span>
-                <Icon name="chevron-down" size={14} />
-              </button>
-            </RmMenu>
-            <RmButton
-              variant="primary"
-              icon="play"
-              size="lg"
-              loading={launchStore.isStarting(selected()?.id ?? "")}
-              onClick={() => void launchCurrent()}
-            >
-              {t("home.launch")}
-            </RmButton>
+              <RmMenu
+                align="left"
+                side="up"
+                items={[
+                  ...sortedByLastPlayed().map((p) => ({
+                      label: `${p.name} · ${p.game_version}`,
+                      icon: "gamepad" as const,
+                      onSelect: () => profilesStore.setSelectedId(p.id),
+                    })),
+                  { label: t("download.wizard.bindLocal"), icon: "download" as const, onSelect: () => navigate("/download#install") },
+                  ...(selected()
+                    ? [{ label: t("home.instanceSettings"), icon: "sliders" as const, onSelect: () => navigate(`/instances/${selected()!.id}#settings`) }]
+                    : []),
+                ]}
+              >
+                <button class="hero-launch-picker">
+                  <span class="hero-launch-picker-copy">
+                    <span class="hero-launch-picker-main">
+                      {selected()?.name ?? t("home.pickInstance")}
+                    </span>
+                    <Show when={selected()}>
+                      <span class="hero-launch-picker-sub">
+                        {selected()!.game_version}
+                        <Show when={selected()!.mod_loader}> · {selected()!.mod_loader!.loader_type}</Show>
+                      </span>
+                    </Show>
+                  </span>
+                  <Icon name="chevron-down" size={14} />
+                </button>
+              </RmMenu>
+              <RmButton
+                variant="primary"
+                icon="play"
+                size="lg"
+                loading={launchStore.isStarting(selected()?.id ?? "")}
+                onClick={() => void launchCurrent()}
+              >
+                {t("home.launch")}
+              </RmButton>
+            </Show>
           </div>
         </div>
       </div>
@@ -891,9 +997,17 @@ function InstancesCard(): JSX.Element {
 function VersionsCard(): JSX.Element {
   const navigate = useNavigate();
   const [versions_, setVersions_] = createSignal<VersionInfo[] | null>(null);
-  onMount(async () => {
-    const res = await versions.list();
-    if (res.ok) setVersions_(res.data.filter((v) => v.release_type === "release"));
+  // B3-1 salvage: paste any version id and jump into the wizard with it
+  // preselected (query on the path, hash carries the tab — P0-1 format).
+  const [pasted, setPasted] = createSignal("");
+  onMount(() => {
+    // versionCache keeps this card instant and offline-friendly (N-19).
+    setVersions_(
+      versionCache.gameVersionsWithRefresh()?.filter((v) => v.release_type === "release") ?? null
+    );
+    void versionCache.refreshGameVersions().then((list) => {
+      if (list) setVersions_(list.filter((v) => v.release_type === "release"));
+    });
   });
   const chips = createMemo(() => {
     const list = versions_() ?? [];
@@ -912,7 +1026,7 @@ function VersionsCard(): JSX.Element {
     <div class="hero-list">
       <For each={chips()}>
         {(version) => (
-          <button class="hero-row" onClick={() => navigate(`/download#install?version=${version.id}`)}>
+          <button class="hero-row" onClick={() => navigate(`/download?version=${version.id}#install`)}>
             <span class="hero-row-icon"><Icon name="package" size={16} /></span>
             <span class="hero-row-main">
               <span class="hero-row-title">{version.id}</span>
@@ -928,12 +1042,34 @@ function VersionsCard(): JSX.Element {
           <span class="hero-row-title">{t("home.allVersions")}</span>
         </span>
       </button>
+      <div class="hero-paste-row">
+        <RmInput
+          value={pasted()}
+          onInput={setPasted}
+          placeholder={t("home.pasteVersion")}
+          onEnter={() => pasted().trim() && navigate(`/download?version=${pasted().trim()}#install`)}
+        />
+      </div>
     </div>
   );
 }
 
 function DownloadsCard(): JSX.Element {
-  const batches = createMemo(() => [...downloadsStore.batches().values()]);
+  const batches = createMemo(() => Object.values(downloadsStore.batches) as DownloadBatch[]);
+  // B3-1 salvage: per-row cancel (same confirm flow as the task center).
+  async function cancelBatch(batchId: string): Promise<void> {
+    const allowed = await confirmDanger({
+      title: t("tasks.cancelConfirm.title"),
+      body: t("tasks.cancelConfirm.body"),
+      confirmLabel: t("tasks.download.cancel"),
+    });
+    if (!allowed) return;
+    const res = await downloads.cancel(batchId);
+    toast({
+      message: res.ok ? t("tasks.download.cancelled") : res.error.message,
+      tone: res.ok ? "info" : "error",
+    });
+  }
   return (
     <div class="hero-list">
       <For each={batches()}>
@@ -950,6 +1086,12 @@ function DownloadsCard(): JSX.Element {
             <RmProgress
               value={batch.totalBytes > 0 ? (batch.downloadedBytes / batch.totalBytes) * 100 : 0}
               determinate={batch.totalBytes > 0}
+            />
+            <RmIconButton
+              icon="x"
+              label={t("tasks.download.cancel")}
+              danger
+              onClick={() => void cancelBatch(batch.batchId)}
             />
           </div>
         )}
@@ -976,7 +1118,7 @@ function GamesCard(): JSX.Element {
               <span class="hero-row-subtitle">{t("instances.running")}</span>
             </span>
             <RmIconButton icon="terminal" label={t("home.viewLog")} onClick={() => uiStore.openLogDrawer(game.profileId)} />
-            <RmIconButton icon="square" label={t("common.stop")} danger onClick={() => void launchStore.kill(game.profileId)} />
+            <RmIconButton icon="square" label={t("common.stop")} danger onClick={() => void launchStore.stop(game.profileId)} />
           </div>
         )}
       </For>
