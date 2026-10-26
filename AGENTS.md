@@ -13,6 +13,14 @@ RMCCC（Rust Minecraft Core Client）是一个纯 Rust 实现的 Minecraft 启�
 3. **体积红线**：最终二进制（**strip 后的主可执行文件**）< **20 MiB**（1 MiB = 1,048,576 B），见 `docs/adr/ADR-011`（2026-10-24 由 10 MiB 放宽）。strip 失效时体积门禁判为 release-blocked，不得用未剥离数字宣称通过。添加新依赖前必须评估体积影响（`cargo bloat`）。
 4. **编码规范**：详见 `docs/AI_EDITING_RULES.md`。
 
+## 本地构建与验收
+
+- 本机验收**只构建 `.app`**：`pnpm tauri build --bundles app`，
+  产物 `target/release/bundle/macos/SNGL.app`（用户 2026-10-27 明确要求）。
+- **不生成 DMG**：`hdiutil` 在当前沙箱被拒，且交付测试只需要 `.app`；CI 的三平台发布流程（`release.yml`）不受此限制。
+- 打包前门禁：`cargo fmt --all -- --check`、`cargo clippy --workspace --all-targets -- -D warnings`、
+  `cargo test --workspace`、`pnpm typecheck`、`pnpm test`、`pnpm build`。
+
 ## 关键技术决策（已确定）
 
 | 决策 | 选择 | 理由 |

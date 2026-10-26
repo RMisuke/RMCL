@@ -27,7 +27,7 @@
 4. **HMCL 实测**：本机 `/Volumes/APPLE 1TB/Game/MC/.minecraft` 的 5 个真实版本识别正确——
    Forge 14.23.5.2864（1.12.2）、NeoForge 47.1.106 / 21.1.213、Forge 47.4.20（1.20.1-暮色）、Fabric 0.19.2。
 5. 验证：`cargo test --workspace` **659 passed / 0 failed**、clippy 零警告、`cargo fmt --check`、
-   `pnpm typecheck`、`pnpm test`（34）、`pnpm build`；并打包 SNGL.app 供真机测试。
+   `pnpm typecheck`、`pnpm test`（34）、`pnpm build`；并构建 `SNGL.app`（`--bundles app`，按用户要求不生成 DMG）供真机测试。
 
 **2026-10-26（实例累计游玩时长 + 主页账号卡/启动卡排版）**：
 
