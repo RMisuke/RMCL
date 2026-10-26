@@ -604,6 +604,7 @@ export const en = {
   "dashboard.pluginFrame.errorHint": "The plugin UI could not be loaded. Try disabling and re-enabling the plugin.",
   "common.confirm": "OK",
   "home.instanceSettings": "Instance settings",
+  "home.launchPicker.lastPlayed": "Last played {time} ago",
   "home.account.lastPlayed": "Last played {time} ago",
   "home.account.skin": "Change skin (minecraft.net)",
   "home.account.switch": "Switch account",

@@ -576,9 +576,15 @@ html[data-motion="on"] .theme-card:hover .theme-swatch-cube { transform: rotate(
   background: color-mix(in srgb, var(--rmccc-background) 20%, transparent);
 }
 .hero-launch-picker:hover { border-color: color-mix(in srgb, var(--rmccc-accent-secondary) 32%, transparent); background: color-mix(in srgb, var(--rmccc-accent) 11%, transparent); }
-.hero-launch-picker-copy { flex: 1; min-width: 0; display: flex; flex-direction: column; justify-content: center; gap: 4px; }
+.hero-launch-picker-copy { flex: 1; min-width: 0; display: flex; flex-direction: column; justify-content: center; gap: 4px; overflow: hidden; }
 .hero-launch-picker-main { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 14px; line-height: 1.25; }
-.hero-launch-picker-sub { color: var(--rmccc-accent-secondary); font-size: 10px; letter-spacing: 0.025em; }
+.hero-launch-picker-sub { color: var(--rmccc-accent-secondary); font-size: 10px; letter-spacing: 0.025em; min-width: 0; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* 菜单外壳固定 176px，但 RmMenu 内部的 role=button 包裹层默认 min-width:auto，
+   长文本会把包裹层撑宽、连同选择器一起溢出到右侧启动按钮下面（箭头被遮住）。
+   这里把该层压回外壳宽度，文本再靠 copy/sub 的 ellipsis 收敛。 */
+.hero-launch-main .rm-menu-root > div[role="button"] { min-width: 0; }
+.hero-launch-picker { overflow: hidden; }
+.hero-launch-picker-caret { flex: 0 0 auto; color: var(--rmccc-accent-secondary); }
 .hero-run-slot.is-active { max-height: 68px; }
 
 /* ── Home: voxel geometry and orbital graphics ────────────────────────── */

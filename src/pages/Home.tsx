@@ -700,11 +700,11 @@ export default function Home(): JSX.Element {
                   <span class="hero-account-meta">
                     <RmTag tone="accent">{current().provider}</RmTag>
                     <span class="hero-account-meta-item">
-                      {t("home.account.lastPlayed", {
-                        time: authStore.lastPlayedFor(current().account_id)
-                          ? relativeTime(authStore.lastPlayedFor(current().account_id))
-                          : t("instances.neverPlayed"),
-                      })}
+                      {authStore.lastPlayedFor(current().account_id)
+                        ? t("home.account.lastPlayed", {
+                            time: relativeTime(authStore.lastPlayedFor(current().account_id)),
+                          })
+                        : t("instances.neverPlayed")}
                     </span>
                   </span>
                   <span class="hero-account-meta">
@@ -772,19 +772,20 @@ export default function Home(): JSX.Element {
                     : []),
                 ]}
               >
-                <button class="hero-launch-picker">
+                <button class="hero-launch-picker" title={t("home.pickInstance")}>
                   <span class="hero-launch-picker-copy">
                     <span class="hero-launch-picker-main">
                       {selected()?.name ?? t("home.pickInstance")}
                     </span>
                     <Show when={selected()}>
                       <span class="hero-launch-picker-sub">
-                        {selected()!.game_version}
-                        <Show when={selected()!.mod_loader}> · {selected()!.mod_loader!.loader_type}</Show>
+                        {selected()!.last_played
+                          ? t("home.launchPicker.lastPlayed", { time: relativeTime(selected()!.last_played) })
+                          : t("instances.neverPlayed")}
                       </span>
                     </Show>
                   </span>
-                  <Icon name="chevron-down" size={14} />
+                  <Icon class="hero-launch-picker-caret" name="chevron-up" size={15} />
                 </button>
               </RmMenu>
               <RmButton

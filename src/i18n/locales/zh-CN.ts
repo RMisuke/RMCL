@@ -602,6 +602,7 @@ export const zhCN = {
   "dashboard.pluginFrame.errorHint": "插件 UI 加载失败。可尝试禁用后重新启用该插件。",
   "common.confirm": "确定",
   "home.instanceSettings": "实例设置",
+  "home.launchPicker.lastPlayed": "上次游玩 {time}前",
   "home.account.lastPlayed": "上次游玩 {time}前",
   "home.account.skin": "更换皮肤（minecraft.net）",
   "home.account.switch": "切换账号",
