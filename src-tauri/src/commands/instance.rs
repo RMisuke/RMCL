@@ -31,6 +31,15 @@ pub struct InstanceInfo {
     /// Number of missing files (client jar / libraries / assets / natives).
     #[ts(type = "number")]
     pub missing_count: usize,
+    /// Detected mod loader (backend id: `forge` / `neo_forge` / `fabric` / …).
+    /// Filled from HMCL `patches`, loader libraries, or the main class.
+    pub loader_type: Option<String>,
+    /// Detected loader version (`None` when only the kind is known).
+    pub loader_version: Option<String>,
+    /// Version directory on disk (`<root>/versions/<id>`).
+    pub path: String,
+    /// Whether the directory carries HMCL metadata (`hmclversion.cfg`).
+    pub hmcl: bool,
 }
 
 /// Serialized missing-file entry for the frontend.
@@ -132,33 +141,73 @@ fn list_instances(
     let ids = repo.get_instance_ids();
     let mut instances = Vec::with_capacity(ids.len());
     for id in ids {
-        let resolved = repo.get_resolved(&id).ok();
-        let game_version = repo.get_game_version(&id);
-        let modded = repo.is_modded(&id);
-        let has_json = rmccc_version::file_layout::instance_json(game_root, &id).exists();
-        let has_jar = rmccc_version::file_layout::instance_jar(game_root, &id).exists();
-        let missing_count = resolved
-            .as_ref()
-            .map(|r| {
-                rmccc_version::completion::check_completion(
-                    game_root,
-                    r,
-                    platform,
-                    rmccc_version::completion::CompletionVerify::Size,
-                )
-                .len()
-            })
-            .unwrap_or(1);
-        instances.push(InstanceInfo {
-            id,
-            game_version,
-            modded,
-            has_jar,
-            has_json,
-            missing_count,
-        });
+        instances.push(instance_view(repo, game_root, platform, id));
     }
     instances
+}
+
+/// One `InstanceInfo` row for any repository (primary or an extra HMCL root).
+fn instance_view(
+    repo: &rmccc_version::DefaultGameRepository,
+    game_root: &std::path::Path,
+    platform: &rmccc_core::rmccc_platform::PlatformDescriptor,
+    id: String,
+) -> InstanceInfo {
+    let resolved = repo.get_resolved(&id).ok();
+    let standalone = resolved.as_ref().map(|r| &r.standalone);
+
+    // HMCL standalone versions have no `inheritsFrom`; their base Minecraft
+    // version lives in the `game` patch. Fall back to the chain walk for
+    // launcher-installed versions.
+    let mut game_version = repo.get_game_version(&id);
+    if game_version == id {
+        if let Some(base) = standalone.and_then(rmccc_version::loader::base_version) {
+            game_version = base;
+        }
+    }
+
+    let detected = standalone.and_then(rmccc_version::loader::detect_loader);
+    let (loader_type, loader_version) = match detected {
+        Some(loader) => (
+            Some(loader.kind),
+            if loader.version.is_empty() {
+                None
+            } else {
+                Some(loader.version)
+            },
+        ),
+        None => (None, None),
+    };
+
+    let has_json = rmccc_version::file_layout::instance_json(game_root, &id).exists();
+    let has_jar = rmccc_version::file_layout::instance_jar(game_root, &id).exists();
+    let missing_count = resolved
+        .as_ref()
+        .map(|r| {
+            rmccc_version::completion::check_completion(
+                game_root,
+                r,
+                platform,
+                rmccc_version::completion::CompletionVerify::Size,
+            )
+            .len()
+        })
+        .unwrap_or(1);
+
+    let version_dir = game_root.join("versions").join(&id);
+    let modded = repo.is_modded(&id);
+    InstanceInfo {
+        id,
+        game_version,
+        modded,
+        has_jar,
+        has_json,
+        missing_count,
+        loader_type,
+        loader_version,
+        path: version_dir.display().to_string(),
+        hmcl: version_dir.join("hmclversion.cfg").exists(),
+    }
 }
 
 #[tauri::command]
@@ -180,37 +229,7 @@ pub async fn instance_refresh(
             repo.refresh().map_err(IpcError::from)?;
         }
         let repo = repo.read().map_err(|_| locked_error())?;
-        let game_root = repo.game_dir().to_path_buf();
-        let ids = repo.get_instance_ids();
-        let mut list = Vec::with_capacity(ids.len());
-        for id in ids {
-            let resolved = repo.get_resolved(&id).ok();
-            let missing_count = resolved
-                .as_ref()
-                .map(|r| {
-                    rmccc_version::completion::check_completion(
-                        &game_root,
-                        r,
-                        &platform,
-                        rmccc_version::completion::CompletionVerify::Size,
-                    )
-                    .len()
-                })
-                .unwrap_or(1);
-            let game_version = repo.get_game_version(&id);
-            let modded = repo.is_modded(&id);
-            let has_jar = rmccc_version::file_layout::instance_jar(&game_root, &id).exists();
-            let has_json = rmccc_version::file_layout::instance_json(&game_root, &id).exists();
-            list.push(InstanceInfo {
-                id,
-                game_version,
-                modded,
-                has_jar,
-                has_json,
-                missing_count,
-            });
-        }
-        Ok(list)
+        Ok(list_instances(&repo, repo.game_dir(), &platform))
     })
     .await
     .map_err(join_error)??;

@@ -17,6 +17,7 @@ pub mod file_layout;
 pub mod game_repository;
 pub mod isolation;
 pub mod libraries;
+pub mod loader;
 pub mod manifest;
 pub mod merge;
 pub mod repository;
