@@ -783,6 +783,63 @@ pub async fn launch_game(
 mod tests {
     use super::*;
 
+    /// 游玩时长：on_exit 把开始计时后的实际秒数累加进 profile，并继续转发
+    /// 内部监听器（呈现层仍能收到退出事件）。
+    #[test]
+    fn test_playtime_listener_records_elapsed_and_forwards_exit() {
+        #[derive(Default)]
+        struct RecordingListener {
+            exits: std::sync::atomic::AtomicUsize,
+        }
+        impl ProcessListener for RecordingListener {
+            fn on_log(&self, _line: String, _is_stderr: bool) {}
+            fn on_exit(&self, _code: i32, _kind: rmccc_launch::ExitType) {
+                self.exits.fetch_add(1, Ordering::SeqCst);
+            }
+        }
+
+        let dir = std::env::temp_dir().join(format!(
+            "rmccc-playtime-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let store = Arc::new(rmccc_profile::ProfileStore::new(dir.clone()));
+        let profile = rmccc_profile::Profile {
+            id: "p1".into(),
+            name: "Playtime".into(),
+            game_version: "1.20.4".into(),
+            play_time_seconds: 30,
+            ..Default::default()
+        };
+        store.save(&profile).unwrap();
+
+        let inner = Arc::new(RecordingListener::default());
+        let listener = PlaytimeListener {
+            inner: inner.clone(),
+            store: store.clone(),
+            profile_id: "p1".into(),
+            started: std::sync::Mutex::new(Some(
+                std::time::Instant::now() - std::time::Duration::from_secs(90),
+            )),
+        };
+        listener.on_exit(0, rmccc_launch::ExitType::Normal);
+
+        assert_eq!(
+            store.get("p1").unwrap().unwrap().play_time_seconds,
+            120,
+            "90s session must add to the existing 30s"
+        );
+        assert_eq!(
+            inner.exits.load(Ordering::SeqCst),
+            1,
+            "inner listener must still receive on_exit"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     #[test]
     fn test_progress_msg_construction() {
         let msg = ProgressMsg::Stage("下载客户端 JAR...".to_string());
