@@ -358,6 +358,9 @@ html[data-motion="on"] .rm-card:hover { border-color: color-mix(in srgb, var(--r
 }
 
 .rm-row { border: 1px solid transparent; }
+/* 行内 “更多” 菜单是绝对定位展开的；行带 will-change:transform 会各自成层，
+   不抬高当前行就会被后续行盖住（用户 2026-10-27 反馈的互相遮挡）。 */
+.rm-row:has(.rm-menu) { position: relative; z-index: 20; }
 .rm-row:hover {
   border-color: color-mix(in srgb, var(--rmccc-accent) 10%, transparent);
   background: linear-gradient(90deg, color-mix(in srgb, var(--rmccc-accent) 8%, transparent), transparent);

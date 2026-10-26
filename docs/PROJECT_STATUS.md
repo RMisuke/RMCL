@@ -23,10 +23,13 @@
    Minecraft 版本（HMCL 独立版本 JSON 没有 `inheritsFrom`）。`InstanceInfo` 新增
    `loader_type` / `loader_version` / `path` / `hmcl`；外置目录展示改为与默认目录一致的卡片/列表双视图，
    点击打开只读「版本详情」（基础版本 / 加载器 / 版本目录 / 完整性 / 来源，路径可复制）。
-   外置目录仍按只读浏览处理（启动/改设置需先设为游戏根目录并重启），详情内已写明指引。
+   点击版本或按「启动」会按需调用 `profile_import_version` 导入为正式实例
+   （`Profile.external_root = true`，`game_dir` 为该外部目录），随后可直接启动与修改设置；
+   启动/完整性检查/修复全部以该目录为根（`instance_game_root`），删除实例只移除记录、
+   绝不清理外部目录。
 4. **HMCL 实测**：本机 `/Volumes/APPLE 1TB/Game/MC/.minecraft` 的 5 个真实版本识别正确——
    Forge 14.23.5.2864（1.12.2）、NeoForge 47.1.106 / 21.1.213、Forge 47.4.20（1.20.1-暮色）、Fabric 0.19.2。
-5. 验证：`cargo test --workspace` **659 passed / 0 failed**、clippy 零警告、`cargo fmt --check`、
+5. 验证：`cargo test --workspace` **661 passed / 0 failed**、clippy 零警告、`cargo fmt --check`、
    `pnpm typecheck`、`pnpm test`（34）、`pnpm build`；并构建 `SNGL.app`（`--bundles app`，按用户要求不生成 DMG）供真机测试。
 
 **2026-10-26（实例累计游玩时长 + 主页账号卡/启动卡排版）**：

@@ -149,6 +149,9 @@ export const profiles = {
   list: () => safeInvoke<Profile[]>("profile_list"),
   create: (name: string, gameVersion: string) =>
     safeInvoke<Profile>("profile_create", { name, gameVersion }),
+  /** Import a version from an external game directory as a launchable profile. */
+  importVersion: (root: string, versionId: string) =>
+    safeInvoke<Profile>("profile_import_version", { root, versionId }),
   update: (id: string, opts: ProfileUpdateOpts) =>
     safeInvoke<Profile>("profile_update", { id, opts }),
   delete: (id: string, cleanupGameDir: boolean) =>
