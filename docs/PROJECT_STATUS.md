@@ -10,6 +10,20 @@
 
 ## 0. 更新记录
 
+**2026-10-26（实例累计游玩时长 + 主页账号卡/启动卡排版）**：
+
+1. **数据**：`Profile` 新增 `play_time_seconds`（`#[serde(default)]`，旧 profile JSON 自动读 0，无需迁移）；
+   `ProfileStore::add_play_time` 饱和累加并原子保存；ts-rs 标注 `#[ts(type = "number")]` 避免映射成 `bigint`，
+   `src/ipc/types.ts` 已重新生成（绑定新鲜度测试通过）。
+2. **计时**：`rmccc_core::pipeline::launch_game` 用 `PlaytimeListener` 包装呈现层监听器——进程实际 spawn 后开始计时，
+   `on_exit` 时把本次秒数累加回 profile。GUI/CLI/MCP 共用同一入口；不含安装/修复/Java 探测时间；
+   应用在游戏运行中退出则本次时长不记（下次启动重新计时）。
+3. **UI**：启动卡副行改为「累计游玩 X 小时 Y 分 / 尚未游玩」（新增 `playtime.*` i18n 与 `playtimeParts` 纯函数 + 2 条单测）；
+   账号卡删除"实例数 + ID"整行，头像圆角 15→9px、用户名 14→17px、两行重排并略下移；
+   provider 对外统一显示 `Microsoft` / `Offline`（新增 `providerLabel`，Home 与 Accounts 两处），删除两条死 i18n key。
+4. 验证：`cargo test --workspace` **655 passed / 0 failed**、clippy 零警告、`pnpm typecheck`、`pnpm test`（34）、`pnpm build`；
+   demo harness 1440×900 截图复核两张卡片。
+
 **2026-10-26（ADR-008 草案入库：插件目录 / 发布者签名 / 分发）**：
 
 - 新增 [`adr/ADR-008-plugin-registry-signing-and-distribution.md`](adr/ADR-008-plugin-registry-signing-and-distribution.md)（**proposed**，待拍板）：

@@ -48,6 +48,12 @@ pub struct Profile {
     pub game_dir: PathBuf,
     pub created_at: chrono::DateTime<chrono::Utc>,
     pub last_played: Option<chrono::DateTime<chrono::Utc>>,
+    /// 累计游玩时长（秒）。启动成功后开始计时，游戏进程退出时由
+    /// `ProfileStore::add_play_time` 累加；旧 profile JSON 缺该字段时按 0 读取。
+    #[serde(default)]
+    /// JSON 里是数字；ts-rs 默认把 u64 映射为 bigint，这里与 duration_ms 一致标 number。
+    #[ts(type = "number")]
+    pub play_time_seconds: u64,
     pub icon: Option<String>,
 
     // ── Extended launch options (all serde-defaulted for backward compat) ──
@@ -110,6 +116,7 @@ impl Default for Profile {
             game_dir: PathBuf::new(),
             created_at: chrono::Utc::now(),
             last_played: None,
+            play_time_seconds: 0,
             icon: None,
             min_memory_mb: 0,
             metaspace_mb: 0,
@@ -519,6 +526,22 @@ impl ProfileStore {
         Ok(())
     }
 
+    /// Add completed play time (seconds) to a profile.
+    ///
+    /// Called from the launch pipeline's exit path once the game process has
+    /// fully exited, so the value reflects real play time rather than
+    /// install/download time. Saturating: a corrupt huge value never panics.
+    pub fn add_play_time(&self, id: &str, seconds: u64) -> Result<()> {
+        if seconds == 0 {
+            return Ok(());
+        }
+        let mut profile = self
+            .get(id)?
+            .ok_or_else(|| rmccc_error::RmcccError::ProfileNotFound(id.to_string()))?;
+        profile.play_time_seconds = profile.play_time_seconds.saturating_add(seconds);
+        self.save(&profile)
+    }
+
     fn profile_path(&self, id: &str) -> PathBuf {
         self.profiles_dir.join(format!("{}.json", id))
     }
@@ -602,6 +625,32 @@ mod tests {
         assert!(store.get("p1").unwrap().is_none());
 
         assert!(store.delete("nope", false).is_err());
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 累计游玩时长：多次退出累加；旧 JSON 缺字段按 0 读取。
+    #[test]
+    fn test_add_play_time_accumulates_and_defaults_to_zero() {
+        let dir = temp_profiles_dir("playtime");
+        let store = ProfileStore::new(dir.clone());
+        store.save(&make_profile("p1")).unwrap();
+
+        store.add_play_time("p1", 90).unwrap();
+        store.add_play_time("p1", 30).unwrap();
+        assert_eq!(store.get("p1").unwrap().unwrap().play_time_seconds, 120);
+
+        // 0 秒不写盘也不报错。
+        store.add_play_time("p1", 0).unwrap();
+        assert_eq!(store.get("p1").unwrap().unwrap().play_time_seconds, 120);
+
+        // 模拟旧版本 profile：删除该字段后仍应反序列化为 0。
+        let path = dir.join("p1.json");
+        let mut value: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        value.as_object_mut().unwrap().remove("play_time_seconds");
+        std::fs::write(&path, serde_json::to_string_pretty(&value).unwrap()).unwrap();
+        assert_eq!(store.get("p1").unwrap().unwrap().play_time_seconds, 0);
 
         let _ = std::fs::remove_dir_all(&dir);
     }

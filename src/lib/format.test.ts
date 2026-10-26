@@ -7,6 +7,8 @@ import {
   formatDuration,
   groupDigits,
   initialOf,
+  playtimeParts,
+  providerLabel,
   relativeTime,
 } from "./format";
 
@@ -59,6 +61,24 @@ describe("formatDuration", () => {
     expect(formatDuration(5 * 60_000)).toBe("5 min");
     expect(formatDuration(65 * 60_000)).toBe("1 h 05 min");
     expect(formatDuration(-10)).toBe("0 min");
+  });
+});
+
+describe("playtimeParts", () => {
+  it("splits hours/minutes and clamps negatives", () => {
+    expect(playtimeParts(0)).toEqual({ hours: 0, minutes: 0 });
+    expect(playtimeParts(59)).toEqual({ hours: 0, minutes: 0 });
+    expect(playtimeParts(3_600)).toEqual({ hours: 1, minutes: 0 });
+    expect(playtimeParts(3 * 3600 + 20 * 60 + 5)).toEqual({ hours: 3, minutes: 20 });
+    expect(playtimeParts(-5)).toEqual({ hours: 0, minutes: 0 });
+  });
+});
+
+describe("providerLabel", () => {
+  it("keeps brand casing and capitalizes known providers", () => {
+    expect(providerLabel("microsoft")).toBe("Microsoft");
+    expect(providerLabel("offline")).toBe("Offline");
+    expect(providerLabel("custom")).toBe("custom");
   });
 });
 

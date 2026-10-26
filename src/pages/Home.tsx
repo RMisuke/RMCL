@@ -30,7 +30,7 @@ import { settingsStore } from "../stores/settings";
 import { themeMode } from "../theme";
 import { t } from "../i18n";
 import type { TranslationKey } from "../i18n/locales/messages";
-import { relativeTime, formatBytes, groupDigits, formatDate } from "../lib/format";
+import { relativeTime, formatBytes, groupDigits, formatDate, playtimeParts, providerLabel } from "../lib/format";
 
 /** 插件/核心卡片目录（模块级共享：Home 装载，PluginCard 读取）。 */
 const [catalog, setCatalog] = createRoot(() => createSignal<WidgetDescriptor[]>([]));
@@ -82,6 +82,15 @@ function saveLayout(layout: HeroLayout): void {
 // 每套内置主题配一组与名字呼应的 CSS 意象粒子：林间落叶 / 樱吹雪飘瓣 /
 // 深海气泡 / 熔岩火星 / 靛夜星辰 / 晴空流云 / 纸墨浮尘。全部纯 CSS
 // transform/opacity 动画（无 JS 每帧循环），受 data-motion 闸门控制。
+
+/** 累计游玩时长 → 本地化片段（"3 小时 20 分" / "45 分钟" / "不到 1 分钟"）。 */
+function playtimeLabel(seconds: number): string {
+  const { hours, minutes } = playtimeParts(seconds);
+  if (hours > 0 && minutes > 0) return t("playtime.hoursMinutes", { h: hours, m: minutes });
+  if (hours > 0) return t("playtime.hours", { h: hours });
+  if (minutes > 0) return t("playtime.minutes", { m: minutes });
+  return t("playtime.lessThanMinute");
+}
 
 type ParticleSpec = {
   left: string;      // 水平起点
@@ -698,21 +707,13 @@ export default function Home(): JSX.Element {
                 <span class="hero-card-main">
                   <span class="hero-card-title">{current().username}</span>
                   <span class="hero-account-meta">
-                    <RmTag tone="accent">{current().provider}</RmTag>
+                    <RmTag tone="accent">{providerLabel(current().provider)}</RmTag>
                     <span class="hero-account-meta-item">
                       {authStore.lastPlayedFor(current().account_id)
                         ? t("home.account.lastPlayed", {
                             time: relativeTime(authStore.lastPlayedFor(current().account_id)),
                           })
                         : t("instances.neverPlayed")}
-                    </span>
-                  </span>
-                  <span class="hero-account-meta">
-                    <span class="hero-account-meta-item">
-                      {t("hero.account.instances", { n: (profilesStore.items() ?? []).length })}
-                    </span>
-                    <span class="hero-account-meta-item">
-                      {t("hero.account.id", { id: current().account_id.replace(/^account:/, "").slice(0, 8) })}
                     </span>
                   </span>
                 </span>
@@ -779,9 +780,11 @@ export default function Home(): JSX.Element {
                     </span>
                     <Show when={selected()}>
                       <span class="hero-launch-picker-sub">
-                        {selected()!.last_played
-                          ? t("home.launchPicker.lastPlayed", { time: relativeTime(selected()!.last_played) })
-                          : t("instances.neverPlayed")}
+                        {selected()!.play_time_seconds > 0
+                          ? t("home.launchPicker.playtime", {
+                              time: playtimeLabel(selected()!.play_time_seconds),
+                            })
+                          : t("playtime.none")}
                       </span>
                     </Show>
                   </span>

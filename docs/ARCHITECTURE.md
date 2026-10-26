@@ -311,6 +311,7 @@ pub struct Profile {
     pub game_dir: PathBuf,           // instance directory
     pub created_at: DateTime<Utc>,
     pub last_played: Option<DateTime<Utc>>,
+    pub play_time_seconds: u64,      // cumulative play time (0 for legacy profiles)
     pub icon: Option<String>,        // custom icon path
 }
 
@@ -1690,6 +1691,7 @@ strategy:
   "game_dir": "/Users/xxx/Library/Application Support/rmccc/instances",
   "created_at": "2026-07-29T10:00:00Z",
   "last_played": null,
+  "play_time_seconds": 45240,
   "icon": null
 }
 ```
@@ -1697,6 +1699,10 @@ strategy:
 > `isolation`（`never`/`modded`/`always`，`null` = 跟随全局 `default_isolation`）与
 > `override_properties`（覆盖名单，见 §3.4）是继承模型的一部分：名单内的字段取实例值，
 > 其余取全局默认值；**实例里填过的值即使不覆盖也保留在文件中**。
+>
+> `play_time_seconds` 是累计游玩时长（秒）：启动管线在进程实际 spawn 后开始计时，
+> 进程退出时经 `ProfileStore::add_play_time` 累加（不含安装/修复时间）；旧 profile
+> 缺少该字段时按 0 读取，无需迁移。应用在游戏运行中退出则本次时长不记。
 >
 > 扩展字段（全部 `#[serde(default)]`，旧 JSON 可无损加载）：`min_memory_mb`、
 > `metaspace_mb`、`process_priority`、`width` / `height` / `fullscreen`、

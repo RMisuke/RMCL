@@ -98,7 +98,13 @@ isolation: string | null,
  * A field absent from this set uses the global value and its instance value
  * here is ignored — but still preserved on disk.
  */
-override_properties: Array<string>, java_path: string | null, jvm_args: Array<string>, game_args: Array<string>, memory_mb: number, game_dir: string, created_at: string, last_played: string | null, icon: string | null, min_memory_mb: number, metaspace_mb: number, 
+override_properties: Array<string>, java_path: string | null, jvm_args: Array<string>, game_args: Array<string>, memory_mb: number, game_dir: string, created_at: string, last_played: string | null, 
+/**
+ * 累计游玩时长（秒）。启动成功后开始计时，游戏进程退出时由
+ * `ProfileStore::add_play_time` 累加；旧 profile JSON 缺该字段时按 0 读取。
+ * JSON 里是数字；ts-rs 默认把 u64 映射为 bigint，这里与 duration_ms 一致标 number。
+ */
+play_time_seconds: number, icon: string | null, min_memory_mb: number, metaspace_mb: number, 
 /**
  * Process priority label: "low" | "below_normal" | "normal" | "above_normal" | "high".
  */

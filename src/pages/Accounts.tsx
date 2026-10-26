@@ -15,6 +15,7 @@ import { SkinViewer } from "../components/SkinViewer";
 import { authStore } from "../stores/auth";
 import { uiStore, toast } from "../stores/ui";
 import { t } from "../i18n";
+import { providerLabel } from "../lib/format";
 
 export default function Accounts(): JSX.Element {
   const [offlineOpen, setOfflineOpen] = createSignal(false);
@@ -113,7 +114,7 @@ export default function Accounts(): JSX.Element {
                 <AccountAvatar uuid={current().uuid} name={current().username} provider={current().provider} />
                 <div class="account-card-info">
                   <div class="account-card-name">{current().username}</div>
-                  <RmTag tone="accent">{current().provider}</RmTag>
+                  <RmTag tone="accent">{providerLabel(current().provider)}</RmTag>
                 </div>
                 {/* Token refresh only applies to Microsoft accounts (P2-22):
                     offline sessions have nothing to refresh. */}

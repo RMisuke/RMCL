@@ -59,6 +59,19 @@ export function formatDuration(ms: number): string {
   return `${hours} h ${String(minutes).padStart(2, "0")} min`;
 }
 
+/** Completed play time in seconds → whole hours plus leftover minutes. */
+export function playtimeParts(seconds: number): { hours: number; minutes: number } {
+  const total = Math.max(0, Math.floor(seconds));
+  return { hours: Math.floor(total / 3600), minutes: Math.floor((total % 3600) / 60) };
+}
+
+/** Display label for an auth provider id; brand names keep their own casing. */
+export function providerLabel(provider: string): string {
+  if (provider === "microsoft") return "Microsoft";
+  if (provider === "offline") return "Offline";
+  return provider;
+}
+
 /** `12345678` → "12,345,678" (download file counters). */
 export function groupDigits(n: number): string {
   return n.toLocaleString("en-US");

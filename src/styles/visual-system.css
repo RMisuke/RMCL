@@ -563,7 +563,13 @@ html[data-motion="on"] .theme-card:hover .theme-swatch-cube { transform: rotate(
 .hero-corner { z-index: 5; right: 28px; bottom: 24px; width: 380px; gap: 14px; }
 .hero-corner .hero-card { height: 96px; padding: 15px; border-radius: 20px; }
 .hero-account { position: relative; }
-.hero-account .account-avatar, .hero-account .account-avatar-face { width: 56px; height: 56px; border-radius: 15px; }
+/* 头像从 15px 收到 9px：更方正，和卡片 20px 圆角形成层次对比。 */
+.hero-account .account-avatar, .hero-account .account-avatar-face { width: 56px; height: 56px; border-radius: 9px; }
+/* 只有账号名 + 元信息两行：字号上提、行距拉开、整体略下移（视觉重心贴头像中线）。 */
+.hero-account .hero-card-main { justify-content: center; gap: 8px; padding-top: 8px; }
+.hero-account .hero-card-title { font-size: 17px; line-height: 1.2; }
+.hero-account-meta { gap: 8px; }
+.hero-account-meta-item { font-size: 11.5px; }
 .hero-card-icon { border-radius: 13px; background: var(--rmccc-accent-gradient); color: var(--rmccc-accent-contrast); }
 .hero-card-plus { border-color: color-mix(in srgb, var(--rmccc-accent) 20%, transparent); color: var(--rmccc-accent-secondary); }
 .hero-launch {

@@ -252,7 +252,14 @@ pub async fn install_game(
     if total == 0 {
         // Perf audit 1.4: zip extraction of multiple library jars is blocking
         // IO + CPU — run it on the blocking pool.
-        run_extract_natives(&version, &game_dir, version_id, core.platform.descriptor, progress.cloned()).await?;
+        run_extract_natives(
+            &version,
+            &game_dir,
+            version_id,
+            core.platform.descriptor,
+            progress.cloned(),
+        )
+        .await?;
         tracing::info!(version = %version_id, "Nothing to download, version already complete");
         return Ok(SetupReport::default());
     }
@@ -288,7 +295,14 @@ pub async fn install_game(
     // 有失败条目时不解压 natives：那会拿残缺的依赖库去解压，报错信息比
     // "有 N 个文件下载失败" 更难定位。
     if report.is_complete() {
-        run_extract_natives(&version, &game_dir, version_id, core.platform.descriptor, progress.cloned()).await?;
+        run_extract_natives(
+            &version,
+            &game_dir,
+            version_id,
+            core.platform.descriptor,
+            progress.cloned(),
+        )
+        .await?;
     }
 
     tracing::info!(
@@ -549,7 +563,13 @@ async fn run_extract_natives(
     let game_dir = game_dir.to_path_buf();
     let version_id = version_id.to_string();
     tokio::task::spawn_blocking(move || {
-        extract_natives(&version, &game_dir, &version_id, &descriptor, progress.as_ref())
+        extract_natives(
+            &version,
+            &game_dir,
+            &version_id,
+            &descriptor,
+            progress.as_ref(),
+        )
     })
     .await
     .map_err(|e| RmcccError::Other(format!("natives extraction join error: {e}")))?
@@ -619,6 +639,58 @@ async fn resolve_launch_auth(core: &CoreHandle) -> Result<(String, String, Strin
     }
 }
 
+/// 累计游玩时长记录：包装呈现层监听器，在游戏进程退出时把本次运行秒数写回
+/// profile（HMCL 的"游玩时长"统计）。
+///
+/// 计时从 `launch()` 返回（进程已 spawn）开始，不含安装/修复/Java 探测时间；
+/// 应用在游戏运行中退出时不会有 `on_exit`，本次时长不记（下次启动重新计时）。
+struct PlaytimeListener {
+    inner: Arc<dyn ProcessListener>,
+    store: Arc<rmccc_profile::ProfileStore>,
+    profile_id: String,
+    started: std::sync::Mutex<Option<std::time::Instant>>,
+}
+
+impl PlaytimeListener {
+    /// 进程真正起来后开始计时（launch 成功返回处调用）。
+    fn mark_started(&self) {
+        *self
+            .started
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(std::time::Instant::now());
+    }
+}
+
+impl ProcessListener for PlaytimeListener {
+    fn set_process(&self, process: &ManagedProcess) {
+        self.inner.set_process(process);
+    }
+
+    fn on_log(&self, line: String, is_stderr: bool) {
+        self.inner.on_log(line, is_stderr);
+    }
+
+    fn on_exit(&self, exit_code: i32, exit_type: rmccc_launch::ExitType) {
+        let seconds = self
+            .started
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .take()
+            .map(|start| start.elapsed().as_secs())
+            .unwrap_or(0);
+        if seconds > 0 {
+            if let Err(e) = self.store.add_play_time(&self.profile_id, seconds) {
+                tracing::warn!(
+                    profile_id = %self.profile_id,
+                    error = %e,
+                    "Failed to record play time"
+                );
+            }
+        }
+        self.inner.on_exit(exit_code, exit_type);
+    }
+}
+
 /// 启动游戏并返回已托管进程（命令行生成、native 解压、log4j 提取、环境变量
 /// 注入、进程监控、输出转发全部由 [`rmccc_launch::DefaultLauncher`] 承担）。
 ///
@@ -664,6 +736,16 @@ pub async fn launch_game(
         core.platform.clone(),
     );
 
+    // 计时的起点是进程成功 spawn（`launch()` 返回），因此包装监听器后才交给
+    // launcher；退出时把本次运行时长累加到 profile（GUI/CLI/MCP 同一入口）。
+    let playtime = Arc::new(PlaytimeListener {
+        inner: listener,
+        store: core.profile_store.clone(),
+        profile_id: profile.id.clone(),
+        started: std::sync::Mutex::new(None),
+    });
+    let listener: Arc<dyn ProcessListener> = playtime.clone();
+
     let launcher = rmccc_launch::DefaultLauncher::new(
         // `DefaultLauncher` 的 instance_id 用于定位 `versions/{id}/`（natives 等），
         // 因此传版本 id 而非 profile id。
@@ -686,6 +768,7 @@ pub async fn launch_game(
         .launch()
         .await
         .map_err(|e| RmcccError::Other(e.to_string()))?;
+    playtime.mark_started();
     emit(progress, ProgressMsg::StageDone("游戏已启动。".into()));
 
     // last_played 在启动成功处更新（此前 CLI 在 exit 后、Tauri 在 spawn 后各写一遍）。
