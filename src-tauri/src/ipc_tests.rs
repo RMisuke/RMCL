@@ -151,8 +151,9 @@ fn ipc_command_count_is_stable() {
     // → 99：cache_icon_* 4 条（图标缓存子系统）。
     // → 100：settings_app_info（关于页：SNGL 启动器版本 / RMCCC 内核版本）。
     // → 97：dashboard_get/save/reset_layout 三条随 HomeDashboard 网格下线
+    // → 98：profile_import_version（外置目录版本导入为可启动实例）
     //        （前端审计 B3-1；hero 主页布局改走 localStorage）。
-    assert_eq!(crate::handlers::IPC_COMMANDS.len(), 97);
+    assert_eq!(crate::handlers::IPC_COMMANDS.len(), 98);
 }
 
 // ────────────────────────── 2. 错误码契约 ──────────────────────────

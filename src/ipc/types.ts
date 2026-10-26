@@ -104,7 +104,15 @@ override_properties: Array<string>, java_path: string | null, jvm_args: Array<st
  * `ProfileStore::add_play_time` 累加；旧 profile JSON 缺该字段时按 0 读取。
  * JSON 里是数字；ts-rs 默认把 u64 映射为 bigint，这里与 duration_ms 一致标 number。
  */
-play_time_seconds: number, icon: string | null, min_memory_mb: number, metaspace_mb: number, 
+play_time_seconds: number, 
+/**
+ * 是否来自外部游戏目录（HMCL / 其他启动器安装的 `.minecraft`）。
+ *
+ * `true` 时 `game_dir` 是该版本的**权威游戏根**（libraries/assets/versions
+ * 都在其中），启动、完整性检查与修复都必须以它为根；`false` 时沿用全局
+ * 配置的 `game_root_dir`（保持既有 profile 的行为）。
+ */
+external_root: boolean, icon: string | null, min_memory_mb: number, metaspace_mb: number, 
 /**
  * Process priority label: "low" | "below_normal" | "normal" | "above_normal" | "high".
  */

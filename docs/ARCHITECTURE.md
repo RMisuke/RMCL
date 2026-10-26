@@ -312,6 +312,7 @@ pub struct Profile {
     pub created_at: DateTime<Utc>,
     pub last_played: Option<DateTime<Utc>>,
     pub play_time_seconds: u64,      // cumulative play time (0 for legacy profiles)
+    pub external_root: bool,         // true = game_dir is an external HMCL dir
     pub icon: Option<String>,        // custom icon path
 }
 
@@ -1383,7 +1384,7 @@ User clicks "Launch" on a profile
 
 ## 11. IPC Command Table
 
-97 commands, all defined in `src-tauri/src/commands/` and registered via
+98 commands, all defined in `src-tauri/src/commands/` and registered via
 `IPC_COMMANDS` + `generate_handler!` in `src-tauri/src/handlers.rs`
 （数量由 `ipc_tests.rs` 的计数断言守护；ADR-013 迁移后 agent_* 9 条已由
 ai_* 5 条 + mods 纯逻辑 2 条取代，S4/S5 再加 mcp_* 9 条）。
@@ -1436,6 +1437,7 @@ ai_* 5 条 + mods 纯逻辑 2 条取代，S4/S5 再加 mcp_* 9 条）。
 | `mods_apply_plan` | `mods.rs` | 一键补装缺失前置（Modrinth 匹配 + SHA1 校验，纯逻辑无 AI） |
 | `profile_list` | `profile.rs` | List all profiles |
 | `profile_create` | `profile.rs` | Create new profile |
+| `profile_import_version` | `profile.rs` | Import an external (HMCL) version as a launchable profile |
 | `profile_update` | `profile.rs` | Update profile settings |
 | `profile_delete` | `profile.rs` | Delete profile; `cleanup_game_dir` optionally removes the isolated game dir (guarded against shared roots) |
 | `settings_get` | `settings.rs` | Get global settings |
@@ -1692,6 +1694,7 @@ strategy:
   "created_at": "2026-07-29T10:00:00Z",
   "last_played": null,
   "play_time_seconds": 45240,
+  "external_root": false,
   "icon": null
 }
 ```
@@ -1703,6 +1706,11 @@ strategy:
 > `play_time_seconds` 是累计游玩时长（秒）：启动管线在进程实际 spawn 后开始计时，
 > 进程退出时经 `ProfileStore::add_play_time` 累加（不含安装/修复时间）；旧 profile
 > 缺少该字段时按 0 读取，无需迁移。应用在游戏运行中退出则本次时长不记。
+>
+> `external_root = true` 的实例来自用户手动添加的外部游戏目录（HMCL 等）：
+> `game_dir` 是该版本的权威根（versions/libraries/assets 都在其中），
+> `rmccc_launch::instance_game_root` 会用它覆盖全局 `game_root_dir`，启动、完整性
+> 检查与修复均按该根执行；删除实例时**永不**清理该目录（只移除 profile 记录）。
 >
 > 扩展字段（全部 `#[serde(default)]`，旧 JSON 可无损加载）：`min_memory_mb`、
 > `metaspace_mb`、`process_priority`、`width` / `height` / `fullscreen`、

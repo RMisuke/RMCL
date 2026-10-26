@@ -99,7 +99,7 @@ impl LaunchOptions {
         platform: std::sync::Arc<rmccc_platform::Platform>,
     ) -> Self {
         let resolved = profile.resolve(config);
-        let game_dir = config.resolved_game_root();
+        let game_dir = instance_game_root(config, profile);
         let run_dir = instance_run_dir(config, profile);
 
         Self {
@@ -141,10 +141,26 @@ impl LaunchOptions {
     }
 }
 
+/// The authoritative game root for an instance.
+///
+/// Ordinary profiles share the launcher-configured root; profiles imported from
+/// an external game directory (HMCL etc.) carry their own root in
+/// `profile.game_dir` and set `external_root`.
+pub fn instance_game_root(
+    config: &rmccc_config::AppConfig,
+    profile: &rmccc_profile::Profile,
+) -> std::path::PathBuf {
+    if profile.external_root && !profile.game_dir.as_os_str().is_empty() {
+        profile.game_dir.clone()
+    } else {
+        config.resolved_game_root()
+    }
+}
+
 /// The run directory (`--gameDir`) for an instance.
 ///
-/// Equals the shared game root unless the instance's isolation setting gives it
-/// its own directory (HMCL `HMCLGameRepository.getRunDirectory`): `always`
+/// Equals the instance game root unless the instance's isolation setting gives
+/// it its own directory (HMCL `HMCLGameRepository.getRunDirectory`): `always`
 /// isolates every instance, `modded` only instances carrying a mod loader, and
 /// `never` shares one `.minecraft`.
 ///
@@ -157,7 +173,7 @@ pub fn instance_run_dir(
     let isolation = rmccc_version::IsolationType::parse(&profile.effective_isolation(config))
         .unwrap_or_default();
     rmccc_version::isolation::run_directory(
-        &config.resolved_game_root(),
+        &instance_game_root(config, profile),
         &profile.game_version,
         isolation,
         profile.mod_loader.is_some(),
@@ -246,6 +262,32 @@ mod tests {
             "loader_version": "0.16.9"
         }))
         .expect("valid ModLoaderConfig")
+    }
+
+    /// 外置目录（HMCL）的 profile：game_dir 优先于全局游戏根，run dir 也落在
+    /// 该目录的 versions/<id> 下（isolation=always）。
+    #[test]
+    fn test_external_root_uses_profile_game_dir() {
+        let config = isolation_config("modded");
+        let profile = rmccc_profile::Profile {
+            game_version: "1.20.1".into(),
+            game_dir: std::path::PathBuf::from("/ext/.minecraft"),
+            external_root: true,
+            isolation: Some("always".into()),
+            ..Default::default()
+        };
+        assert_eq!(
+            instance_game_root(&config, &profile),
+            std::path::PathBuf::from("/ext/.minecraft")
+        );
+        assert_eq!(
+            instance_run_dir(&config, &profile),
+            std::path::PathBuf::from("/ext/.minecraft/versions/1.20.1")
+        );
+        assert_eq!(
+            instance_mods_dir(&config, &profile),
+            std::path::PathBuf::from("/ext/.minecraft/versions/1.20.1/mods")
+        );
     }
 
     /// The run directory is what isolation actually controls: `always` isolates

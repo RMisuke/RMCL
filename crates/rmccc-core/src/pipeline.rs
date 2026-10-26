@@ -474,13 +474,49 @@ pub async fn repair_instance(
     progress: Option<&ProgressCb>,
     verify: rmccc_version::completion::CompletionVerify,
 ) -> Result<SetupReport> {
-    // 解析阶段持有 std RwLock 读锁，必须在 await 前释放。
-    let (game_root, resolved) = {
+    repair_instance_at(
+        core,
+        version_id,
+        &core.config.resolved_game_root(),
+        progress,
+        verify,
+    )
+    .await
+}
+
+/// Repair a version under an explicit game root (external HMCL directories).
+pub async fn repair_instance_at(
+    core: &CoreHandle,
+    version_id: &str,
+    game_root: &Path,
+    progress: Option<&ProgressCb>,
+    verify: rmccc_version::completion::CompletionVerify,
+) -> Result<SetupReport> {
+    let primary_root = core.config.resolved_game_root();
+    // 解析阶段持有 std RwLock 读锁，必须在 await 前释放。外置目录建临时仓库
+    //（refresh 是同步磁盘扫描，放到 blocking 池）。
+    let (game_root, resolved) = if game_root == primary_root.as_path() {
         let repo = core.game_repository.read().map_err(|_| repo_lock_error())?;
         let resolved = repo
             .get_resolved(version_id)
             .map_err(|e| RmcccError::Other(e.to_string()))?;
         (repo.game_dir().to_path_buf(), resolved)
+    } else {
+        let root = game_root.to_path_buf();
+        let id = version_id.to_string();
+        tokio::task::spawn_blocking(
+            move || -> Result<(std::path::PathBuf, rmccc_version::ResolvedVersion)> {
+                let mut repo = rmccc_version::DefaultGameRepository::new(root.clone());
+                repo.refresh()
+                    .map_err(|e| RmcccError::Other(e.to_string()))?;
+                let resolved = repo
+                    .get_resolved(&id)
+                    .map_err(|e| RmcccError::Other(e.to_string()))?;
+                Ok((root, resolved))
+            },
+        )
+        .await
+        .map_err(|e| RmcccError::Other(format!("repository join error: {e}")))??
     };
 
     let items = rmccc_version::completion::build_completion_downloads(
@@ -538,9 +574,10 @@ pub async fn ensure_launch_ready(
     // 启动路径用 Size 级校验（每次 launch 都跑，只 stat 不读文件内容）；
     // 哈希级复核属于显式"检查/修复"命令。下载引擎对替换文件独立复核哈希，
     // 尺寸级修复也不会装上坏内容。
-    repair_instance(
+    repair_instance_at(
         core,
         &profile.game_version,
+        &rmccc_launch::instance_game_root(&core.config, profile),
         progress,
         rmccc_version::completion::CompletionVerify::Size,
     )
@@ -691,6 +728,32 @@ impl ProcessListener for PlaytimeListener {
     }
 }
 
+/// Resolve the launch view for a profile, honoring an external game root.
+async fn resolve_launch_view(
+    core: &CoreHandle,
+    profile: &rmccc_profile::Profile,
+) -> Result<rmccc_version::GameVersion> {
+    if profile.external_root {
+        let root = rmccc_launch::instance_game_root(&core.config, profile);
+        let id = profile.game_version.clone();
+        return tokio::task::spawn_blocking(move || -> Result<rmccc_version::GameVersion> {
+            let mut repo = rmccc_version::DefaultGameRepository::new(root);
+            repo.refresh()
+                .map_err(|e| RmcccError::Other(e.to_string()))?;
+            repo.get_resolved(&id)
+                .map(|resolved| resolved.launch)
+                .map_err(|e| RmcccError::Other(e.to_string()))
+        })
+        .await
+        .map_err(|e| RmcccError::Other(format!("repository join error: {e}")))?;
+    }
+
+    let repo = core.game_repository.read().map_err(|_| repo_lock_error())?;
+    repo.get_resolved(&profile.game_version)
+        .map(|resolved| resolved.launch)
+        .map_err(|e| RmcccError::Other(e.to_string()))
+}
+
 /// 启动游戏并返回已托管进程（命令行生成、native 解压、log4j 提取、环境变量
 /// 注入、进程监控、输出转发全部由 [`rmccc_launch::DefaultLauncher`] 承担）。
 ///
@@ -703,13 +766,9 @@ pub async fn launch_game(
     listener: Arc<dyn ProcessListener>,
     progress: Option<&ProgressCb>,
 ) -> Result<Arc<ManagedProcess>> {
-    // 本地解析 launch 视图（HMCL resolved.launch，离线可用）。
-    let game_version = {
-        let repo = core.game_repository.read().map_err(|_| repo_lock_error())?;
-        repo.get_resolved(&profile.game_version)
-            .map_err(|e| RmcccError::Other(e.to_string()))?
-            .launch
-    };
+    // 本地解析 launch 视图（HMCL resolved.launch，离线可用）。外置目录的
+    // 版本不在主仓库索引里，按 profile 自己的 game_dir 临时建一份仓库。
+    let game_version = resolve_launch_view(core, profile).await?;
 
     // Perf audit 1.5: the probe spawns real JVM subprocesses (100-500 ms
     // each) — run it on the blocking pool, not an async worker.
@@ -997,6 +1056,33 @@ mod tests {
         };
         core.profile_store.save(&profile).expect("save profile");
         profile
+    }
+
+    /// 外置目录（HMCL）的版本不在主仓库索引里；launch 视图必须按 profile
+    /// 自己的 game_dir 临时建仓库解析，而不是回落到主游戏根。
+    #[tokio::test]
+    async fn test_external_profile_resolves_from_its_own_root() {
+        let (dir, core) = test_env("external-resolve");
+        let external_root = dir.join("hmcl/.minecraft");
+        let version_id = "1.20.4-Forge";
+        let version_dir = external_root.join("versions").join(version_id);
+        std::fs::create_dir_all(&version_dir).expect("external version dir");
+        let json = MINIMAL_VERSION_JSON.replace("\"1.20.4\"", "\"1.20.4-Forge\"");
+        std::fs::write(version_dir.join(format!("{version_id}.json")), json).expect("json");
+
+        let profile = rmccc_profile::Profile {
+            game_version: version_id.to_string(),
+            game_dir: external_root.clone(),
+            external_root: true,
+            ..Default::default()
+        };
+
+        let view = resolve_launch_view(&core.handle(), &profile)
+            .await
+            .expect("external view");
+        assert_eq!(view.id, version_id);
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[tokio::test]

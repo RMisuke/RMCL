@@ -52,6 +52,7 @@ pub const IPC_COMMANDS: &[&str] = &[
     "mods_apply_plan",
     "profile_list",
     "profile_create",
+    "profile_import_version",
     "profile_update",
     "profile_delete",
     "settings_get",
@@ -178,6 +179,7 @@ pub fn invoke_handlers() -> impl Fn(tauri::ipc::Invoke<tauri::Wry>) -> bool + Se
         // ── profile ──
         commands::profile::profile_list,
         commands::profile::profile_create,
+        commands::profile::profile_import_version,
         commands::profile::profile_update,
         commands::profile::profile_delete,
         // ── settings ──

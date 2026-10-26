@@ -3,6 +3,7 @@
 use crate::state::AppState;
 use rmccc_error::IpcError;
 use rmccc_profile::Profile;
+use rmccc_version::GameRepository as _;
 use serde::Deserialize;
 use ts_rs::TS;
 
@@ -98,6 +99,98 @@ pub async fn profile_create(
         ..Default::default()
     };
 
+    core.profile_store.save(&profile)?;
+    Ok(profile)
+}
+
+/// Import a version from an external game directory (HMCL / other launchers)
+/// as a first-class, launchable profile.
+///
+/// The profile's `game_dir` becomes the authoritative root for this version
+/// (libraries/assets/versions live there); `external_root = true` tells the
+/// launch/repair paths to stop using the launcher-wide game root.
+#[tauri::command]
+#[tracing::instrument(skip(state))]
+pub async fn profile_import_version(
+    state: tauri::State<'_, AppState>,
+    root: String,
+    version_id: String,
+) -> Result<Profile, IpcError> {
+    if version_id.trim().is_empty() {
+        return Err(IpcError {
+            code: rmccc_error::ErrorCode::ValidationError,
+            message: "version id cannot be empty".into(),
+            retryable: false,
+        });
+    }
+    let canonical = std::fs::canonicalize(&root).map_err(|_| IpcError {
+        code: rmccc_error::ErrorCode::ValidationError,
+        message: format!("游戏目录不存在或不可访问：{root}"),
+        retryable: false,
+    })?;
+
+    let core = {
+        let core = state.core.read().await;
+        core.handle()
+    };
+
+    // Idempotent: the browse view may call this repeatedly for the same version.
+    if let Some(existing) = core
+        .profile_store
+        .list()?
+        .into_iter()
+        .find(|p| p.external_root && p.game_version == version_id && p.game_dir == canonical)
+    {
+        return Ok(existing);
+    }
+
+    let root_for_scan = canonical.clone();
+    let vid = version_id.clone();
+    let detected = tokio::task::spawn_blocking(
+        move || -> Result<Option<rmccc_version::loader::LoaderIdentity>, IpcError> {
+            let mut repo = rmccc_version::DefaultGameRepository::new(root_for_scan);
+            repo.refresh().map_err(IpcError::from)?;
+            if !repo.has_instance(&vid) {
+                return Err(IpcError {
+                    code: rmccc_error::ErrorCode::ProfileNotFound,
+                    message: format!("该目录下没有版本 '{vid}'"),
+                    retryable: false,
+                });
+            }
+            let resolved = repo
+                .get_resolved(&vid)
+                .map_err(|e| IpcError::from(rmccc_error::RmcccError::Other(e.to_string())))?;
+            Ok(rmccc_version::loader::detect_loader(&resolved.standalone))
+        },
+    )
+    .await
+    .map_err(|e| IpcError {
+        code: rmccc_error::ErrorCode::InternalError,
+        message: format!("version scan join error: {e}"),
+        retryable: false,
+    })??;
+
+    let mod_loader = detected.and_then(|loader| {
+        rmccc_modloader::ModLoaderType::from_str(&loader.kind).map(|loader_type| {
+            rmccc_profile::ModLoaderConfig {
+                loader_type,
+                loader_version: loader.version,
+            }
+        })
+    });
+
+    let profile = Profile {
+        id: uuid::Uuid::new_v4().to_string(),
+        name: version_id.clone(),
+        game_version: version_id,
+        mod_loader,
+        game_dir: canonical,
+        external_root: true,
+        // HMCL 的版本目录通常自带 mods/saves，按 always 隔离运行目录。
+        isolation: Some("always".into()),
+        memory_mb: 4096,
+        ..Default::default()
+    };
     core.profile_store.save(&profile)?;
     Ok(profile)
 }
@@ -227,6 +320,12 @@ pub async fn profile_delete(
     cleanup_game_dir: bool,
 ) -> Result<(), IpcError> {
     let core = state.core.read().await;
-    core.profile_store.delete(&id, cleanup_game_dir)?;
+    // 外置目录（HMCL 等）是用户既有游戏目录，只允许移除 profile 记录，
+    // 绝不删除其 game_dir——即使前端误传 cleanup=true。
+    let cleanup = match core.profile_store.get(&id)? {
+        Some(profile) => cleanup_game_dir && !profile.external_root,
+        None => cleanup_game_dir,
+    };
+    core.profile_store.delete(&id, cleanup)?;
     Ok(())
 }

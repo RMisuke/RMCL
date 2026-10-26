@@ -51,13 +51,17 @@ pub struct MissingFileInfo {
     pub path: String,
 }
 
-/// 把 `instance_*` 的 id 解析成**版本 id**（ADR-002 决策 2）。
+/// Resolve an instance id to its version id **and** authoritative game root.
 ///
-/// 先按 profile id 查（UI 传的就是它），命中则用该实例的 `game_version`；
-/// 未命中再当作版本 id 直接查仓库；两者都不存在才报 `ProfileNotFound`。
-async fn resolve_version_id(core: &rmccc_core::CoreHandle, id: &str) -> Result<String, IpcError> {
+/// Profiles imported from an external game directory carry `external_root` and
+/// use their own `game_dir`; everything else keeps the configured game root.
+async fn resolve_target(
+    core: &rmccc_core::CoreHandle,
+    id: &str,
+) -> Result<(String, std::path::PathBuf), IpcError> {
     if let Some(profile) = core.profile_store.get(id)? {
-        return Ok(profile.game_version);
+        let root = rmccc_launch::instance_game_root(&core.config, &profile);
+        return Ok((profile.game_version, root));
     }
 
     let known = {
@@ -65,7 +69,7 @@ async fn resolve_version_id(core: &rmccc_core::CoreHandle, id: &str) -> Result<S
         repo.get_resolved(id).is_ok()
     };
     if known {
-        return Ok(id.to_string());
+        return Ok((id.to_string(), core.config.resolved_game_root()));
     }
 
     Err(IpcError {
@@ -310,13 +314,26 @@ pub async fn instance_check_completion(
         let core = state.core.read().await;
         core.handle()
     };
-    let version_id = resolve_version_id(&core, &id).await?;
+    let (version_id, game_root) = resolve_target(&core, &id).await?;
+    let resolved = if game_root == core.config.resolved_game_root() {
+        let repo = core.game_repository.read().map_err(|_| locked_error())?;
+        repo.get_resolved(&version_id)
+            .map_err(|e| IpcError::from(rmccc_error::RmcccError::Other(e.to_string())))?
+    } else {
+        let root = game_root.clone();
+        let vid = version_id.clone();
+        tokio::task::spawn_blocking(
+            move || -> Result<rmccc_version::ResolvedVersion, IpcError> {
+                let mut repo = rmccc_version::DefaultGameRepository::new(root);
+                repo.refresh().map_err(IpcError::from)?;
+                repo.get_resolved(&vid)
+                    .map_err(|e| IpcError::from(rmccc_error::RmcccError::Other(e.to_string())))
+            },
+        )
+        .await
+        .map_err(join_error)??
+    };
 
-    let repo = core.game_repository.read().map_err(|_| locked_error())?;
-    let game_root = repo.game_dir().to_path_buf();
-    let resolved = repo
-        .get_resolved(&version_id)
-        .map_err(|e| IpcError::from(rmccc_error::RmcccError::Other(e.to_string())))?;
     // 显式检查命令：全量 SHA1 复核（启动路径只用 Size 级）。
     let missing = rmccc_version::completion::check_completion(
         &game_root,
@@ -348,10 +365,11 @@ pub async fn instance_repair(
         let core = state.core.read().await;
         core.handle()
     };
-    let version_id = resolve_version_id(&core, &id).await?;
-    let report = rmccc_core::pipeline::repair_instance(
+    let (version_id, game_root) = resolve_target(&core, &id).await?;
+    let report = rmccc_core::pipeline::repair_instance_at(
         &core,
         &version_id,
+        &game_root,
         None,
         rmccc_version::completion::CompletionVerify::Hash,
     )
@@ -421,7 +439,7 @@ pub async fn instance_paths(
         retryable: false,
     })?;
 
-    let game_root = core.config.resolved_game_root();
+    let game_root = rmccc_launch::instance_game_root(&core.config, &profile);
     let run_dir = rmccc_launch::instance_run_dir(&core.config, &profile);
     let mods_dir = rmccc_launch::instance_mods_dir(&core.config, &profile);
 
