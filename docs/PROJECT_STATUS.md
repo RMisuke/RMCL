@@ -19,7 +19,7 @@
    `on_exit` 时把本次秒数累加回 profile。GUI/CLI/MCP 共用同一入口；不含安装/修复/Java 探测时间；
    应用在游戏运行中退出则本次时长不记（下次启动重新计时）。
 3. **UI**：启动卡副行改为「累计游玩 X 小时 Y 分 / 尚未游玩」（新增 `playtime.*` i18n 与 `playtimeParts` 纯函数 + 2 条单测）；
-   账号卡删除"实例数 + ID"整行，头像圆角 15→9px、用户名 14→17px、两行重排并略下移；
+   账号卡删除"实例数 + ID"整行，头像圆角 15→6px、用户名 14→17px、两行重排并略下移；
    provider 对外统一显示 `Microsoft` / `Offline`（新增 `providerLabel`，Home 与 Accounts 两处），删除两条死 i18n key。
 4. 验证：`cargo test --workspace` **656 passed / 0 failed**、clippy 零警告、`pnpm typecheck`、`pnpm test`（34）、`pnpm build`；
    demo harness 1440×900 截图复核两张卡片。
