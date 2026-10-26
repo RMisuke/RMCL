@@ -44,6 +44,7 @@ impl RemoteVersion for LegacyFabricRemoteVersion {
         _ctx: &super::super::remote_version::InstallTaskContext<'_>,
     ) -> Result<Box<dyn InstallTask>> {
         Ok(Box::new(super::install_task::LegacyFabricInstallTask {
+            client: _dm.client_for_tasks(),
             game_version: self.game_version.clone(),
             loader_version: self.loader_version.clone(),
             meta_url: self.meta_url.clone(),

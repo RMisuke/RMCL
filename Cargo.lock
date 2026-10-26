@@ -3650,6 +3650,7 @@ dependencies = [
  "rmccc-platform",
  "serde",
  "serde_json",
+ "tokio",
  "tracing",
  "ts-rs",
  "zip 2.4.2",

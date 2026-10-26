@@ -39,6 +39,7 @@ impl RemoteVersion for OptiFineRemoteVersion {
         _ctx: &super::super::remote_version::InstallTaskContext<'_>,
     ) -> Result<Box<dyn InstallTask>> {
         Ok(Box::new(super::install_task::OptiFineInstallTask {
+            client: _dm.client_for_tasks(),
             game_version: self.game_version.clone(),
             optifine_version: self.optifine_version.clone(),
             download_url: self.download_url.clone(),

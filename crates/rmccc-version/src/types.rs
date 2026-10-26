@@ -110,7 +110,10 @@ pub struct GameVersion {
     /// Fixes Bug #7: Tauri `version_install` must save original camelCase JSON,
     /// not the Rust struct's snake_case serialization.
     #[serde(skip)]
-    pub raw_json: Option<String>,
+    /// Shared, not owned (perf audit V4): every parsed copy of a version
+    /// references the same original JSON string instead of duplicating it
+    /// (vanilla ~60 KB, merged Forge chains up to ~400 KB per clone).
+    pub raw_json: Option<std::sync::Arc<str>>,
 }
 
 fn is_false(v: &bool) -> bool {
@@ -362,12 +365,24 @@ pub struct LibraryRule {
 
 impl From<LibraryRule> for CompatibilityRule {
     fn from(r: LibraryRule) -> Self {
+        Self::from_borrowed(&r)
+    }
+}
+
+impl From<&LibraryRule> for CompatibilityRule {
+    fn from(r: &LibraryRule) -> Self {
+        Self::from_borrowed(r)
+    }
+}
+
+impl CompatibilityRule {
+    fn from_borrowed(r: &LibraryRule) -> Self {
         Self {
-            action: r.action,
-            os: r.os.map(|os| OsCondition {
-                name: os.name,
-                arch: os.arch,
-                version: os.version,
+            action: r.action.clone(),
+            os: r.os.as_ref().map(|os| OsCondition {
+                name: os.name.clone(),
+                arch: os.arch.clone(),
+                version: os.version.clone(),
             }),
             features: None,
         }

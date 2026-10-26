@@ -104,11 +104,25 @@ pub async fn modloader_install(
 
     // 安装细节回调：modloader crate 的阶段事件逐条转发为 IPC 进度事件
     //（下载字节 / 安装器 stdout 原行 / 检测产物 / 补库），Task Center 展示。
+    // "detail"（安装器 stdout 原行）可达每秒数百条，按 100ms 限流转发；
+    // 阶段/百分比里程碑事件不受限流影响（perf audit 2.2）。
     let progress: rmccc_modloader::InstallProgressCallback = {
         let app_handle = app_handle.clone();
         let profile_id = profile_id.clone();
         let loader_type = loader_type.clone();
+        let progress_created = std::time::Instant::now();
+        let last_detail_ms = std::sync::atomic::AtomicU64::new(0);
         Arc::new(move |event: rmccc_modloader::InstallProgressEvent| {
+            if event.stage == "detail" {
+                const DETAIL_WINDOW_MS: u64 = 100;
+                let now_ms = progress_created.elapsed().as_millis() as u64;
+                if now_ms.saturating_sub(last_detail_ms.load(std::sync::atomic::Ordering::Relaxed))
+                    < DETAIL_WINDOW_MS
+                {
+                    return;
+                }
+                last_detail_ms.store(now_ms, std::sync::atomic::Ordering::Relaxed);
+            }
             emit_modloader_progress(
                 &app_handle,
                 &profile_id,

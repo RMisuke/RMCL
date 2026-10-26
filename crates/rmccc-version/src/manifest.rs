@@ -19,7 +19,17 @@ pub struct MojangVersionProvider {
     /// 上次响应的 ETag（P2-09 条件请求 If-None-Match）。
     etag: std::sync::Mutex<Option<String>>,
     /// 进程内版本列表缓存（P2-21 请求级缓存 + 304 回退）。
-    cached_versions: std::sync::Mutex<Option<Vec<VersionInfo>>>,
+    cached_versions: std::sync::Mutex<Option<std::sync::Arc<Vec<VersionInfo>>>>,
+    /// Perf audit V2: ETag + manifest persisted across restarts — without it
+    /// every cold start re-downloaded the ~500 KB manifest unconditionally.
+    disk_cache: Option<std::path::PathBuf>,
+}
+
+/// On-disk shape of the manifest cache file.
+#[derive(serde::Serialize, serde::Deserialize)]
+struct DiskManifestCache {
+    etag: Option<String>,
+    versions: Vec<VersionInfo>,
 }
 
 impl MojangVersionProvider {
@@ -29,6 +39,50 @@ impl MojangVersionProvider {
             version_manifest_url: VERSION_MANIFEST_URL.to_string(),
             etag: std::sync::Mutex::new(None),
             cached_versions: std::sync::Mutex::new(None),
+            disk_cache: None,
+        }
+    }
+
+    /// Persist ETag + manifest to `path` and seed the in-memory cache from it.
+    ///
+    /// Call right after [`Self::new`]; a missing or corrupt file is ignored
+    /// (a full re-fetch is always a correct fallback).
+    pub fn with_disk_cache(mut self, path: std::path::PathBuf) -> Self {
+        if let Ok(text) = std::fs::read_to_string(&path) {
+            if let Ok(cache) = serde_json::from_str::<DiskManifestCache>(&text) {
+                *self.etag.lock().unwrap_or_else(|p| p.into_inner()) = cache.etag;
+                if !cache.versions.is_empty() {
+                    *self.cached_versions.lock().unwrap_or_else(|p| p.into_inner()) =
+                        Some(std::sync::Arc::new(cache.versions));
+                }
+                tracing::info!(path = %path.display(), "Loaded persisted version manifest cache");
+            }
+        }
+        self.disk_cache = Some(path);
+        self
+    }
+
+    /// Write-through the disk cache after a successful manifest fetch.
+    async fn persist_disk_cache(&self, versions: &[VersionInfo]) {
+        let Some(path) = &self.disk_cache else {
+            return;
+        };
+        let etag = self.etag.lock().unwrap_or_else(|p| p.into_inner()).clone();
+        let payload = DiskManifestCache {
+            etag,
+            versions: versions.to_vec(),
+        };
+        match serde_json::to_string(&payload) {
+            Ok(text) => {
+                if let Some(parent) = path.parent() {
+                    let _ = tokio::fs::create_dir_all(parent).await;
+                }
+                // Write-through failure only costs one extra download next start.
+                if let Err(e) = tokio::fs::write(path, text).await {
+                    tracing::warn!(error = %e, "Could not persist version manifest cache");
+                }
+            }
+            Err(e) => tracing::warn!(error = %e, "Could not serialize version manifest cache"),
         }
     }
 }
@@ -61,7 +115,7 @@ impl VersionProvider for MojangVersionProvider {
                 .clone()
             {
                 tracing::debug!("Version manifest 304 — using in-memory cache");
-                return Ok(cached);
+                return Ok((*cached).clone());
             }
         }
 
@@ -119,7 +173,9 @@ impl VersionProvider for MojangVersionProvider {
         *self
             .cached_versions
             .lock()
-            .unwrap_or_else(|p| p.into_inner()) = Some(versions.clone());
+            .unwrap_or_else(|p| p.into_inner()) =
+            Some(std::sync::Arc::new(versions.clone()));
+        self.persist_disk_cache(&versions).await;
         Ok(versions)
     }
 
@@ -129,8 +185,8 @@ impl VersionProvider for MojangVersionProvider {
             .cached_versions
             .lock()
             .unwrap_or_else(|p| p.into_inner())
-            .clone()
-            .and_then(|vs| vs.into_iter().find(|v| v.id == id).map(|v| v.url));
+            .as_ref()
+            .and_then(|vs| vs.iter().find(|v| v.id == id).map(|v| v.url.clone()));
 
         let url = match info_url {
             Some(u) => u,
@@ -176,7 +232,7 @@ impl VersionProvider for MojangVersionProvider {
 /// can parse `versions/{id}/{id}.json` files from disk with the exact same
 /// typed model used by the network provider.
 pub(crate) fn parse_version_json(id: &str, json: &str) -> Result<GameVersion> {
-    let v: serde_json::Value = serde_json::from_str(json)?;
+    let mut v: serde_json::Value = serde_json::from_str(json)?;
 
     let main_class = v["mainClass"]
         .as_str()
@@ -210,26 +266,33 @@ pub(crate) fn parse_version_json(id: &str, json: &str) -> Result<GameVersion> {
     // Unparseable entries are skipped with a warning: an empty-name
     // `Library::default()` placeholder used to slip into classpaths and
     // download lists (audit 2026-10-25, batch 1).
-    let libraries: Vec<super::types::Library> = v["libraries"]
-        .as_array()
-        .map(|arr| {
-            arr.iter()
-                .filter_map(|lib| {
-                    match serde_json::from_value::<super::types::Library>(lib.clone()) {
-                        Ok(parsed) => Some(parsed),
-                        Err(e) => {
-                            tracing::warn!(
-                                error = %e,
-                                lib = %lib["name"],
-                                "Skipping unparseable library entry"
-                            );
-                            None
-                        }
+    // Perf audit V3: take ownership of the raw array and parse by value —
+    // `lib.clone()` deep-copied each library's JSON tree (~100 per version)
+    // only for serde to immediately drop it.
+    let libraries: Vec<super::types::Library> = match v.get_mut("libraries").map(std::mem::take) {
+        Some(serde_json::Value::Array(arr)) => arr
+            .into_iter()
+            .filter_map(|lib| {
+                let name = lib
+                    .get("name")
+                    .and_then(|n| n.as_str())
+                    .unwrap_or("")
+                    .to_string();
+                match serde_json::from_value::<super::types::Library>(lib) {
+                    Ok(parsed) => Some(parsed),
+                    Err(e) => {
+                        tracing::warn!(
+                            error = %e,
+                            lib = %name,
+                            "Skipping unparseable library entry"
+                        );
+                        None
                     }
-                })
-                .collect()
-        })
-        .unwrap_or_default();
+                }
+            })
+            .collect(),
+        _ => Vec::new(),
+    };
 
     // Parse downloads (client JAR)
     let mut downloads = std::collections::HashMap::new();
@@ -394,7 +457,7 @@ pub(crate) fn parse_version_json(id: &str, json: &str) -> Result<GameVersion> {
         compliance_level,
         time,
         release_time,
-        raw_json: Some(json.to_string()),
+        raw_json: Some(std::sync::Arc::from(json)),
     })
 }
 

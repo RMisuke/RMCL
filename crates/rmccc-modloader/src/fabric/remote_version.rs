@@ -75,6 +75,7 @@ impl RemoteVersion for FabricRemoteVersion {
         _ctx: &super::super::remote_version::InstallTaskContext<'_>,
     ) -> Result<Box<dyn InstallTask>> {
         Ok(Box::new(super::install_task::FabricInstallTask {
+            client: _dm.client_for_tasks(),
             game_version: self.game_version.clone(),
             loader_version: self.loader_version.clone(),
             launch_meta_url: self.launch_meta_url(),

@@ -15,6 +15,7 @@
 use rmccc_error::{Result, RmcccError};
 use rmccc_platform::PlatformDescriptor;
 use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
 use std::path::{Path, PathBuf};
 
 use super::compatibility;
@@ -38,7 +39,11 @@ fn launcher_profiles_content() -> String {
 /// A filesystem-backed game repository rooted at a `.minecraft` directory.
 pub struct DefaultGameRepository {
     base_directory: PathBuf,
-    manifests: HashMap<String, GameVersion>,
+    manifests: HashMap<String, Arc<GameVersion>>,
+    /// (mtime, len) memo of parsed manifests keyed by JSON path (perf audit
+    /// V6): `refresh()` runs after every install/repair/rename — unchanged
+    /// version JSONs used to be re-read and re-parsed wholesale each time.
+    parse_cache: HashMap<PathBuf, (std::time::SystemTime, u64, Arc<GameVersion>)>,
     /// 平台描述符：compatibility rules 与 natives 目录命名经它判断，
     /// 由组装层（`CoreContext`）注入一次（指南 §5.7.1 第 3/5 条）。
     platform: PlatformDescriptor,
@@ -54,8 +59,31 @@ impl DefaultGameRepository {
         Self {
             base_directory,
             manifests: HashMap::new(),
+            parse_cache: HashMap::new(),
             platform,
         }
+    }
+
+    /// Parse (or memo-hit) one instance manifest.
+    ///
+    /// A stat-identical hit returns the shared [`Arc`] without touching the
+    /// file contents; misses read + parse and populate the memo.
+    fn manifest_memo(
+        cache: &mut HashMap<PathBuf, (std::time::SystemTime, u64, Arc<GameVersion>)>,
+        json_path: &Path,
+        folder_id: &str,
+    ) -> Result<Arc<GameVersion>> {
+        let meta = std::fs::metadata(json_path)?;
+        let mtime = meta.modified().unwrap_or(std::time::UNIX_EPOCH);
+        let len = meta.len();
+        if let Some((m, l, arc)) = cache.get(json_path) {
+            if *m == mtime && *l == len {
+                return Ok(arc.clone());
+            }
+        }
+        let arc = Arc::new(Self::read_instance_manifest(json_path, folder_id)?);
+        cache.insert(json_path.to_path_buf(), (mtime, len, arc.clone()));
+        Ok(arc)
     }
 
     /// 当前注入的平台描述符。
@@ -130,11 +158,12 @@ impl DefaultGameRepository {
                 "Version inheritance cycle detected at '{id}'"
             )));
         }
+        // Arc clone (cheap) — the manifest itself is shared (perf audit V5).
         let manifest = self
             .manifests
             .get(id)
-            .cloned()
-            .ok_or_else(|| RmcccError::Other(format!("Version not installed: {id}")))?;
+            .ok_or_else(|| RmcccError::Other(format!("Version not installed: {id}")))?
+            .clone();
 
         patches_out.extend(manifest.patches.clone());
 
@@ -143,7 +172,7 @@ impl DefaultGameRepository {
             Self::merge_child_into_parent(&mut parent_resolved, &manifest);
             parent_resolved
         } else {
-            manifest.clone()
+            GameVersion::clone(&manifest)
         };
         // Base version's own patches (root-level) applied too.
         let _ = &mut merged;
@@ -152,11 +181,11 @@ impl DefaultGameRepository {
 
     /// Resolve an instance into the dual-view [`ResolvedVersion`].
     pub fn resolve(&self, id: &str) -> Result<ResolvedVersion> {
-        let unresolved = self
-            .manifests
-            .get(id)
-            .cloned()
-            .ok_or_else(|| RmcccError::Other(format!("Version not installed: {id}")))?;
+        let unresolved = GameVersion::clone(
+            self.manifests
+                .get(id)
+                .ok_or_else(|| RmcccError::Other(format!("Version not installed: {id}")))?,
+        );
 
         let mut visited = HashSet::new();
         let mut patches = Vec::new();
@@ -260,7 +289,10 @@ impl GameRepository for DefaultGameRepository {
 
     fn refresh(&mut self) -> Result<()> {
         let versions_dir = file_layout::versions_dir(&self.base_directory);
+        // Perf audit V6: rebuild into a fresh map, reusing memoized parses for
+        // stat-identical JSONs instead of `clear()` + full re-read.
         self.manifests.clear();
+        let mut parse_cache = std::mem::take(&mut self.parse_cache);
         self.ensure_launcher_profiles()?;
 
         if !versions_dir.exists() {
@@ -280,8 +312,8 @@ impl GameRepository for DefaultGameRepository {
             };
 
             let json_path = path.join(format!("{folder_id}.json"));
-            let manifest = if json_path.exists() {
-                match Self::read_instance_manifest(&json_path, &folder_id) {
+            let manifest: Arc<GameVersion> = if json_path.exists() {
+                match Self::manifest_memo(&mut parse_cache, &json_path, &folder_id) {
                     Ok(m) => m,
                     Err(e) => {
                         tracing::warn!(
@@ -305,7 +337,7 @@ impl GameRepository for DefaultGameRepository {
                 });
                 match fallback {
                     Some(fb) if json_looks_like_version_manifest(&fb) => {
-                        match Self::read_instance_manifest(&fb, &folder_id) {
+                        match Self::manifest_memo(&mut parse_cache, &fb, &folder_id) {
                             Ok(m) => m,
                             Err(e) => {
                                 tracing::warn!(folder = %folder_id, error = %e, "Skipping version");
@@ -318,8 +350,10 @@ impl GameRepository for DefaultGameRepository {
             };
 
             // Compatibility filter (HMCL `CompatibilityRule.appliesToCurrentEnvironment`).
-            if !compatibility::applies_to_environment(&manifest.compatibility_rules, &self.platform)
-            {
+            if !compatibility::applies_to_environment(
+                &manifest.compatibility_rules,
+                &self.platform,
+            ) {
                 tracing::debug!(
                     folder = %folder_id,
                     "Instance filtered by compatibility rules (not applicable on this OS)"
@@ -331,7 +365,7 @@ impl GameRepository for DefaultGameRepository {
         }
 
         // Drop instances whose inheritance chain references a missing parent.
-        let resolvable: Vec<String> = self
+        let resolvable: HashSet<String> = self
             .manifests
             .keys()
             .filter(|id| {
@@ -342,11 +376,21 @@ impl GameRepository for DefaultGameRepository {
             .collect();
         self.manifests.retain(|id, _| resolvable.contains(id));
 
+        // Keep only memo entries whose instance folder still exists — files
+        // of renamed/removed instances drop out of the cache.
+        let live_dirs: HashSet<PathBuf> = self
+            .manifests
+            .keys()
+            .map(|id| file_layout::versions_dir(&self.base_directory).join(id))
+            .collect();
+        parse_cache.retain(|path, _| path.parent().is_some_and(|p| live_dirs.contains(p)));
+
         tracing::info!(
             game_dir = %self.base_directory.display(),
             instances = self.manifests.len(),
             "Game repository refreshed"
         );
+        self.parse_cache = parse_cache;
         Ok(())
     }
 
@@ -361,7 +405,7 @@ impl GameRepository for DefaultGameRepository {
     }
 
     fn get_manifest(&self, id: &str) -> Option<&GameVersion> {
-        self.manifests.get(id)
+        self.manifests.get(id).map(|m| m.as_ref())
     }
 
     fn get_resolved(&self, id: &str) -> Result<ResolvedVersion> {

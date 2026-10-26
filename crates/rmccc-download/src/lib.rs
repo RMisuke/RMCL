@@ -105,6 +105,9 @@ pub enum DownloadStatus {
 struct BatchState {
     cancel_token: CancellationToken,
     paused: AtomicBool,
+    /// Mirrors `paused`; `resume()` sends through it to wake the feeder
+    /// immediately instead of a 100 ms busy-poll (perf audit D9).
+    paused_tx: tokio::sync::watch::Sender<bool>,
     /// Signalled when the batch finishes (all workers complete or cancelled).
     completion: tokio::sync::Notify,
 }
@@ -148,13 +151,14 @@ impl CacheRepository {
     /// Returns `Some(path)` if the file exists in the cache,
     /// `None` otherwise. A malformed key (not 40 hex chars) is reported as a
     /// cache miss, never as a panic or an out-of-`objects/` path.
-    pub fn check_by_sha1(&self, sha1: &str) -> Option<PathBuf> {
+    ///
+    /// Async (perf audit D2): the lookup stats the filesystem, which must not
+    /// block the tokio worker when the caller runs on the async runtime.
+    pub async fn check_by_sha1(&self, sha1: &str) -> Option<PathBuf> {
         let path = self.sha1_to_path(sha1)?;
-        if path.exists() {
-            let meta = std::fs::metadata(&path).ok()?;
-            if meta.len() > 0 {
-                return Some(path);
-            }
+        let meta = tokio::fs::metadata(&path).await.ok()?;
+        if meta.len() > 0 {
+            return Some(path);
         }
         None
     }
@@ -163,14 +167,17 @@ impl CacheRepository {
     ///
     /// Copies `src` to `cache_dir/objects/{sha1[0:2]}/{sha1}`.
     /// Returns the cached path.
-    pub fn store(&self, src: &Path, sha1: &str) -> std::io::Result<PathBuf> {
+    ///
+    /// Async (perf audit D2): the copy can move hundreds of MB (Forge
+    /// installer) and must not block the tokio worker.
+    pub async fn store(&self, src: &Path, sha1: &str) -> std::io::Result<PathBuf> {
         let dest = self.sha1_to_path(sha1).ok_or_else(|| {
             std::io::Error::new(
                 std::io::ErrorKind::InvalidInput,
                 "Invalid SHA1 cache key (expected 40 hex chars)",
             )
         })?;
-        if dest.exists() {
+        if tokio::fs::metadata(&dest).await.is_ok() {
             return Ok(dest); // already cached
         }
         let parent = dest.parent().ok_or_else(|| {
@@ -179,8 +186,8 @@ impl CacheRepository {
                 "Invalid cache destination path",
             )
         })?;
-        std::fs::create_dir_all(parent)?;
-        std::fs::copy(src, &dest)?;
+        tokio::fs::create_dir_all(parent).await?;
+        tokio::fs::copy(src, &dest).await?;
         Ok(dest)
     }
 
@@ -292,9 +299,11 @@ impl ConcurrentDownloadManager {
 
         tracing::info!(batch_id = %id, count = total_files, "Starting download batch");
 
+        let (paused_tx, _) = tokio::sync::watch::channel(false);
         let batch_state = Arc::new(BatchState {
             cancel_token: CancellationToken::new(),
             paused: AtomicBool::new(false),
+            paused_tx,
             completion: tokio::sync::Notify::new(),
         });
         self.batches.insert(id.clone(), batch_state.clone());
@@ -315,6 +324,7 @@ impl ConcurrentDownloadManager {
         // Spawn the download task
         tokio::spawn({
             let batch_state = batch_state.clone();
+            let batches = self.batches.clone();
             let progress = progress.clone();
             let batch_id = batch_id.clone();
             let completed_files = completed_files.clone();
@@ -322,32 +332,35 @@ impl ConcurrentDownloadManager {
             let downloaded_bytes = downloaded_bytes.clone();
 
             async move {
-                let (tx, rx) = tokio::sync::mpsc::channel(concurrency);
-                let rx = Arc::new(tokio::sync::Mutex::new(rx));
+                // Perf audit D5/D9: the old mpsc + Mutex<Receiver> feed made
+                // every worker contend on one lock per item, and pause used a
+                // 100 ms busy-poll. A bounded JoinSet pulls items directly
+                // (semaphore = concurrency limit) and pause waits on a watch
+                // channel until resume() signals.
+                let sem = Arc::new(tokio::sync::Semaphore::new(concurrency));
+                let mut paused_rx = feed_batch_state.paused_tx.subscribe();
+                let mut set = tokio::task::JoinSet::new();
 
-                // Feed items into channel
-                let feed_handle = tokio::spawn(async move {
-                    for item in items {
-                        if feed_batch_state.cancel_token.is_cancelled() {
-                            break;
-                        }
-                        while feed_batch_state.paused.load(Ordering::Relaxed)
-                            && !feed_batch_state.cancel_token.is_cancelled()
-                        {
-                            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-                        }
-                        if tx.send(item).await.is_err() {
+                for item in items {
+                    if feed_batch_state.cancel_token.is_cancelled() {
+                        break;
+                    }
+                    while *paused_rx.borrow_and_update()
+                        && !feed_batch_state.cancel_token.is_cancelled()
+                    {
+                        if paused_rx.changed().await.is_err() {
                             break;
                         }
                     }
-                });
+                    if feed_batch_state.cancel_token.is_cancelled() {
+                        break;
+                    }
+                    let Ok(permit) = sem.clone().acquire_owned().await else {
+                        break;
+                    };
 
-                // Spawn workers
-                let mut worker_handles = Vec::new();
-                for _ in 0..concurrency {
                     let client = client.clone();
                     let cache = cache.clone();
-                    let rx = rx.clone();
                     let cancel = batch_state.cancel_token.clone();
                     let progress = progress.clone();
                     let batch_id = batch_id.clone();
@@ -355,62 +368,48 @@ impl ConcurrentDownloadManager {
                     let failed_files = failed_files.clone();
                     let downloaded_bytes = downloaded_bytes.clone();
 
-                    worker_handles.push(tokio::spawn(async move {
-                        loop {
-                            let item = {
-                                let mut rx = rx.lock().await;
-                                rx.recv().await
-                            };
-                            let item = match item {
-                                Some(item) => item,
-                                None => break,
-                            };
-                            if cancel.is_cancelled() {
-                                break;
+                    set.spawn(async move {
+                        let _permit = permit;
+                        if cancel.is_cancelled() {
+                            return;
+                        }
+                        match download_with_retry(
+                            &client,
+                            &item,
+                            retry_config_max_retries,
+                            cache.as_deref(),
+                        )
+                        .await
+                        {
+                            Ok(bytes) => {
+                                let cf = completed_files.fetch_add(1, Ordering::Relaxed) + 1;
+                                let db =
+                                    downloaded_bytes.fetch_add(bytes, Ordering::Relaxed) + bytes;
+                                progress(DownloadProgress {
+                                    batch_id,
+                                    completed_files: cf,
+                                    total_files,
+                                    downloaded_bytes: db,
+                                    total_bytes,
+                                    failed_files: failed_files.load(Ordering::Relaxed),
+                                    current_file: item
+                                        .dest
+                                        .file_name()
+                                        .map(|n| n.to_string_lossy().to_string()),
+                                });
                             }
-
-                            let result = download_with_retry(
-                                &client,
-                                &item,
-                                retry_config_max_retries,
-                                cache.as_deref(),
-                            )
-                            .await;
-
-                            match result {
-                                Ok(bytes) => {
-                                    let cf = completed_files.fetch_add(1, Ordering::Relaxed) + 1;
-                                    let db = downloaded_bytes.fetch_add(bytes, Ordering::Relaxed)
-                                        + bytes;
-                                    progress(DownloadProgress {
-                                        batch_id: batch_id.clone(),
-                                        completed_files: cf,
-                                        total_files,
-                                        downloaded_bytes: db,
-                                        total_bytes,
-                                        failed_files: failed_files.load(Ordering::Relaxed),
-                                        current_file: item
-                                            .dest
-                                            .file_name()
-                                            .map(|n| n.to_string_lossy().to_string()),
-                                    });
-                                }
-                                Err(e) => {
-                                    failed_files.fetch_add(1, Ordering::Relaxed);
-                                    tracing::error!("Download failed: {} — {e}", item.url);
-                                }
+                            Err(e) => {
+                                failed_files.fetch_add(1, Ordering::Relaxed);
+                                tracing::error!("Download failed: {} — {e}", item.url);
                             }
                         }
-                    }));
+                    });
                 }
 
-                for handle in worker_handles {
-                    if let Err(e) = handle.await {
+                while let Some(joined) = set.join_next().await {
+                    if let Err(e) = joined {
                         tracing::error!(batch_id = %batch_id, "Worker panicked: {e}");
                     }
-                }
-                if let Err(e) = feed_handle.await {
-                    tracing::error!(batch_id = %batch_id, "Feed task panicked: {e}");
                 }
 
                 let fc = completed_files.load(Ordering::Relaxed);
@@ -442,6 +441,10 @@ impl ConcurrentDownloadManager {
 
                 // Signal completion so callers waiting via wait_for_batch() are notified.
                 batch_state.completion.notify_one();
+
+                // Perf audit D6: drop the finished batch's state — entries
+                // used to live forever in a long-running GUI process.
+                batches.remove(&batch_id);
             }
         });
 
@@ -453,7 +456,10 @@ impl ConcurrentDownloadManager {
     /// This is essential for CLI usage where callers must wait for all files to
     /// be written before proceeding to the next step (Bug #5).
     pub async fn wait_for_batch(&self, batch_id: &str) {
-        if let Some(state) = self.batches.get(batch_id) {
+        // Clone the state out first — the DashMap guard must never live
+        // across an await (it would block the shard for other batches).
+        let state = self.batches.get(batch_id).map(|s| s.clone());
+        if let Some(state) = state {
             state.completion.notified().await;
         }
     }
@@ -468,6 +474,7 @@ impl ConcurrentDownloadManager {
     pub fn pause(&self, batch_id: &str) {
         if let Some(state) = self.batches.get(batch_id) {
             state.paused.store(true, Ordering::Relaxed);
+            let _ = state.paused_tx.send(true);
             tracing::info!(batch_id = %batch_id, "Batch paused");
         }
     }
@@ -475,6 +482,7 @@ impl ConcurrentDownloadManager {
     pub fn resume(&self, batch_id: &str) {
         if let Some(state) = self.batches.get(batch_id) {
             state.paused.store(false, Ordering::Relaxed);
+            let _ = state.paused_tx.send(false);
             tracing::info!(batch_id = %batch_id, "Batch resumed");
         }
     }
@@ -534,6 +542,16 @@ pub fn part_path(dest: &Path) -> PathBuf {
     dest.with_file_name(format!("{name}.part"))
 }
 
+/// Outcome of one single-URL download attempt.
+struct SingleDownload {
+    size: u64,
+    /// SHA1 computed while streaming the response body (perf audit D1) —
+    /// `None` when the attempt was a Range resume onto an existing `.part`
+    /// (the hash of the resumed prefix is unknown and the caller falls back
+    /// to a full re-read of the staged file).
+    sha1: Option<String>,
+}
+
 /// Download a single item with retry and multi-URL fallback.
 ///
 /// Features:
@@ -556,24 +574,40 @@ async fn download_with_retry(
     // it instead of failing forever.
     if let Some(expected) = &item.expected_sha1 {
         if item.dest.exists() {
-            match sha1_file(&item.dest).await {
-                Ok(actual) if actual.eq_ignore_ascii_case(expected) => {
-                    tracing::debug!("Already complete: {} ({expected})", item.dest.display());
-                    let size = tokio::fs::metadata(&item.dest)
-                        .await
-                        .map(|m| m.len())
-                        .unwrap_or(0);
-                    return Ok(size);
+            // Size short-circuit (perf audit D3): a length mismatch already
+            // proves the file is not what the manifest promised — skip the
+            // full SHA1 pass (a whole re-read of the game directory on
+            // repeat installs) and re-download straight away.
+            let size_matches = match (tokio::fs::metadata(&item.dest).await, item.size) {
+                (Ok(meta), Some(expected_size)) => meta.len() == expected_size,
+                _ => true,
+            };
+            if size_matches {
+                match sha1_file(&item.dest).await {
+                    Ok(actual) if actual.eq_ignore_ascii_case(expected) => {
+                        tracing::debug!("Already complete: {} ({expected})", item.dest.display());
+                        let size = tokio::fs::metadata(&item.dest)
+                            .await
+                            .map(|m| m.len())
+                            .unwrap_or(0);
+                        return Ok(size);
+                    }
+                    Ok(actual) => {
+                        tracing::warn!(
+                            "Corrupt file at {} (expected sha1 {expected}, got {actual}); re-downloading",
+                            item.dest.display()
+                        );
+                    }
+                    Err(e) => {
+                        tracing::warn!("Cannot hash {}: {e}; re-downloading", item.dest.display());
+                    }
                 }
-                Ok(actual) => {
-                    tracing::warn!(
-                        "Corrupt file at {} (expected sha1 {expected}, got {actual}); re-downloading",
-                        item.dest.display()
-                    );
-                }
-                Err(e) => {
-                    tracing::warn!("Cannot hash {}: {e}; re-downloading", item.dest.display());
-                }
+            } else {
+                tracing::debug!(
+                    "Size mismatch at {} (expected {:?}); re-downloading without hashing",
+                    item.dest.display(),
+                    item.size
+                );
             }
             let _ = tokio::fs::remove_file(&item.dest).await;
         }
@@ -582,26 +616,51 @@ async fn download_with_retry(
     // ── Cache check before download ──
     if item.use_cache {
         if let Some(ref sha1) = item.expected_sha1 {
-            if let Some(cache_path) = cache.and_then(|c| c.check_by_sha1(sha1)) {
-                let part = part_path(&item.dest);
-                if let Some(parent) = part.parent() {
-                    tokio::fs::create_dir_all(parent).await?;
+            if let Some(cache) = cache {
+                if let Some(cache_path) = cache.check_by_sha1(sha1).await {
+                    let part = part_path(&item.dest);
+                    if let Some(parent) = part.parent() {
+                        tokio::fs::create_dir_all(parent).await?;
+                    }
+                    // Hardlink first (perf audit D7): cache entries were
+                    // SHA1-verified when stored, so a same-inode publish needs no
+                    // re-read. Fall back to copy + re-verify (P1-8) when the
+                    // hardlink cannot be created (e.g. cross-device).
+                    match tokio::fs::hard_link(&cache_path, &part).await {
+                        Ok(()) => {
+                            tokio::fs::rename(&part, &item.dest).await?;
+                            let meta = tokio::fs::metadata(&item.dest).await?;
+                            tracing::debug!(
+                                "Cache HIT (hardlinked) for {} ({} bytes)",
+                                item.url,
+                                meta.len()
+                            );
+                            return Ok(meta.len());
+                        }
+                        Err(_) => {
+                            tokio::fs::copy(&cache_path, &part).await?;
+                            // Verify the copied fallback too: the cache is keyed
+                            // by SHA1 but its contents are never re-validated on
+                            // read (P1-8).
+                            let actual = sha1_file(&part).await?;
+                            if actual.eq_ignore_ascii_case(sha1) {
+                                tokio::fs::rename(&part, &item.dest).await?;
+                                let meta = tokio::fs::metadata(&item.dest).await?;
+                                tracing::debug!(
+                                    "Cache HIT for {} ({} bytes)",
+                                    item.url,
+                                    meta.len()
+                                );
+                                return Ok(meta.len());
+                            }
+                            tracing::warn!(
+                            "Cache entry {} is corrupt (expected {sha1}, got {actual}); downloading from network",
+                            cache_path.display()
+                        );
+                        }
+                    }
+                    let _ = tokio::fs::remove_file(&part).await;
                 }
-                tokio::fs::copy(&cache_path, &part).await?;
-                // Verify the cached copy too: the cache is keyed by SHA1 but
-                // its contents are never re-validated on read (P1-8).
-                let actual = sha1_file(&part).await?;
-                if actual.eq_ignore_ascii_case(sha1) {
-                    tokio::fs::rename(&part, &item.dest).await?;
-                    let meta = tokio::fs::metadata(&item.dest).await?;
-                    tracing::debug!("Cache HIT for {} ({} bytes)", item.url, meta.len());
-                    return Ok(meta.len());
-                }
-                tracing::warn!(
-                    "Cache entry {} is corrupt (expected {sha1}, got {actual}); downloading from network",
-                    cache_path.display()
-                );
-                let _ = tokio::fs::remove_file(&part).await;
             }
         }
     }
@@ -619,15 +678,20 @@ async fn download_with_retry(
             }
 
             match download_single(client, item, url, cache).await {
-                Ok(bytes) => {
-                    // Stage-verify-publish: hash the `.part` file and rename it
+                Ok(downloaded) => {
+                    // Stage-verify-publish: verify the `.part` file and rename it
                     // onto `dest` only when it matches. A mismatch deletes the
                     // part and falls through to the next attempt / candidate
                     // URL — returning early here left the corrupt file at
                     // `dest` where every later resume appended to it (P1-8).
                     let part = part_path(&item.dest);
                     if let Some(expected) = &item.expected_sha1 {
-                        let actual = sha1_file(&part).await?;
+                        // Reuse the hash computed while streaming (perf audit
+                        // D1); only a Range-resumed download needs a re-read.
+                        let actual = match downloaded.sha1 {
+                            Some(ref digest) => digest.clone(),
+                            None => sha1_file(&part).await?,
+                        };
                         if !actual.eq_ignore_ascii_case(expected) {
                             let _ = tokio::fs::remove_file(&part).await;
                             tracing::warn!(
@@ -644,14 +708,14 @@ async fn download_with_retry(
                         // Store in cache after successful verification.
                         if item.use_cache {
                             if let Some(cache) = cache {
-                                if let Err(e) = cache.store(&part, expected) {
+                                if let Err(e) = cache.store(&part, expected).await {
                                     tracing::warn!("Failed to cache {}: {e}", url);
                                 }
                             }
                         }
                     }
                     tokio::fs::rename(&part, &item.dest).await?;
-                    return Ok(bytes);
+                    return Ok(downloaded.size);
                 }
                 Err(e) => {
                     tracing::warn!("Failed {url} (candidate #{url_idx}, attempt {attempt}): {e}");
@@ -677,12 +741,14 @@ async fn download_with_retry(
 /// - HTTP Range resume (from the `.part` file, never from `dest`)
 /// - x-bmclapi-hash header (BMCLAPI additional SHA1)
 /// - Caller-side SHA1 verification of the staged content before publishing
+/// - Hash-while-streaming (perf audit D1): the digest is computed in the same
+///   pass that writes the body, so verification needs no second full read
 async fn download_single(
     client: &reqwest::Client,
     item: &DownloadItem,
     url: &str,
     _cache: Option<&CacheRepository>,
-) -> Result<u64> {
+) -> Result<SingleDownload> {
     if let Some(parent) = item.dest.parent() {
         tokio::fs::create_dir_all(parent).await?;
     }
@@ -726,20 +792,33 @@ async fn download_single(
                 // Only do this if we don't already have an expected SHA1 (which might differ)
                 if item.expected_sha1.is_none() {
                     if let Some(cache) = _cache {
-                        if let Some(cached_path) = cache.check_by_sha1(hash_str) {
-                            // Copy from cache into the staging file and verify
-                            // against the header hash before publishing.
-                            tokio::fs::copy(&cached_path, &part).await?;
-                            let actual = sha1_file(&part).await?;
-                            if actual.eq_ignore_ascii_case(hash_str) {
+                        if let Some(cached_path) = cache.check_by_sha1(hash_str).await {
+                            // Hardlink first — the cache was verified at store
+                            // time (perf audit D7); copy + re-verify as fallback.
+                            let hit = match tokio::fs::hard_link(&cached_path, &part).await {
+                                Ok(()) => true,
+                                Err(_) => {
+                                    tokio::fs::copy(&cached_path, &part).await?;
+                                    let actual = sha1_file(&part).await?;
+                                    if actual.eq_ignore_ascii_case(hash_str) {
+                                        true
+                                    } else {
+                                        tracing::warn!(
+                                            "x-bmclapi-hash cache entry {} corrupt (expected {hash_str}, got {actual}); downloading",
+                                            cached_path.display()
+                                        );
+                                        false
+                                    }
+                                }
+                            };
+                            if hit {
                                 let meta = tokio::fs::metadata(&part).await?;
                                 tracing::debug!("x-bmclapi-hash cache HIT for {url}");
-                                return Ok(meta.len());
+                                return Ok(SingleDownload {
+                                    size: meta.len(),
+                                    sha1: Some(hash_str.to_string()),
+                                });
                             }
-                            tracing::warn!(
-                                "x-bmclapi-hash cache entry {} corrupt (expected {hash_str}, got {actual}); downloading",
-                                cached_path.display()
-                            );
                             let _ = tokio::fs::remove_file(&part).await;
                         }
                     }
@@ -765,20 +844,12 @@ async fn download_single(
             });
         }
         // P2-18：流式写入，避免整块读入内存
-        let mut file = tokio::fs::File::create(&part).await?;
-        let mut downloaded: u64 = 0;
-        loop {
-            match response.chunk().await {
-                Ok(Some(chunk)) => {
-                    file.write_all(&chunk).await?;
-                    downloaded += chunk.len() as u64;
-                }
-                Ok(None) => break,
-                Err(e) => return Err(RmcccError::Network(e.to_string())),
-            }
-        }
-        file.flush().await?;
-        return Ok(downloaded);
+        let file = tokio::fs::File::create(&part).await?;
+        let (downloaded, digest) = stream_to_file(&mut response, file).await?;
+        return Ok(SingleDownload {
+            size: downloaded,
+            sha1: Some(digest),
+        });
     }
 
     if !status.is_success() && !is_resume {
@@ -788,34 +859,51 @@ async fn download_single(
         });
     }
 
-    let mut file = if is_resume {
-        tokio::fs::OpenOptions::new()
+    let (size, sha1) = if is_resume {
+        let file = tokio::fs::OpenOptions::new()
             .append(true)
             .open(&part)
-            .await?
+            .await?;
+        // P2-18：流式写入（chunk），避免 assets 数百 MB 整块读入内存。
+        // Resumed prefix hash is unknown → `None` (caller re-reads if it
+        // needs to verify).
+        let (downloaded, _) = stream_to_file(&mut response, file).await?;
+        (existing_size + downloaded, None)
     } else {
-        tokio::fs::File::create(&part).await?
+        let file = tokio::fs::File::create(&part).await?;
+        let (downloaded, digest) = stream_to_file(&mut response, file).await?;
+        (downloaded, Some(digest))
     };
 
-    // P2-18：流式写入（chunk），避免 assets 数百 MB 整块读入内存。
+    Ok(SingleDownload { size, sha1 })
+}
+
+/// Stream the response body into `file`, hashing as we go (perf audit D1/D4):
+/// one pass, no verification re-read, and a 128 KiB write buffer instead of
+/// one syscall per network chunk.
+///
+/// Returns `(bytes_written, sha1_hex)`.
+async fn stream_to_file(
+    response: &mut reqwest::Response,
+    file: tokio::fs::File,
+) -> Result<(u64, String)> {
+    use sha1::{Digest, Sha1};
+    let mut writer = tokio::io::BufWriter::with_capacity(128 * 1024, file);
+    let mut hasher = Sha1::new();
     let mut downloaded: u64 = 0;
     loop {
         match response.chunk().await {
             Ok(Some(chunk)) => {
-                file.write_all(&chunk).await?;
+                hasher.update(&chunk);
+                writer.write_all(&chunk).await?;
                 downloaded += chunk.len() as u64;
             }
             Ok(None) => break,
             Err(e) => return Err(RmcccError::Network(e.to_string())),
         }
     }
-    file.flush().await?;
-
-    Ok(if is_resume {
-        existing_size + downloaded
-    } else {
-        downloaded
-    })
+    writer.flush().await?;
+    Ok((downloaded, format!("{:x}", hasher.finalize())))
 }
 
 fn to_str_header(v: &reqwest::header::HeaderValue) -> std::result::Result<&str, ()> {
@@ -854,21 +942,25 @@ pub fn check_disk_space(dest: &Path, required_bytes: u64) -> Result<()> {
 mod tests {
     use super::*;
 
-    #[test]
-    fn cache_rejects_malformed_sha1_keys() {
+    #[tokio::test]
+    async fn cache_rejects_malformed_sha1_keys() {
         // A4：缓存键来自下载的清单/镜像响应——短键、路径注入、多字节键
         // 一律按 miss/错误处理，绝不 panic，也绝不指向 objects/ 之外。
         let dir = std::env::temp_dir().join(format!("rmccc-cache-a4-{}", std::process::id()));
         let repo = CacheRepository::new(dir.clone());
 
-        assert!(repo.check_by_sha1("ab").is_none());
-        assert!(repo.check_by_sha1("../evil").is_none());
-        assert!(repo.check_by_sha1(&"é".repeat(40)).is_none());
-        assert!(repo.check_by_sha1("https://mirror/x").is_none());
-        assert!(repo.store(Path::new("/nonexistent"), "../evil").is_err());
+        assert!(repo.check_by_sha1("ab").await.is_none());
+        assert!(repo.check_by_sha1("../evil").await.is_none());
+        assert!(repo.check_by_sha1(&"é".repeat(40)).await.is_none());
+        assert!(repo.check_by_sha1("https://mirror/x").await.is_none());
+        assert!(repo
+            .store(Path::new("/nonexistent"), "../evil")
+            .await
+            .is_err());
         // 合法 40 位 hex 键不受影响（不存在的哈希 → miss）。
         assert!(repo
             .check_by_sha1("a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0")
+            .await
             .is_none());
         let _ = std::fs::remove_dir_all(dir);
     }

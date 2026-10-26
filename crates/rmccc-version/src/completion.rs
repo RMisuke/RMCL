@@ -64,13 +64,14 @@ fn file_ok(path: &Path, sha1: Option<&str>, size: Option<u64>, verify: Completio
     if verify == CompletionVerify::Presence || (sha1.is_none() && size.is_none()) {
         return path.exists();
     }
-    if !path.exists() {
+    // Single stat (perf audit V10): `exists()` + `metadata()` was two syscalls
+    // per file × ~8000 calls per launch scan.
+    let Ok(meta) = std::fs::metadata(path) else {
         return false;
-    }
+    };
     if let Some(expected) = size {
-        match std::fs::metadata(path) {
-            Ok(m) if m.len() == expected => {}
-            _ => return false,
+        if meta.len() != expected {
+            return false;
         }
     }
     if verify == CompletionVerify::Hash {
@@ -81,6 +82,21 @@ fn file_ok(path: &Path, sha1: Option<&str>, size: Option<u64>, verify: Completio
         }
     }
     true
+}
+
+/// Verification level for asset objects under a requested mode.
+///
+/// Asset objects are content-addressed (`objects/{xx}/{sha1}`) and were
+/// SHA1-verified when downloaded; re-hashing all ~4000 objects re-reads
+/// hundreds of MB on every repair for marginal value (perf audit C2). Size
+/// catches the realistic failure modes (missing/truncated), so `Hash`
+/// downgrades to `Size` for assets only — client jar and libraries keep full
+/// hash verification.
+fn asset_verify_of(verify: CompletionVerify) -> CompletionVerify {
+    match verify {
+        CompletionVerify::Hash => CompletionVerify::Size,
+        other => other,
+    }
 }
 
 /// Streaming SHA1 (64 KiB chunks) — full reads spiked memory on large jars.
@@ -155,7 +171,9 @@ pub fn check_completion(
                 let count = valid.len();
                 let existing = valid
                     .iter()
-                    .filter(|(o, path)| file_ok(path, Some(&o.hash), Some(o.size), verify))
+                    .filter(|(o, path)| {
+                        file_ok(path, Some(&o.hash), Some(o.size), asset_verify_of(verify))
+                    })
                     .count();
                 if existing < count {
                     missing.push(MissingItem {
@@ -407,6 +425,7 @@ fn push_missing_assets(
     content: &AssetIndexContent,
     verify: CompletionVerify,
 ) {
+    let verify = asset_verify_of(verify);
     for obj in content.objects.values() {
         // `asset_object` doubles as the validity gate (audit A3): None means
         // the hash can't be addressed on disk or via the CDN URL.

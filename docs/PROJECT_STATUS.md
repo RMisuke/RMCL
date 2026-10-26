@@ -10,6 +10,27 @@
 
 ## 0. 更新记录
 
+**2026-10-26（第二批性能优化：四项延期项落地）**：
+
+1. **M4 · installer ZIP 单句柄复用**：`ForgeNewInstallTask` 新增 `execute_with_archive(&mut InstallerArchive)` 贯穿 install_profile 解析 / 内嵌 maven 提取 / data 条目解压 / version JSON 读取（原各步独立 `ZipArchive::new` 共 4 次打开 + 中央目录解析）；NeoForge 路径的 profile 读取与 NEOFORGE.RSA 探测并入同一句柄后传给 Forge 流程——~180MB 安装器从 5-6 次打开降为 1 次。
+2. **V6 · 版本仓库 mtime 增量解析**：`DefaultGameRepository` 增加 `(mtime, len) → Arc<GameVersion>` 解析记忆化；`refresh()`（每次安装/修复/rename 后触发）对 stat 未变的 JSON 直接复用 Arc，免重读重解析；记忆化按本轮实际使用的实例目录剪枝。主路径与 mismatched-filename 回退路径均走 memo。
+3. **C5 · 账户未变更跳过保存**：`Account` trait 新增 `needs_save()`（默认 `true` 保守）；Microsoft 账户以 `AtomicBool` 脏标记仅在真正刷新会话时置位（`needs_save` 消费读取），离线账户恒 `false`；`refresh_session` / `log_in_active_account` 两处按标记决定是否落盘——token 在有效窗口内时每次启动不再付出 2 读 2 写 + 2 次 AES-GCM 加解密。
+4. **S1 · Modrinth 下载流式化**：`ModSource` 新增 `fetch_stream()`；默认 `install` 改为流式写入 `<dest>.part` + 边下边算 SHA1 + 校验通过后 rename 发布——大体积 mod/shader（50–200MB）不再整份双缓冲驻留内存，哈希不匹配也绝不在 dest 留下损坏文件（P1-8 语义对齐）。
+
+验证：`cargo clippy --workspace -D warnings` 零警告、`cargo test --workspace` 654 通过、`pnpm typecheck` 通过。
+
+**2026-10-26（性能审计与五批次优化：启动 / 日志 / 下载 / IPC 锁纪律 / 内核效率）**：
+
+三路审计（前端 / Tauri 应用层 / 核心 crates）落地五批次整改，全部通过 `cargo clippy --workspace -D warnings`、`cargo test --workspace`（654 通过）、`pnpm typecheck`、`pnpm build` 验证：
+
+1. **批次 1 · 启动路径**：镜像自动探测 `TcpStream::connect` 加 2s `connect_timeout` 且两探测并行（原代码 SYN 黑洞下可卡启动 ~75s）；`window.show()` 提前到重型 `AppState::new` 之前；前端 `initI18n`（内部两 IPC）/`initTheme` 并行化。
+2. **批次 2 · 日志链路**：`LAUNCH_OUTPUT` 后端合帧（50 行或 100ms 窗口批量 emit，payload 改 `{profile_id, lines: string[]}`），退出时兜底 flush；modloader 安装器 stdout "detail" 事件 100ms 限流；LogDrawer 关闭时断开 buffers 订阅（memo 提前返回）、autoscroll rAF 节流；AI 流式 delta 前端 150ms 攒批（markdown 渲染 O(n²)→O(n)）。
+3. **批次 3 · 下载管线**：下载流式写入同时增量算 SHA1（`stream_to_file`，校验零二次读盘）+ 128KiB BufWriter；dest 已存在时 size 短路（不匹配免全量哈希）；缓存命中优先硬链接（store 时已验证）；`CacheRepository` 全 API 异步化；asset 对象校验 Hash→Size 降级（内容寻址文件名）；`file_ok` 单次 stat；asset index 本地 SHA1 命中免重下。
+4. **批次 4 · IPC/锁纪律 + 前端 store**：`mod_sources` Box→Arc，mods 全套命令改 `core.handle()` 快照模式（原 mod_install 持读锁跨整个下载）；`mods_dependency_scan` spawn_blocking；`mods_apply_plan` 弃 `block_in_place` 改 `rmccc_agent::apply_missing_dependencies_async`；logs/AI 日志读取改 spawn_blocking 尾部窗口；natives 解压、Java 探测（launch + settings 两处）spawn_blocking；settings_set 校验/建目录挪出写锁；instance_list/instance_refresh 扫描移出 core 锁并 spawn_blocking；前端 downloads/modloaders store 改 `createStore` 细粒度路径更新；MCP 2s 永久轮询改事件驱动（仅确认卡 pending 时轮询）+ status 无变化跳过 set；profiles 刷新保持对象引用；InstanceDetail 三处 effect 依赖收敛到 profile.id；Home 原地 sort 改拷贝 + memo。
+5. **批次 5 · 内核效率**：`raw_json` String→`Arc<str>`（serde rc）；版本仓库 manifests HashMap→`Arc<GameVersion>`，继承链 resolve 消除每级深拷贝；`chain_resolvable` retain O(N²)→HashSet；manifest 缓存 `Arc<Vec<VersionInfo>>` + 读侧免整表克隆；`library_applies` 规则借用转换；本地父版本优先（免网络解析继承链）；`write_version_json` 存在检查前置；manifest ETag+body 磁盘持久化（冷启动条件请求）；parse_version_json 库数组按值解析；Forge processor 依赖下载 8 并发（原串行）+ `fetch_url` 免 Bytes→Vec 拷贝 + 流式 SHA1；Fabric 版本列表惰性物化（原 75k 对象常驻）；patch 型安装任务注入共享 HTTP 客户端（原 `Client::new()`）；下载引擎 mpsc+Mutex 改 JoinSet+Semaphore、暂停改 watch 通知（弃 100ms 忙等）、批次完成即清理 DashMap 条目、`wait_for_batch` 不再跨 await 持 DashMap 守卫；release profile 对 sha1/serde_json/zip/flate2 单独 -O3（保持全局 -Os 护体积红线）。
+
+审计中证实为误报/已修复而未动的项：`cache.ts` inFlight（P2-5 已修）、TaskCenter 确认卡定时器（已 onCleanup）、SkinViewer blob LRU（P2-8 已修）、Settings 数字输入（本就是草稿+保存模式）。延期项：installer ZIP 复用单句柄（M4）、版本仓库 mtime 增量解析（V6）、账户未变更跳过保存（C5）、Modrinth 下载流式化（S1）。
+
 **2026-10-25（正式立项：项目更名 SNGL，内核保留 RMCCC）**：
 
 - **显示层更名**：标题栏品牌、窗口标题、`<title>`、欢迎页、MCP/AI 提示文案、关于页卡题、主页插件卡副标题、`productName`（bundle 名 RMCCC.app → SNGL.app）→ **SNGL**。

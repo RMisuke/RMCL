@@ -7,6 +7,8 @@ use rmccc_error::{Result, RmcccError};
 use rmccc_version::{Library, VersionArguments};
 
 pub struct LegacyFabricInstallTask {
+    /// Shared HTTP client from the DependencyManager (perf audit M6).
+    pub client: reqwest::Client,
     pub game_version: String,
     pub loader_version: String,
     pub meta_url: String,
@@ -17,7 +19,7 @@ impl InstallTask for LegacyFabricInstallTask {
     async fn execute(&mut self) -> Result<GameInstancePatch> {
         tracing::info!(game_version = %self.game_version, loader = %self.loader_version, "Executing Legacy Fabric install task");
 
-        let client = reqwest::Client::new();
+        let client = self.client.clone();
         let resp = client
             .get(&self.meta_url)
             .send()

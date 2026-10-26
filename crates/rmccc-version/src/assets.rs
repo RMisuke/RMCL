@@ -37,6 +37,21 @@ pub async fn resolve_asset_items(
         return Ok(Vec::new());
     }
 
+    // Local-first (perf audit V11): an on-disk index whose SHA1 matches is
+    // exactly as good as a fresh download — skip the 1-2 MB network fetch on
+    // every install/repair.
+    let indexes_dir = assets_dir.join("indexes");
+    let index_path = indexes_dir.join(format!("{}.json", asset_index.id));
+    if let Ok(local) = std::fs::read(&index_path) {
+        if sha1_bytes(&local).eq_ignore_ascii_case(&asset_index.sha1) {
+            return parse_asset_index(&local, assets_dir);
+        }
+        tracing::debug!(
+            path = %index_path.display(),
+            "Local asset index failed SHA1 verification; re-fetching"
+        );
+    }
+
     // Download the asset index JSON
     let resp = client
         .get(&asset_index.url)
@@ -61,9 +76,7 @@ pub async fn resolve_asset_items(
     // ── Save the asset index JSON to assets/indexes/{id}.json ──
     // Bug #8: The index file was not being persisted, causing `resource check`
     // to always report "资源索引文件缺失".
-    let indexes_dir = assets_dir.join("indexes");
     std::fs::create_dir_all(&indexes_dir)?;
-    let index_path = indexes_dir.join(format!("{}.json", asset_index.id));
     std::fs::write(&index_path, &body)?;
     tracing::debug!(
         path = %index_path.display(),
@@ -71,7 +84,12 @@ pub async fn resolve_asset_items(
         "Asset index saved"
     );
 
-    let content: AssetIndexContent = serde_json::from_slice(&body)?;
+    parse_asset_index(&body, assets_dir)
+}
+
+/// Parse a verified asset index into per-object download items.
+fn parse_asset_index(body: &[u8], assets_dir: &Path) -> Result<Vec<DownloadItem>> {
+    let content: AssetIndexContent = serde_json::from_slice(body)?;
 
     // Malformed hashes (shorter than the two-char bucket prefix) are skipped
     // with a warning instead of slicing into a panic — the index is

@@ -282,6 +282,48 @@ pub fn apply_missing_dependencies(
     applier.apply(mods_dir, &report.missing_required)
 }
 
+/// Async twin of [`apply_missing_dependencies`] (perf audit 1.7): applying a
+/// plan downloads N mods and can run for minutes, so the caller (IPC layer)
+/// must `.await` it instead of bridging through `block_in_place`, which pins
+/// a runtime worker for the whole duration. The jar scan itself runs on
+/// `spawn_blocking`.
+///
+/// `install_one` receives the mods directory and one still-missing required
+/// dependency; a per-dependency error is recorded in the report (failed),
+/// never aborted the batch.
+pub async fn apply_missing_dependencies_async<F, Fut>(
+    mods_dir: &Path,
+    mut install_one: F,
+) -> Result<AppliedPlanReport>
+where
+    F: FnMut(std::path::PathBuf, PlannedDependency) -> Fut,
+    Fut: std::future::Future<Output = Result<AppliedMod>>,
+{
+    ensure_dir(mods_dir)?;
+    let scan_dir = mods_dir.to_path_buf();
+    let report = tokio::task::spawn_blocking(move || scan_instance_mods(&scan_dir))
+        .await
+        .map_err(|e| RmcccError::Other(format!("dependency scan join error: {e}")))??;
+    if report.missing_required.is_empty() {
+        return Ok(AppliedPlanReport::default());
+    }
+    let mut applied = AppliedPlanReport::default();
+    for dep in report.missing_required {
+        applied.attempted.push(dep.mod_id.clone());
+        match install_one(mods_dir.to_path_buf(), dep).await {
+            Ok(m) => applied.installed.push(m),
+            Err(error) => {
+                let mod_id = applied.attempted.last().cloned().unwrap_or_default();
+                applied.failed.push(FailedMod {
+                    mod_id,
+                    reason: error.to_string(),
+                });
+            }
+        }
+    }
+    Ok(applied)
+}
+
 struct FabricMeta {
     id: String,
     name: String,

@@ -2,7 +2,6 @@
 
 use crate::state::AppState;
 use rmccc_error::IpcError;
-use std::io::Read;
 
 const MAX_LOG_LINES: usize = 500;
 
@@ -13,9 +12,15 @@ pub async fn log_get(
     lines: Option<usize>,
 ) -> Result<Vec<String>, IpcError> {
     let limit = lines.unwrap_or(100).min(MAX_LOG_LINES);
-    let core = state.core.read().await;
-    let log_dir = core.data_dir.join("logs");
+    let log_dir = {
+        let core = state.core.read().await;
+        core.data_dir.join("logs")
+    };
 
+    // Resolve the newest `.log` path on the async worker (cheap), then hand
+    // the whole file read to `spawn_blocking` (perf audit 1.2): a crash log
+    // can be tens of MB and was previously fully buffered ×2 (content String
+    // + per-line Vec) on a runtime worker.
     let mut latest_log = None;
     if let Ok(entries) = std::fs::read_dir(&log_dir) {
         for entry in entries.flatten() {
@@ -36,28 +41,53 @@ pub async fn log_get(
         None => return Ok(Vec::new()),
     };
 
-    let mut file = std::fs::File::open(&log_path)?;
-    let mut content = String::new();
-    file.read_to_string(&mut content)?;
-
-    let all_lines: Vec<String> = content.lines().map(|l| l.to_string()).collect();
-    let start = all_lines.len().saturating_sub(limit);
-    Ok(all_lines[start..].to_vec())
+    // Keep only the trailing `limit` lines in memory: a tail window is all
+    // the UI shows, so there is no need to materialize the whole file.
+    let tail = tokio::task::spawn_blocking(move || -> std::io::Result<Vec<String>> {
+        use std::io::BufRead;
+        let file = std::fs::File::open(&log_path)?;
+        let mut ring: std::collections::VecDeque<String> = std::collections::VecDeque::new();
+        for line in std::io::BufReader::new(file).lines() {
+            let line = line?;
+            if ring.len() == limit {
+                ring.pop_front();
+            }
+            ring.push_back(line);
+        }
+        Ok(ring.into_iter().collect())
+    })
+    .await
+    .map_err(|e| IpcError {
+        code: rmccc_error::ErrorCode::Unknown,
+        message: format!("log read join error: {e}"),
+        retryable: false,
+    })?
+    .map_err(IpcError::from)?;
+    Ok(tail)
 }
 
 #[tauri::command]
 #[tracing::instrument(skip(state))]
 pub async fn log_clear(state: tauri::State<'_, AppState>) -> Result<(), IpcError> {
-    let core = state.core.read().await;
-    let log_dir = core.data_dir.join("logs");
-
-    if let Ok(entries) = std::fs::read_dir(&log_dir) {
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if path.extension().is_some_and(|e| e == "log") {
-                let _ = std::fs::remove_file(&path);
+    let log_dir = {
+        let core = state.core.read().await;
+        core.data_dir.join("logs")
+    };
+    tokio::task::spawn_blocking(move || {
+        if let Ok(entries) = std::fs::read_dir(&log_dir) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.extension().is_some_and(|e| e == "log") {
+                    let _ = std::fs::remove_file(&path);
+                }
             }
         }
-    }
+    })
+    .await
+    .map_err(|e| IpcError {
+        code: rmccc_error::ErrorCode::Unknown,
+        message: format!("log clear join error: {e}"),
+        retryable: false,
+    })?;
     Ok(())
 }

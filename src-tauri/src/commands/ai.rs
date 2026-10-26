@@ -231,9 +231,33 @@ async fn gather_analysis_input(
     };
     drop(core);
 
-    let (raw, source) = match std::fs::read_to_string(&log_path) {
-        Ok(text) if !text.trim().is_empty() => (text, "游戏日志 latest.log"),
-        Err(error) if error.kind() != std::io::ErrorKind::NotFound => {
+    // Perf audit 1.3: read only a tail window off-thread — the full
+    // latest.log (tens of MB after a crash) was previously buffered whole on
+    // the async worker just to slice `ANALYSIS_LOG_MAX_CHARS` from the end.
+    let read_tail = {
+        let log_path = log_path.clone();
+        tokio::task::spawn_blocking(move || -> std::io::Result<Option<String>> {
+            use std::io::{Read, Seek, SeekFrom};
+            let Ok(mut file) = std::fs::File::open(&log_path) else {
+                return Ok(None);
+            };
+            let len = file.metadata()?.len();
+            // Over-read ×3 to cover multi-byte UTF-8; exact truncation to
+            // ANALYSIS_LOG_MAX_CHARS happens below on the string.
+            let want = (ANALYSIS_LOG_MAX_CHARS as u64).saturating_mul(3).min(len);
+            if want > 0 {
+                file.seek(SeekFrom::End(-(want as i64)))?;
+            }
+            let mut buf = Vec::with_capacity(want as usize);
+            file.read_to_end(&mut buf)?;
+            Ok(Some(String::from_utf8_lossy(&buf).into_owned()))
+        })
+        .await
+        .map_err(|e| RmcccError::Other(format!("log tail read join error: {e}")))?
+    };
+    let (raw, source) = match read_tail {
+        Ok(Some(text)) if !text.trim().is_empty() => (text, "游戏日志 latest.log"),
+        Err(error) => {
             return Err(RmcccError::Io(error));
         }
         // latest.log 未生成（log4j 初始化前崩溃，如 BootstrapLauncher 阶段的

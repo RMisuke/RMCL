@@ -23,7 +23,7 @@ pub fn library_applies(lib: &Library, platform: &PlatformDescriptor) -> bool {
     };
 
     let converted: Vec<super::types::CompatibilityRule> =
-        rules.iter().cloned().map(CompatibilityRule::from).collect();
+        rules.iter().map(CompatibilityRule::from).collect();
     crate::compatibility::rules_allow(&converted, &std::collections::HashMap::new(), platform)
 }
 

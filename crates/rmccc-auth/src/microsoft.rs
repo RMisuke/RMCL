@@ -625,6 +625,10 @@ pub struct MicrosoftAccount {
     account_id: AccountID,
     provider: Arc<dyn AuthProvider>,
     session: Mutex<AuthSession>,
+    /// Perf audit C5: set when `log_in` actually refreshed the session (or a
+    /// re-auth rewrote it) so the caller can skip persisting an unchanged
+    /// store. `AtomicBool` keeps `Account: Send + Sync`.
+    session_dirty: std::sync::atomic::AtomicBool,
 }
 
 impl MicrosoftAccount {
@@ -636,6 +640,7 @@ impl MicrosoftAccount {
             account_id,
             provider,
             session: Mutex::new(session),
+            session_dirty: std::sync::atomic::AtomicBool::new(false),
         }
     }
 
@@ -681,6 +686,11 @@ impl Account for MicrosoftAccount {
         session.uuid.clone()
     }
 
+    fn needs_save(&self) -> bool {
+        self.session_dirty
+            .swap(false, std::sync::atomic::Ordering::Relaxed)
+    }
+
     async fn log_in(&self) -> Result<AuthInfo> {
         let session = self.session_snapshot();
 
@@ -718,6 +728,8 @@ impl Account for MicrosoftAccount {
         }
 
         *self.session_lock() = refreshed.clone();
+        self.session_dirty
+            .store(true, std::sync::atomic::Ordering::Relaxed);
         Ok(self.auth_info_from(&refreshed))
     }
 

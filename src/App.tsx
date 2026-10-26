@@ -46,8 +46,9 @@ const App: ParentComponent = (props) => {
   onMount(async () => {
     try {
       const win = getCurrentWindow();
-      await initI18n();
-      await initTheme();
+      // Theme and locale both gate the first visible paint; load them in
+      // parallel instead of paying two serial IPC round-trips.
+      await Promise.all([initI18n(), initTheme()]);
       initStores();
       await win.show();
       await win.setFocus();

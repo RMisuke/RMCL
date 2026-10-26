@@ -12,6 +12,8 @@ use rmccc_error::{Result, RmcccError};
 use rmccc_version::{Library, VersionArgument, VersionArguments};
 
 pub struct OptiFineInstallTask {
+    /// Shared HTTP client from the DependencyManager (perf audit M6).
+    pub client: reqwest::Client,
     pub game_version: String,
     pub optifine_version: String,
     pub download_url: String,
@@ -23,7 +25,7 @@ impl InstallTask for OptiFineInstallTask {
         tracing::info!(game_version = %self.game_version, optifine = %self.optifine_version, "Executing OptiFine install task");
 
         // Download installer
-        let client = reqwest::Client::new();
+        let client = self.client.clone();
         let resp = client
             .get(&self.download_url)
             .send()

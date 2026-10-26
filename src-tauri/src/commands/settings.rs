@@ -54,40 +54,49 @@ pub async fn settings_set(
     state: tauri::State<'_, AppState>,
     opts: SettingsUpdate,
 ) -> Result<AppConfig, IpcError> {
-    let mut core = state.core.write().await;
-
-    if let Some(dir) = opts.game_root_dir {
-        let path = std::path::PathBuf::from(&dir);
-        // Validate: path must be an absolute, existing directory
-        if !path.is_absolute() {
-            return Err(IpcError {
+    // Perf audit 1.10: validation + directory creation touch the filesystem;
+    // run them *before* the write lock (tokio's fair RwLock makes every
+    // reader queue behind a writer while the fs call blocks).
+    let game_root = match &opts.game_root_dir {
+        Some(dir) => {
+            let path = std::path::PathBuf::from(dir);
+            // Validate: path must be an absolute, existing directory
+            if !path.is_absolute() {
+                return Err(IpcError {
+                    code: rmccc_error::ErrorCode::IoError,
+                    message: format!("Game directory must be an absolute path: {dir}"),
+                    retryable: false,
+                });
+            }
+            // Create if not exists
+            std::fs::create_dir_all(&path).map_err(|e| IpcError {
                 code: rmccc_error::ErrorCode::IoError,
-                message: format!("Game directory must be an absolute path: {dir}"),
+                message: format!("Cannot create game directory: {e}"),
                 retryable: false,
-            });
+            })?;
+            Some(path)
         }
-        // Create if not exists
-        std::fs::create_dir_all(&path).map_err(|e| IpcError {
-            code: rmccc_error::ErrorCode::IoError,
-            message: format!("Cannot create game directory: {e}"),
-            retryable: false,
-        })?;
-        core.config.game_root_dir = Some(path);
-    }
-
-    if let Some(java) = opts.default_java_path {
-        let p = std::path::PathBuf::from(&java);
-        if java.is_empty() {
-            core.config.default_java_path = None;
-        } else if !p.exists() {
+        None => None,
+    };
+    if let Some(java) = &opts.default_java_path {
+        if !java.is_empty() && !std::path::PathBuf::from(java).exists() {
             return Err(IpcError {
                 code: rmccc_error::ErrorCode::JavaNotFound,
                 message: format!("Java not found at: {java}"),
                 retryable: false,
             });
-        } else {
-            core.config.default_java_path = Some(java);
         }
+    }
+
+    // Lock is now held for pure in-memory mutation only.
+    let mut core = state.core.write().await;
+
+    if let Some(path) = game_root {
+        core.config.game_root_dir = Some(path);
+    }
+
+    if let Some(java) = opts.default_java_path {
+        core.config.default_java_path = if java.is_empty() { None } else { Some(java) };
     }
 
     if let Some(m) = opts.default_min_memory_mb {
@@ -153,10 +162,19 @@ pub async fn settings_set(
 #[tauri::command]
 #[tracing::instrument(skip(state))]
 pub async fn java_detect(state: tauri::State<'_, AppState>) -> Result<Vec<JavaInfo>, IpcError> {
-    let installations = {
+    let platform = {
         let core = state.core.read().await;
-        core.platform.java.detect_all()?
+        core.platform.clone()
     };
+    // Perf audit 1.5: detect_all spawns one JVM per candidate path — run it
+    // on the blocking pool with no core lock held.
+    let installations = tokio::task::spawn_blocking(move || platform.java.detect_all())
+        .await
+        .map_err(|e| IpcError {
+            code: rmccc_error::ErrorCode::Unknown,
+            message: format!("java detect join error: {e}"),
+            retryable: false,
+        })??;
     let infos: Vec<JavaInfo> = installations
         .into_iter()
         .map(|j| JavaInfo {
@@ -270,7 +288,6 @@ pub async fn settings_supported_locales(
         })
         .collect())
 }
-
 
 // ── 应用信息（关于页：启动器 SNGL / 内核 RMCCC 双版本）──
 

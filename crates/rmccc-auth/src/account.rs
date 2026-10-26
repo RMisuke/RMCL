@@ -32,6 +32,16 @@ pub trait Account: Send + Sync {
     /// cannot yield a stable borrowed `&str`.
     fn profile_name(&self) -> String;
 
+    /// Whether the most recent [`Account::log_in`] (or re-auth) mutated the
+    /// stored session and the account therefore needs persisting.
+    ///
+    /// Perf audit C5: every launch used to rewrite + re-encrypt the whole
+    /// account store even when the token was untouched. Implementations that
+    /// cannot track this should keep the conservative `true` default.
+    fn needs_save(&self) -> bool {
+        true
+    }
+
     /// The Minecraft profile UUID.
     fn profile_id(&self) -> String;
 

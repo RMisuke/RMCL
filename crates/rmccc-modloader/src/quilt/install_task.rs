@@ -13,6 +13,8 @@ use rmccc_version::{Library, VersionArgument, VersionArguments};
 use serde::Deserialize;
 
 pub struct QuiltInstallTask {
+    /// Shared HTTP client from the DependencyManager (perf audit M6).
+    pub client: reqwest::Client,
     pub game_version: String,
     pub loader_version: String,
     pub launch_meta_url: String,
@@ -45,7 +47,7 @@ impl InstallTask for QuiltInstallTask {
             "Executing Quilt install task"
         );
 
-        let client = reqwest::Client::new();
+        let client = self.client.clone();
         let resp = client
             .get(&self.launch_meta_url)
             .send()

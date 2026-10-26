@@ -22,7 +22,7 @@
 //! 自行下载），功能等价、不走镜像。
 
 use crate::analyzer::LibraryType;
-use crate::forge::new_install::ForgeNewInstallTask;
+use crate::forge::new_install::{ForgeNewInstallTask, InstallerArchive, open_installer_zip};
 use crate::install_task::InstallTask;
 use crate::patch::GameInstancePatch;
 use rmccc_error::{Result, RmcccError};
@@ -72,7 +72,10 @@ impl NeoForgeInstallTask {
         &self,
         installer_path: &std::path::Path,
     ) -> Result<GameInstancePatch> {
-        let profile_json = read_install_profile(installer_path)?;
+        // Perf audit M4: one open archive serves profile classification AND
+        // the whole Forge processors flow below (was 3+ separate opens).
+        let mut archive = open_installer_zip(installer_path)?;
+        let profile_json = read_install_profile(&mut archive)?;
         let parsed: serde_json::Value = serde_json::from_str(&profile_json)
             .map_err(|e| RmcccError::Other(format!("Invalid install_profile.json: {e}")))?;
 
@@ -84,13 +87,8 @@ impl NeoForgeInstallTask {
             .to_string();
 
         // HMCL `NeoForgeInstallTask.install` 的 Path A 判据：forge profile +
-        // NEOFORGE.RSA 签名（或正文含 "neoforge"）。
-        let has_neoforge_rsa = {
-            let file = std::fs::File::open(installer_path)?;
-            zip::ZipArchive::new(file)
-                .map(|mut a| a.by_name("META-INF/NEOFORGE.RSA").is_ok())
-                .unwrap_or(false)
-        };
+        // NEOFORGE.RSA 签名（或正文含 "neoforge"）——同一个已打开的 archive。
+        let has_neoforge_rsa = archive.by_name("META-INF/NEOFORGE.RSA").is_ok();
 
         if profile_type == "forge" && (has_neoforge_rsa || profile_json.contains("neoforge")) {
             // ── Path A：1.20.1 世代伪装 Forge 格式 ──
@@ -104,7 +102,7 @@ impl NeoForgeInstallTask {
                 .to_string();
             let forge_version = modify_neoforge_old_version(&self.game_version, &profile_version);
 
-            let mut task = ForgeNewInstallTask {
+            let task = ForgeNewInstallTask {
                 game_version: self.game_version.clone(),
                 forge_version,
                 installer_path: installer_path.to_path_buf(),
@@ -113,7 +111,7 @@ impl NeoForgeInstallTask {
                 client: self.client.clone(),
                 platform: self.platform,
             };
-            let mut patch = task.execute().await?;
+            let mut patch = task.execute_with_archive(&mut archive).await?;
             // HMCL：`withId(neoforge)` + 版本名剥 "forge" 段（1.20.1 世代
             // 版本号已由 modify_neoforge_old_version 归一，replace 是幂等兜底）。
             patch.id = LibraryType::NeoForge.patch_id().to_string();
@@ -135,7 +133,7 @@ impl NeoForgeInstallTask {
                 .to_string();
             let neo_self = modify_neoforge_new_version(&profile_version);
 
-            let mut task = ForgeNewInstallTask {
+            let task = ForgeNewInstallTask {
                 game_version: self.game_version.clone(),
                 // ForgeNewInstallTask 只把 forge_version 填进 patch.version；
                 // 传归一后的 NeoForge 版本号即可。
@@ -146,7 +144,7 @@ impl NeoForgeInstallTask {
                 client: self.client.clone(),
                 platform: self.platform,
             };
-            let mut patch = task.execute().await?;
+            let mut patch = task.execute_with_archive(&mut archive).await?;
             patch.id = LibraryType::NeoForge.patch_id().to_string();
             Ok(patch)
         } else {
@@ -187,10 +185,7 @@ fn modify_neoforge_new_version(version: &str) -> String {
         .to_string()
 }
 
-fn read_install_profile(path: &std::path::Path) -> Result<String> {
-    let file = std::fs::File::open(path)?;
-    let mut archive = zip::ZipArchive::new(file)
-        .map_err(|e| RmcccError::Other(format!("Not a valid ZIP: {e}")))?;
+fn read_install_profile(archive: &mut InstallerArchive) -> Result<String> {
     let mut json = String::new();
     archive
         .by_name("install_profile.json")

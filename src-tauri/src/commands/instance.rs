@@ -66,6 +66,14 @@ async fn resolve_version_id(core: &rmccc_core::CoreHandle, id: &str) -> Result<S
     })
 }
 
+fn join_error(e: tokio::task::JoinError) -> IpcError {
+    IpcError {
+        code: rmccc_error::ErrorCode::InternalError,
+        message: format!("instance scan join error: {e}"),
+        retryable: false,
+    }
+}
+
 fn locked_error() -> IpcError {
     IpcError {
         code: rmccc_error::ErrorCode::InternalError,
@@ -80,28 +88,37 @@ pub async fn instance_list(
     state: tauri::State<'_, AppState>,
     root: Option<String>,
 ) -> Result<Vec<InstanceInfo>, IpcError> {
-    let core = state.core.read().await;
-    // 默认根：core 里已索引的主仓库；指定根：临时仓库只读扫描（多游戏目录）。
+    // Perf audit 1.9: the listing runs a per-instance completion scan
+    // (thousands of stats) — take only cheap clones under the core lock, then
+    // scan on the blocking pool with no core lock held.
     match root {
         Some(root) if !root.trim().is_empty() => {
+            let platform = {
+                let core = state.core.read().await;
+                core.platform.descriptor
+            };
             // 临时仓库不会自动扫描磁盘——必须 refresh() 才有 manifests
             //（漏掉这一步就是"选了目录读不出实例"的根因）。
-            let mut repo =
-                rmccc_version::DefaultGameRepository::new(std::path::PathBuf::from(root));
-            repo.refresh().map_err(IpcError::from)?;
-            Ok(list_instances(
-                &repo,
-                repo.game_dir(),
-                &core.platform.descriptor,
-            ))
+            tokio::task::spawn_blocking(move || -> Result<Vec<InstanceInfo>, IpcError> {
+                let mut repo =
+                    rmccc_version::DefaultGameRepository::new(std::path::PathBuf::from(root));
+                repo.refresh().map_err(IpcError::from)?;
+                Ok(list_instances(&repo, repo.game_dir(), &platform))
+            })
+            .await
+            .map_err(join_error)?
         }
         _ => {
-            let repo = core.game_repository.read().map_err(|_| locked_error())?;
-            Ok(list_instances(
-                &repo,
-                repo.game_dir(),
-                &core.platform.descriptor,
-            ))
+            let (repo, platform) = {
+                let core = state.core.read().await;
+                (core.game_repository.clone(), core.platform.descriptor)
+            };
+            tokio::task::spawn_blocking(move || {
+                let repo = repo.read().map_err(|_| locked_error())?;
+                Ok(list_instances(&repo, repo.game_dir(), &platform))
+            })
+            .await
+            .map_err(join_error)?
         }
     }
 }
@@ -150,15 +167,19 @@ pub async fn instance_refresh(
     state: tauri::State<'_, AppState>,
 ) -> Result<Vec<InstanceInfo>, IpcError> {
     let app_handle = state.app_handle.clone();
-    let core = state.core.read().await;
-    {
-        let mut repo = core.game_repository.write().map_err(|_| locked_error())?;
-        repo.refresh()?;
-    }
-
-    // Broadcast the refreshed instance set (HMCL RefreshedGameInstancesEvent).
-    let instances = {
-        let repo = core.game_repository.read().map_err(|_| locked_error())?;
+    // Perf audit 1.9: refresh (full JSON re-parse) + per-instance completion
+    // scan run on the blocking pool; the core read lock is held only to clone
+    // the repository handle.
+    let (repo, platform) = {
+        let core = state.core.read().await;
+        (core.game_repository.clone(), core.platform.descriptor)
+    };
+    let instances = tokio::task::spawn_blocking(move || -> Result<Vec<InstanceInfo>, IpcError> {
+        {
+            let mut repo = repo.write().map_err(|_| locked_error())?;
+            repo.refresh().map_err(IpcError::from)?;
+        }
+        let repo = repo.read().map_err(|_| locked_error())?;
         let game_root = repo.game_dir().to_path_buf();
         let ids = repo.get_instance_ids();
         let mut list = Vec::with_capacity(ids.len());
@@ -170,7 +191,7 @@ pub async fn instance_refresh(
                     rmccc_version::completion::check_completion(
                         &game_root,
                         r,
-                        &core.platform.descriptor,
+                        &platform,
                         rmccc_version::completion::CompletionVerify::Size,
                     )
                     .len()
@@ -189,8 +210,10 @@ pub async fn instance_refresh(
                 missing_count,
             });
         }
-        list
-    };
+        Ok(list)
+    })
+    .await
+    .map_err(join_error)??;
 
     let _ = app_handle.emit(
         crate::events::INSTANCES_REFRESHED,

@@ -24,7 +24,7 @@ resolver = "2"
 
 [workspace.dependencies]
 # Serialization
-serde = { version = "1", features = ["derive"] }
+serde = { version = "1", features = ["derive", "rc"] }
 serde_json = "1"
 
 # Async runtime
@@ -121,3 +121,20 @@ panic = "abort"
 [profile.release.package."*"]
 opt-level = "s"
 strip = true
+
+# Perf audit B1: the kernel's CPU hot paths (SHA1 over hundreds of MB of
+# downloads, serde_json parsing of version manifests/asset indexes, zip
+# inflate for natives/installers) run 10-30% slower under -Os. These leaf
+# packages are small, so -O3 here costs almost nothing against the 20 MiB
+# binary-size gate while directly speeding up install/repair/launch.
+[profile.release.package.sha1]
+opt-level = 3
+
+[profile.release.package.serde_json]
+opt-level = 3
+
+[profile.release.package.zip]
+opt-level = 3
+
+[profile.release.package.flate2]
+opt-level = 3

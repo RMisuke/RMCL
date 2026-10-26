@@ -170,7 +170,22 @@ pub async fn resolve_version(
         return match child.inherits_from.clone() {
             None => Ok(child),
             Some(parent_id) => {
-                let mut resolved = rmccc_version::resolve_version(&parent_id, provider).await?;
+                // Perf audit C3: the parent of a modded instance (e.g. 1.20.1
+                // under `1.20.1-forge`) is installed locally in practice —
+                // resolve through the local repository (offline, no manifest
+                // round-trip or deep copy) and only fall back to the network
+                // provider when the parent is not indexed.
+                let local_parent = core.game_repository.read().ok().and_then(|repo| {
+                    if repo.has_instance(&parent_id) {
+                        repo.get_resolved(&parent_id).ok().map(|r| r.launch)
+                    } else {
+                        None
+                    }
+                });
+                let mut resolved = match local_parent {
+                    Some(parent) => parent,
+                    None => rmccc_version::resolve_version(&parent_id, provider).await?,
+                };
                 rmccc_version::merge_child_into_parent(&mut resolved, &child);
                 resolved.id = game_version_id.to_string();
                 Ok(resolved)
@@ -235,13 +250,9 @@ pub async fn install_game(
 
     let total = items.len();
     if total == 0 {
-        extract_natives(
-            &version,
-            &game_dir,
-            version_id,
-            &core.platform.descriptor,
-            progress,
-        )?;
+        // Perf audit 1.4: zip extraction of multiple library jars is blocking
+        // IO + CPU — run it on the blocking pool.
+        run_extract_natives(&version, &game_dir, version_id, core.platform.descriptor, progress.cloned()).await?;
         tracing::info!(version = %version_id, "Nothing to download, version already complete");
         return Ok(SetupReport::default());
     }
@@ -277,13 +288,7 @@ pub async fn install_game(
     // 有失败条目时不解压 natives：那会拿残缺的依赖库去解压，报错信息比
     // "有 N 个文件下载失败" 更难定位。
     if report.is_complete() {
-        extract_natives(
-            &version,
-            &game_dir,
-            version_id,
-            &core.platform.descriptor,
-            progress,
-        )?;
+        run_extract_natives(&version, &game_dir, version_id, core.platform.descriptor, progress.cloned()).await?;
     }
 
     tracing::info!(
@@ -328,10 +333,16 @@ fn write_version_json(
         .join("versions")
         .join(version_id)
         .join(format!("{version_id}.json"));
+    // Perf audit C4: the existence check runs *before* any clone/serialize —
+    // patched/inheritance JSON almost always exists, so the old order paid a
+    // full `raw_json` clone (or struct serialization) per call for nothing.
+    if path.exists() {
+        return Ok(());
+    }
     // 优先 Mojang 原始 JSON（camelCase）；本地解析出来的版本没有 raw_json 时
     // 退回结构体序列化（引擎仍可启动）。
     let content = match version.raw_json {
-        Some(ref raw) => raw.clone(),
+        Some(ref raw) => raw.to_string(),
         None => serde_json::to_string_pretty(version)?,
     };
     write_if_absent(&path, &content)
@@ -524,12 +535,32 @@ pub async fn ensure_launch_ready(
 
 // ────────────────────────────── Launch ──────────────────────────────
 
+/// `extract_natives` on the blocking pool (perf audit 1.4): the extraction
+/// unzips several library jars synchronously and must not occupy an async
+/// worker. Progress callbacks keep working — the callback is `Send + Sync`.
+async fn run_extract_natives(
+    version: &rmccc_version::GameVersion,
+    game_dir: &std::path::Path,
+    version_id: &str,
+    descriptor: rmccc_platform::PlatformDescriptor,
+    progress: Option<ProgressCb>,
+) -> Result<()> {
+    let version = version.clone();
+    let game_dir = game_dir.to_path_buf();
+    let version_id = version_id.to_string();
+    tokio::task::spawn_blocking(move || {
+        extract_natives(&version, &game_dir, &version_id, &descriptor, progress.as_ref())
+    })
+    .await
+    .map_err(|e| RmcccError::Other(format!("natives extraction join error: {e}")))?
+}
+
 /// 检测启动所需 Java（自定义路径优先，否则自动探测）。
 ///
 /// 自定义路径不存在时返回 [`RmcccError::JavaNotFound`]——此前 CLI 检查而
 /// Tauri 只检查"路径形态"，于是填了个错路径仍会走到 spawn 才失败。
 fn detect_launch_java(
-    core: &CoreHandle,
+    platform: &std::sync::Arc<rmccc_platform::Platform>,
     profile: &rmccc_profile::Profile,
     game_version: &rmccc_version::GameVersion,
 ) -> Result<rmccc_launch::JavaInstallation> {
@@ -569,7 +600,7 @@ fn detect_launch_java(
             }
             Ok(probed)
         }
-        None => core.platform.java.find(required_java),
+        None => platform.java.find(required_java),
     }
 }
 
@@ -608,7 +639,16 @@ pub async fn launch_game(
             .launch
     };
 
-    let java_install = detect_launch_java(core, profile, &game_version)?;
+    // Perf audit 1.5: the probe spawns real JVM subprocesses (100-500 ms
+    // each) — run it on the blocking pool, not an async worker.
+    let java_install = {
+        let platform = core.platform.clone();
+        let profile = profile.clone();
+        let game_version = game_version.clone();
+        tokio::task::spawn_blocking(move || detect_launch_java(&platform, &profile, &game_version))
+            .await
+            .map_err(|e| RmcccError::Other(format!("java detect join error: {e}")))?
+    }?;
     tracing::info!(
         profile_id = %profile.id,
         java_version = java_install.major_version,

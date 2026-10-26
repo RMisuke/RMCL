@@ -96,26 +96,61 @@ pub trait ModSource: Send + Sync {
     /// Download raw bytes from a URL using the source's HTTP client.
     async fn download_bytes(&self, url: &str) -> Result<Vec<u8>>;
 
+    /// Open a streaming GET response for `url` (perf audit S1): lets the
+    /// default [`Self::install`] write to disk while downloading instead of
+    /// buffering large jars / shaders (50–200 MB) — twice — in memory.
+    async fn fetch_stream(&self, url: &str) -> Result<reqwest::Response>;
+
     /// Install a mod version to the given jar path (download + write).
     ///
     /// Uses `version.download_url` if present, otherwise resolves it via
     /// [`Self::get_download_url`]. SHA1 verification is tracked separately (P3).
+    ///
+    /// Perf audit S1: streams the body into a staged `<dest>.part` file while
+    /// hashing, then publishes by rename — no full-file memory buffer, and a
+    /// hash mismatch can never leave a corrupt jar at `dest` (P1-8 semantics).
     async fn install(&self, version: &ModVersion, dest: &Path) -> Result<()> {
         let url = match &version.download_url {
             Some(u) => u.clone(),
             None => self.get_download_url(&version.id).await?,
         };
-        let bytes = self.download_bytes(&url).await?;
+
+        let mut response = self.fetch_stream(&url).await?;
+        if let Some(parent) = dest.parent() {
+            tokio::fs::create_dir_all(parent).await.map_err(RmcccError::Io)?;
+        }
+        let file_name = dest
+            .file_name()
+            .map(|n| n.to_string_lossy().to_string())
+            .unwrap_or_else(|| "mod.jar".to_string());
+        let part = dest.with_file_name(format!("{file_name}.part"));
+
+        use sha1::{Digest, Sha1};
+        use tokio::io::AsyncWriteExt;
+        let mut writer =
+            tokio::io::BufWriter::with_capacity(128 * 1024, tokio::fs::File::create(&part).await?);
+        let mut hasher = Sha1::new();
+        loop {
+            match response.chunk().await {
+                Ok(Some(chunk)) => {
+                    hasher.update(&chunk);
+                    writer.write_all(&chunk).await.map_err(RmcccError::Io)?;
+                }
+                Ok(None) => break,
+                Err(e) => {
+                    let _ = tokio::fs::remove_file(&part).await;
+                    return Err(RmcccError::Network(e.to_string()));
+                }
+            }
+        }
+        writer.flush().await.map_err(RmcccError::Io)?;
+        drop(writer);
 
         // P3-11：远端声明 SHA1 时校验完整性，防止下载损坏/被篡改的 jar。
         if let Some(ref expected) = version.sha1 {
-            let actual = {
-                use sha1::{Digest, Sha1};
-                let mut hasher = Sha1::new();
-                hasher.update(&bytes);
-                format!("{:x}", hasher.finalize())
-            };
+            let actual = format!("{:x}", hasher.finalize());
             if !actual.eq_ignore_ascii_case(expected) {
+                let _ = tokio::fs::remove_file(&part).await;
                 return Err(RmcccError::HashMismatch {
                     path: url,
                     expected: expected.clone(),
@@ -124,10 +159,7 @@ pub trait ModSource: Send + Sync {
             }
         }
 
-        if let Some(parent) = dest.parent() {
-            std::fs::create_dir_all(parent).map_err(RmcccError::Io)?;
-        }
-        std::fs::write(dest, bytes).map_err(RmcccError::Io)?;
+        tokio::fs::rename(&part, dest).await.map_err(RmcccError::Io)?;
         Ok(())
     }
 }

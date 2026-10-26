@@ -12,22 +12,59 @@
 
 use crate::state::AppState;
 use rmccc_error::IpcError;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use tauri::Emitter;
 
 /// 每实例保留的输出行上限（与进程内存缓冲同量级，崩溃分析只需尾部）。
 const GAME_OUTPUT_CAP: usize = 2000;
 
+/// Log-line coalescing for the UI (perf audit 2.1): modded launches emit
+/// hundreds of stdout lines per second; one IPC event per line serialized
+/// the whole front-end. Lines flush when either the batch fills or the
+/// window since the previous flush elapsed — the tail never lags more than
+/// one line behind at low rates, and emits are capped at ~10/s at high rates.
+const LOG_FLUSH_LINES: usize = 50;
+const LOG_FLUSH_WINDOW_MS: u64 = 100;
+
 /// Forwards game process events to the UI (HMCL `ProcessListener`).
 ///
-/// `on_log` → `LAUNCH_OUTPUT`; `on_exit` → `LAUNCH_EXITED` (with exit type)
-/// and removes the profile from `running_games`.
+/// `on_log` → batched `LAUNCH_OUTPUT` (`{ profile_id, lines }`); `on_exit` →
+/// `LAUNCH_EXITED` (with exit type) and removes the profile from
+/// `running_games`.
 struct TauriProcessListener {
     app_handle: tauri::AppHandle,
     profile_id: String,
     running_games: Arc<dashmap::DashMap<String, u32>>,
     /// 每实例输出环形缓冲（AI 日志分析 / MCP game_logs 的 latest.log 回退源）。
     game_output: Arc<dashmap::DashMap<String, Arc<std::sync::Mutex<Vec<String>>>>>,
+    /// Lines buffered for the next `LAUNCH_OUTPUT` emit.
+    pending: std::sync::Mutex<Vec<String>>,
+    /// Epoch for `last_flush_ms`.
+    created: std::time::Instant,
+    /// Milliseconds since `created` of the last flush (atomic: sync trait).
+    last_flush_ms: AtomicU64,
+}
+
+impl TauriProcessListener {
+    fn emit_lines(&self, lines: Vec<String>) {
+        let _ = self.app_handle.emit(
+            crate::events::LAUNCH_OUTPUT,
+            serde_json::json!({ "profile_id": self.profile_id, "lines": lines }),
+        );
+    }
+
+    fn flush_pending(&self) {
+        let lines = {
+            let mut pending = self.pending.lock().unwrap_or_else(|p| p.into_inner());
+            std::mem::take(&mut *pending)
+        };
+        if !lines.is_empty() {
+            self.last_flush_ms
+                .store(self.created.elapsed().as_millis() as u64, Ordering::Relaxed);
+            self.emit_lines(lines);
+        }
+    }
 }
 
 impl rmccc_launch::ProcessListener for TauriProcessListener {
@@ -40,14 +77,24 @@ impl rmccc_launch::ProcessListener for TauriProcessListener {
                 lines.drain(..excess);
             }
         }
-        let _ = self.app_handle.emit(
-            crate::events::LAUNCH_OUTPUT,
-            serde_json::json!({ "profile_id": self.profile_id, "text": line }),
-        );
+        let now_ms = self.created.elapsed().as_millis() as u64;
+        let flush = {
+            let mut pending = self.pending.lock().unwrap_or_else(|p| p.into_inner());
+            pending.push(line);
+            pending.len() >= LOG_FLUSH_LINES
+                || now_ms.saturating_sub(self.last_flush_ms.load(Ordering::Relaxed))
+                    >= LOG_FLUSH_WINDOW_MS
+        };
+        if flush {
+            self.flush_pending();
+        }
     }
 
     fn on_exit(&self, exit_code: i32, exit_type: rmccc_launch::ExitType) {
         self.running_games.remove(&self.profile_id);
+        // Emit whatever the coalescer still holds so the UI sees the final
+        // lines before the exit banner.
+        self.flush_pending();
         let _ = self.app_handle.emit(
             crate::events::LAUNCH_EXITED,
             serde_json::json!({
@@ -99,6 +146,9 @@ pub async fn launch_start(
         profile_id: profile_id.clone(),
         running_games: state.running_games.clone(),
         game_output: state.game_output.clone(),
+        pending: std::sync::Mutex::new(Vec::new()),
+        created: std::time::Instant::now(),
+        last_flush_ms: AtomicU64::new(0),
     });
 
     // 新一轮启动：清掉上一轮的捕获输出（进程退出后保留供事后分析）。

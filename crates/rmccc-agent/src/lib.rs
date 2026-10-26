@@ -23,7 +23,7 @@ pub mod mods;
 pub use audit::{AuditLog, AuditOutcome, AuditRecord, RiskLevel};
 pub use confirm::{TaskSnapshot, TaskStatus};
 pub use mods::{
-    apply_missing_dependencies, plan_from_report, scan_instance_mods, AppliedMod,
-    AppliedPlanReport, DependencyReport, FailedMod, InstalledMod, MetadataSource, ModConflict,
-    ModInstallPlan, PlanApplier, PlannedDependency,
+    apply_missing_dependencies, apply_missing_dependencies_async, plan_from_report,
+    scan_instance_mods, AppliedMod, AppliedPlanReport, DependencyReport, FailedMod, InstalledMod,
+    MetadataSource, ModConflict, ModInstallPlan, PlanApplier, PlannedDependency,
 };

@@ -19,7 +19,16 @@ pub async fn mod_search(
     limit: Option<u32>,
     index: Option<String>,
 ) -> Result<rmccc_mods::ModSearchResult, IpcError> {
-    let core = state.core.read().await;
+    // A2: snapshot the source Arc under a short read lock — the network call
+    // below must not hold the core lock (a queued writer would stall IPC).
+    let source = {
+        let core = state.core.read().await;
+        core.mod_sources.first().cloned().ok_or_else(|| IpcError {
+            code: rmccc_error::ErrorCode::Unknown,
+            message: "No mod source available".into(),
+            retryable: false,
+        })?
+    };
 
     let search_query = ModSearchQuery {
         query,
@@ -29,13 +38,6 @@ pub async fn mod_search(
         limit: limit.unwrap_or(20).min(100),
         index,
     };
-
-    // Use the first available mod source (Modrinth).
-    let source = core.mod_sources.first().ok_or_else(|| IpcError {
-        code: rmccc_error::ErrorCode::Unknown,
-        message: "No mod source available".into(),
-        retryable: false,
-    })?;
 
     // P3-08：记录搜索执行结果（query + 命中数）
     let result = source.search(&search_query).await.map_err(IpcError::from)?;
@@ -54,13 +56,15 @@ pub async fn mod_get_versions(
     state: tauri::State<'_, AppState>,
     mod_id: String,
 ) -> Result<Vec<rmccc_mods::ModVersion>, IpcError> {
-    let core = state.core.read().await;
-
-    let source = core.mod_sources.first().ok_or_else(|| IpcError {
-        code: rmccc_error::ErrorCode::Unknown,
-        message: "No mod source available".into(),
-        retryable: false,
-    })?;
+    // A2: short read lock, then network call lock-free (perf audit 1.1).
+    let source = {
+        let core = state.core.read().await;
+        core.mod_sources.first().cloned().ok_or_else(|| IpcError {
+            code: rmccc_error::ErrorCode::Unknown,
+            message: "No mod source available".into(),
+            retryable: false,
+        })?
+    };
 
     source.list_versions(&mod_id).await.map_err(IpcError::from)
 }
@@ -71,13 +75,15 @@ pub async fn mod_get_download_url(
     state: tauri::State<'_, AppState>,
     version_id: String,
 ) -> Result<String, IpcError> {
-    let core = state.core.read().await;
-
-    let source = core.mod_sources.first().ok_or_else(|| IpcError {
-        code: rmccc_error::ErrorCode::Unknown,
-        message: "No mod source available".into(),
-        retryable: false,
-    })?;
+    // A2: short read lock, then network call lock-free (perf audit 1.1).
+    let source = {
+        let core = state.core.read().await;
+        core.mod_sources.first().cloned().ok_or_else(|| IpcError {
+            code: rmccc_error::ErrorCode::Unknown,
+            message: "No mod source available".into(),
+            retryable: false,
+        })?
+    };
 
     source
         .get_download_url(&version_id)
@@ -91,19 +97,24 @@ pub async fn mod_list(
     state: tauri::State<'_, AppState>,
     profile_id: String,
 ) -> Result<ModList, IpcError> {
-    let core = state.core.read().await;
-    let profile = core
-        .profile_store
-        .get(&profile_id)?
-        .ok_or_else(|| IpcError {
-            code: rmccc_error::ErrorCode::ProfileNotFound,
-            message: format!("Profile not found: {profile_id}"),
-            retryable: false,
-        })?;
+    // A2: snapshot (config, profile) under a short read lock — no core lock is
+    // held across the work below (perf audit 1.1).
+    let (config, profile) = {
+        let core = state.core.read().await;
+        let profile = core
+            .profile_store
+            .get(&profile_id)?
+            .ok_or_else(|| IpcError {
+                code: rmccc_error::ErrorCode::ProfileNotFound,
+                message: format!("Profile not found: {profile_id}"),
+                retryable: false,
+            })?;
+        (core.config.clone(), profile)
+    };
 
     // Mods follow the instance run directory, so an isolated instance keeps
     // its own mods (HMCL behaviour) instead of writing into the shared root.
-    let mods_dir = rmccc_launch::instance_mods_dir(&core.config, &profile);
+    let mods_dir = rmccc_launch::instance_mods_dir(&config, &profile);
     let disabled_dir = mods_dir.join("disabled");
 
     let scan = |dir: &std::path::Path| -> Vec<String> {
@@ -148,19 +159,24 @@ pub async fn mod_toggle(
     mod_filename: String,
     enabled: bool,
 ) -> Result<(), IpcError> {
-    let core = state.core.read().await;
-    let profile = core
-        .profile_store
-        .get(&profile_id)?
-        .ok_or_else(|| IpcError {
-            code: rmccc_error::ErrorCode::ProfileNotFound,
-            message: format!("Profile not found: {profile_id}"),
-            retryable: false,
-        })?;
+    // A2: snapshot (config, profile) under a short read lock — no core lock is
+    // held across the work below (perf audit 1.1).
+    let (config, profile) = {
+        let core = state.core.read().await;
+        let profile = core
+            .profile_store
+            .get(&profile_id)?
+            .ok_or_else(|| IpcError {
+                code: rmccc_error::ErrorCode::ProfileNotFound,
+                message: format!("Profile not found: {profile_id}"),
+                retryable: false,
+            })?;
+        (core.config.clone(), profile)
+    };
 
     // Mods follow the instance run directory, so an isolated instance keeps
     // its own mods (HMCL behaviour) instead of writing into the shared root.
-    let mods_dir = rmccc_launch::instance_mods_dir(&core.config, &profile);
+    let mods_dir = rmccc_launch::instance_mods_dir(&config, &profile);
     let disabled_dir = mods_dir.join("disabled");
     let src = if enabled {
         disabled_dir.join(&mod_filename)
@@ -238,24 +254,29 @@ pub async fn mod_install(
     profile_id: String,
     version: rmccc_mods::ModVersion,
 ) -> Result<String, IpcError> {
-    let core = state.core.read().await;
-    let profile = core
-        .profile_store
-        .get(&profile_id)?
-        .ok_or_else(|| IpcError {
-            code: rmccc_error::ErrorCode::ProfileNotFound,
-            message: format!("Profile not found: {profile_id}"),
+    // A2: snapshot source + (config, profile) under a short read lock — the
+    // download below runs lock-free (perf audit 1.1).
+    let (source, config, profile) = {
+        let core = state.core.read().await;
+        let profile = core
+            .profile_store
+            .get(&profile_id)?
+            .ok_or_else(|| IpcError {
+                code: rmccc_error::ErrorCode::ProfileNotFound,
+                message: format!("Profile not found: {profile_id}"),
+                retryable: false,
+            })?;
+        let source = core.mod_sources.first().cloned().ok_or_else(|| IpcError {
+            code: rmccc_error::ErrorCode::Unknown,
+            message: "No mod source available".into(),
             retryable: false,
         })?;
-    let source = core.mod_sources.first().ok_or_else(|| IpcError {
-        code: rmccc_error::ErrorCode::Unknown,
-        message: "No mod source available".into(),
-        retryable: false,
-    })?;
+        (source, core.config.clone(), profile)
+    };
 
     // Mods follow the instance run directory, so an isolated instance keeps
     // its own mods (HMCL behaviour) instead of writing into the shared root.
-    let mods_dir = rmccc_launch::instance_mods_dir(&core.config, &profile);
+    let mods_dir = rmccc_launch::instance_mods_dir(&config, &profile);
     std::fs::create_dir_all(&mods_dir)?;
 
     let filename = version
@@ -289,15 +310,20 @@ pub async fn mod_install_local(
     profile_id: String,
     source_path: String,
 ) -> Result<String, IpcError> {
-    let core = state.core.read().await;
-    let profile = core
-        .profile_store
-        .get(&profile_id)?
-        .ok_or_else(|| IpcError {
-            code: rmccc_error::ErrorCode::ProfileNotFound,
-            message: format!("Profile not found: {profile_id}"),
-            retryable: false,
-        })?;
+    // A2: snapshot (config, profile) under a short read lock — no core lock is
+    // held across the work below (perf audit 1.1).
+    let (config, profile) = {
+        let core = state.core.read().await;
+        let profile = core
+            .profile_store
+            .get(&profile_id)?
+            .ok_or_else(|| IpcError {
+                code: rmccc_error::ErrorCode::ProfileNotFound,
+                message: format!("Profile not found: {profile_id}"),
+                retryable: false,
+            })?;
+        (core.config.clone(), profile)
+    };
 
     let src = std::path::Path::new(&source_path);
     if !src.is_file() {
@@ -308,7 +334,7 @@ pub async fn mod_install_local(
         });
     }
 
-    let mods_dir = rmccc_launch::instance_mods_dir(&core.config, &profile);
+    let mods_dir = rmccc_launch::instance_mods_dir(&config, &profile);
     std::fs::create_dir_all(&mods_dir)?;
 
     let filename = src
@@ -365,17 +391,22 @@ pub async fn mod_pick_and_install(
         retryable: false,
     })?;
 
-    let core = state.core.read().await;
-    let profile = core
-        .profile_store
-        .get(&profile_id)?
-        .ok_or_else(|| IpcError {
-            code: rmccc_error::ErrorCode::ProfileNotFound,
-            message: format!("Profile not found: {profile_id}"),
-            retryable: false,
-        })?;
+    // A2: snapshot (config, profile) under a short read lock — no core lock is
+    // held across the work below (perf audit 1.1).
+    let (config, profile) = {
+        let core = state.core.read().await;
+        let profile = core
+            .profile_store
+            .get(&profile_id)?
+            .ok_or_else(|| IpcError {
+                code: rmccc_error::ErrorCode::ProfileNotFound,
+                message: format!("Profile not found: {profile_id}"),
+                retryable: false,
+            })?;
+        (core.config.clone(), profile)
+    };
 
-    let mods_dir = rmccc_launch::instance_mods_dir(&core.config, &profile);
+    let mods_dir = rmccc_launch::instance_mods_dir(&config, &profile);
     std::fs::create_dir_all(&mods_dir)?;
 
     let filename = source
@@ -410,19 +441,24 @@ pub async fn mod_remove(
 ) -> Result<(), IpcError> {
     validate_mod_filename(&mod_filename)?;
 
-    let core = state.core.read().await;
-    let profile = core
-        .profile_store
-        .get(&profile_id)?
-        .ok_or_else(|| IpcError {
-            code: rmccc_error::ErrorCode::ProfileNotFound,
-            message: format!("Profile not found: {profile_id}"),
-            retryable: false,
-        })?;
+    // A2: snapshot (config, profile) under a short read lock — no core lock is
+    // held across the work below (perf audit 1.1).
+    let (config, profile) = {
+        let core = state.core.read().await;
+        let profile = core
+            .profile_store
+            .get(&profile_id)?
+            .ok_or_else(|| IpcError {
+                code: rmccc_error::ErrorCode::ProfileNotFound,
+                message: format!("Profile not found: {profile_id}"),
+                retryable: false,
+            })?;
+        (core.config.clone(), profile)
+    };
 
     // Mods follow the instance run directory, so an isolated instance keeps
     // its own mods (HMCL behaviour) instead of writing into the shared root.
-    let mods_dir = rmccc_launch::instance_mods_dir(&core.config, &profile);
+    let mods_dir = rmccc_launch::instance_mods_dir(&config, &profile);
     let active = mods_dir.join(&mod_filename);
     let disabled = mods_dir.join("disabled").join(&mod_filename);
 
@@ -463,7 +499,7 @@ pub struct ModList {
 
 use rmccc_agent::{
     plan_from_report, scan_instance_mods, AppliedMod, AppliedPlanReport, DependencyReport,
-    FailedMod, ModInstallPlan, PlanApplier, PlannedDependency,
+    ModInstallPlan, PlannedDependency,
 };
 use rmccc_error::RmcccError;
 
@@ -505,8 +541,15 @@ pub async fn mods_dependency_scan(
     drop(core);
 
     // 实例还没建过 mods 目录 = 没装任何 mod = 没有可扫的依赖，直接给空报告。
+    // Perf audit 1.6: scanning opens + parses every jar (zip central directory
+    // + fabric.mod.json) — run it off the async worker.
     let report = if mods_dir.is_dir() {
-        scan_instance_mods(&mods_dir)?
+        tokio::task::spawn_blocking({
+            let mods_dir = mods_dir.clone();
+            move || scan_instance_mods(&mods_dir)
+        })
+        .await
+        .map_err(|e| RmcccError::Other(format!("dependency scan join error: {e}")))??
     } else {
         DependencyReport {
             mods: Vec::new(),
@@ -535,31 +578,6 @@ struct ModrinthPlanApplier {
 }
 
 impl ModrinthPlanApplier {
-    async fn apply_async(
-        &self,
-        mods_dir: &std::path::Path,
-        dependencies: &[PlannedDependency],
-    ) -> rmccc_error::Result<AppliedPlanReport> {
-        let mut installed = Vec::new();
-        let mut failed = Vec::new();
-        let mut attempted = Vec::new();
-        for dep in dependencies {
-            attempted.push(dep.mod_id.clone());
-            match self.install_one(mods_dir, dep).await {
-                Ok(applied) => installed.push(applied),
-                Err(error) => failed.push(FailedMod {
-                    mod_id: dep.mod_id.clone(),
-                    reason: error.to_string(),
-                }),
-            }
-        }
-        Ok(AppliedPlanReport {
-            installed,
-            failed,
-            attempted,
-        })
-    }
-
     async fn install_one(
         &self,
         mods_dir: &std::path::Path,
@@ -625,18 +643,6 @@ impl ModrinthPlanApplier {
     }
 }
 
-impl PlanApplier for ModrinthPlanApplier {
-    fn apply(
-        &self,
-        mods_dir: &std::path::Path,
-        dependencies: &[PlannedDependency],
-    ) -> rmccc_error::Result<AppliedPlanReport> {
-        tokio::task::block_in_place(|| {
-            tokio::runtime::Handle::current().block_on(self.apply_async(mods_dir, dependencies))
-        })
-    }
-}
-
 /// 一键补装缺失前置：执行前重新扫描（"用户确认 + Core 再校验"），
 /// 把仍缺失的必需前置经 Modrinth 下载安装。**纯逻辑，不依赖 AI**。
 #[tauri::command]
@@ -662,7 +668,14 @@ pub async fn mods_apply_plan(
         game_version,
         loader,
     };
-    let report = rmccc_agent::apply_missing_dependencies(&mods_dir, &applier)?;
+    // Perf audit 1.7: the async twin replaces the `block_in_place` bridge —
+    // bridging pinned a runtime worker for the whole (minutes-long) install.
+    let applier = &applier;
+    let report =
+        rmccc_agent::apply_missing_dependencies_async(&mods_dir, |mods_dir, dep| async move {
+            applier.install_one(&mods_dir, &dep).await
+        })
+        .await?;
     tracing::info!(
         profile_id = %profile_id,
         installed = report.installed.len(),

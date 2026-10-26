@@ -102,7 +102,9 @@ pub struct CoreContext {
 
     /// Mod sources (Modrinth, CurseForge, etc.) for searching and downloading mods.
     /// Empty until Phase 4 mod API implementation is complete.
-    pub mod_sources: Vec<Box<dyn rmccc_mods::ModSource>>,
+    /// Arc'd so IPC commands can snapshot a source under a short read lock
+    /// and run network calls lock-free (perf audit 1.1).
+    pub mod_sources: Vec<std::sync::Arc<dyn rmccc_mods::ModSource>>,
 
     /// 平台适配层（指南 §5.7）。**在组装层注入一次**，下游全链路依赖 trait：
     /// 进程终止、文件权限、符号链接、打开 URL、平台描述符都从这里取，
@@ -266,22 +268,32 @@ impl CoreContext {
         let game_root = config.resolved_game_root();
         std::fs::create_dir_all(&game_root)?;
 
-        /// TCP 连接延迟探测（自动选源）。连接失败 → `None`。
+        /// TCP connection latency probe for auto source selection.
+        /// Returns `None` on failure or after the 2s `connect_timeout` —
+        /// without the timeout a SYN-blackholed host would stall startup for
+        /// the OS-level SYN retry window (~75s on macOS).
         fn tcp_connect_ms(host: &str) -> Option<u128> {
-            use std::net::TcpStream;
-            use std::time::Instant;
+            use std::net::{TcpStream, ToSocketAddrs};
+            use std::time::{Duration, Instant};
             let start = Instant::now();
-            TcpStream::connect((host, 443))
+            let addr = (host, 443).to_socket_addrs().ok()?.next()?;
+            TcpStream::connect_timeout(&addr, Duration::from_secs(2))
                 .ok()
                 .map(|_| start.elapsed().as_millis())
         }
 
-        /// 两大下载源的延迟快照（官方 launcher 元数据主机 vs BMCLAPI）。
+        /// Latency snapshot of the two download sources (official launcher
+        /// metadata host vs BMCLAPI). Probes run in parallel so the total
+        /// wait is bounded by one 2s connect timeout, not two.
         fn probe_source_latencies() -> (Option<u128>, Option<u128>) {
-            (
-                tcp_connect_ms("launchermeta.mojang.com"),
-                tcp_connect_ms("bmclapi2.bangbang93.com"),
-            )
+            std::thread::scope(|s| {
+                let official = s.spawn(|| tcp_connect_ms("launchermeta.mojang.com"));
+                let bmclapi = s.spawn(|| tcp_connect_ms("bmclapi2.bangbang93.com"));
+                (
+                    official.join().ok().flatten(),
+                    bmclapi.join().ok().flatten(),
+                )
+            })
         }
 
         // Adopt instance data written by the pre-shared-root layout *before*
@@ -296,9 +308,13 @@ impl CoreContext {
         }
         let game_repository = std::sync::Arc::new(std::sync::RwLock::new(game_repository));
 
-        let version_provider = std::sync::Arc::new(rmccc_version::MojangVersionProvider::new(
-            http_client.clone(),
-        ));
+        let version_provider = std::sync::Arc::new(
+            rmccc_version::MojangVersionProvider::new(http_client.clone())
+                // Perf audit V2: ETag + manifest survive restarts, so a cold
+                // start issues a conditional request (304 → no download)
+                // instead of re-fetching the ~500 KB manifest.
+                .with_disk_cache(data_dir.join("cache").join("version-manifest.json")),
+        );
 
         let download_provider: std::sync::Arc<dyn rmccc_download::provider::DownloadProvider> =
             if let Some(ref mirror) = chosen_mirror {
@@ -372,9 +388,10 @@ impl CoreContext {
         // Mod loader 安装不再预创建 provider：统一走
         // `modloader::install_loader` + `DependencyManager`（审计 P1-4）。
         // Mod sources — Modrinth API client (CurseForge to follow).
-        let mod_sources: Vec<Box<dyn rmccc_mods::ModSource>> = vec![Box::new(
-            rmccc_mods::modrinth::ModrinthSource::new(http_client.clone()),
-        )];
+        let mod_sources: Vec<std::sync::Arc<dyn rmccc_mods::ModSource>> =
+            vec![std::sync::Arc::new(
+                rmccc_mods::modrinth::ModrinthSource::new(http_client.clone()),
+            )];
 
         Ok(Self {
             config,
@@ -465,7 +482,10 @@ pub async fn refresh_session(
         .load_account(&session.account_id)?
         .ok_or_else(|| RmcccError::ProfileNotFound(session.account_id.clone()))?;
     account.log_in().await?;
-    account_repo.save_account(account.as_ref())?;
+    // Perf audit C5: persist only when the session actually changed.
+    if account.needs_save() {
+        account_repo.save_account(account.as_ref())?;
+    }
     Ok(account.to_session())
 }
 
@@ -478,7 +498,11 @@ async fn log_in_active_account(
         None => return Ok(None),
     };
     let info = account.log_in().await?;
-    account_repo.save_account(account.as_ref())?;
+    // Perf audit C5: persist only when the session actually changed — an
+    // in-window token no longer costs 4 file IOs + 2 AES passes per launch.
+    if account.needs_save() {
+        account_repo.save_account(account.as_ref())?;
+    }
     Ok(Some(info))
 }
 

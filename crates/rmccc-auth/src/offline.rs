@@ -144,6 +144,12 @@ impl Account for OfflineAccount {
         self.uuid.clone()
     }
 
+    fn needs_save(&self) -> bool {
+        // Offline credentials are immutable — persisting after `log_in` is
+        // always a no-op write (perf audit C5).
+        false
+    }
+
     async fn log_in(&self) -> Result<AuthInfo> {
         Ok(self.launch_info())
     }

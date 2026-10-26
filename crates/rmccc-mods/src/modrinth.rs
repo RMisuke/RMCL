@@ -170,6 +170,22 @@ impl ModSource for ModrinthSource {
             .ok_or_else(|| RmcccError::Other("No download URL found".into()))
     }
 
+    async fn fetch_stream(&self, url: &str) -> Result<reqwest::Response> {
+        let resp = self
+            .client
+            .get(url)
+            .send()
+            .await
+            .map_err(|e| RmcccError::Network(e.to_string()))?;
+        if !resp.status().is_success() {
+            return Err(RmcccError::Network(format!(
+                "Mod download returned {}",
+                resp.status()
+            )));
+        }
+        Ok(resp)
+    }
+
     async fn download_bytes(&self, url: &str) -> Result<Vec<u8>> {
         let resp = self
             .client

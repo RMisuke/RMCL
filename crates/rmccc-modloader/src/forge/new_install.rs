@@ -23,6 +23,18 @@ use std::path::{Path, PathBuf};
 
 use super::profile::{ForgeNewInstallProfile, Processor};
 
+/// A single open handle on the installer ZIP (perf audit M4: the ~180 MB
+/// installer was previously opened and its central directory parsed 4-6 times
+/// across the Forge/NeoForge pipelines; one handle now flows through).
+pub(crate) type InstallerArchive = zip::ZipArchive<std::fs::File>;
+
+/// Open the installer ZIP once for the whole install flow.
+pub(crate) fn open_installer_zip(path: &Path) -> Result<InstallerArchive> {
+    let file = std::fs::File::open(path)
+        .map_err(|e| RmcccError::Other(format!("Cannot open installer: {e}")))?;
+    zip::ZipArchive::new(file).map_err(|e| RmcccError::Other(format!("Installer is not a valid ZIP: {e}")))
+}
+
 /// Installs Forge using the new (1.13+) processor-based method.
 #[derive(Debug)]
 pub struct ForgeNewInstallTask {
@@ -43,6 +55,23 @@ pub struct ForgeNewInstallTask {
 #[async_trait::async_trait]
 impl InstallTask for ForgeNewInstallTask {
     async fn execute(&mut self) -> Result<GameInstancePatch> {
+        let mut archive = open_installer_zip(&self.installer_path)?;
+        self.execute_with_archive(&mut archive).await
+    }
+
+    fn description(&self) -> &str {
+        "Installing Forge"
+    }
+}
+
+impl ForgeNewInstallTask {
+    /// Run the whole install flow over one open installer archive (perf audit
+    /// M4) — NeoForge reuses this with the archive it already opened for
+    /// profile classification.
+    pub(crate) async fn execute_with_archive(
+        &self,
+        archive: &mut InstallerArchive,
+    ) -> Result<GameInstancePatch> {
         tracing::info!(
             game_version = %self.game_version,
             forge_version = %self.forge_version,
@@ -50,7 +79,7 @@ impl InstallTask for ForgeNewInstallTask {
         );
 
         // ── 1. Parse install_profile.json ──
-        let profile = self.parse_install_profile()?;
+        let profile = Self::parse_install_profile(archive)?;
 
         // ── 2. 铺平 processor 的运行环境（批次 4 补齐，对齐 HMCL）──
         // a) 安装器内嵌 `maven/**` 提取到 libraries/；
@@ -58,7 +87,7 @@ impl InstallTask for ForgeNewInstallTask {
         // 此前两步都缺失：processor JAR 根本不在 classpath 路径上，
         // `--installClient` 式整体运行之外的 processors 路径必然失败。
         let libs_dir = self.game_dir.join("libraries");
-        let embedded = extract_embedded_maven(&self.installer_path, &self.game_dir)?;
+        let embedded = extract_embedded_maven(archive, &self.game_dir)?;
         download_processor_libraries(&self.client, &profile.libraries, &libs_dir).await?;
         tracing::info!(
             processor_count = profile.processors.len(),
@@ -88,9 +117,6 @@ impl InstallTask for ForgeNewInstallTask {
         ));
         std::fs::create_dir_all(&data_temp_dir)?;
         {
-            let zip_file = std::fs::File::open(&self.installer_path)?;
-            let mut archive = zip::ZipArchive::new(zip_file)
-                .map_err(|e| RmcccError::Other(format!("installer is not a valid ZIP: {e}")))?;
             for (key, entry) in &profile.data {
                 let resolved = resolve_template(&entry.client, &vars, &profile.data, &libs_dir)?;
                 if !resolved.starts_with('/') {
@@ -109,7 +135,7 @@ impl InstallTask for ForgeNewInstallTask {
         }
 
         // ── 4. Read the version JSON from the installer ──
-        let version_info = self.read_version_json(&profile)?;
+        let version_info = Self::read_version_json(archive, &profile)?;
 
         // ── 5. Execute processors sequentially ──
         let client_processors: Vec<&Processor> = profile
@@ -142,20 +168,8 @@ impl InstallTask for ForgeNewInstallTask {
         ))
     }
 
-    fn description(&self) -> &str {
-        "Installing Forge"
-    }
-}
-
-impl ForgeNewInstallTask {
-    /// Parse the install_profile.json from the installer JAR.
-    fn parse_install_profile(&self) -> Result<ForgeNewInstallProfile> {
-        let file = std::fs::File::open(&self.installer_path)
-            .map_err(|e| RmcccError::Other(format!("Cannot open Forge installer: {e}")))?;
-
-        let mut archive = zip::ZipArchive::new(file)
-            .map_err(|e| RmcccError::Other(format!("Forge installer is not a valid ZIP: {e}")))?;
-
+    /// Parse the install_profile.json from the already-open installer archive.
+    fn parse_install_profile(archive: &mut InstallerArchive) -> Result<ForgeNewInstallProfile> {
         let mut profile_json = String::new();
         {
             let mut entry = archive
@@ -168,15 +182,11 @@ impl ForgeNewInstallTask {
             .map_err(|e| RmcccError::Other(format!("Failed to parse install_profile.json: {e}")))
     }
 
-    /// Read the version JSON referenced by the install profile.
+    /// Read the version JSON referenced by the install profile (same archive).
     fn read_version_json(
-        &self,
+        archive: &mut InstallerArchive,
         profile: &ForgeNewInstallProfile,
     ) -> Result<rmccc_version::GameVersion> {
-        let file = std::fs::File::open(&self.installer_path)?;
-        let mut archive = zip::ZipArchive::new(file)
-            .map_err(|e| RmcccError::Other(format!("Cannot open installer ZIP: {e}")))?;
-
         // The json path may have a leading slash
         let json_path = profile.json.trim_start_matches('/');
         let mut version_json = String::new();
@@ -415,12 +425,7 @@ fn resolve_template(
 ///
 /// Forge 安装器把大部分 processor 依赖直接打进安装器 JAR 的 `maven/` 前缀下；
 /// 不提取它们，processor classpath 就是空中楼阁。
-fn extract_embedded_maven(installer_path: &Path, game_dir: &Path) -> Result<usize> {
-    let file = std::fs::File::open(installer_path)
-        .map_err(|e| RmcccError::Other(format!("Cannot open installer: {e}")))?;
-    let mut archive = zip::ZipArchive::new(file)
-        .map_err(|e| RmcccError::Other(format!("Installer is not a valid ZIP: {e}")))?;
-
+fn extract_embedded_maven(archive: &mut InstallerArchive, game_dir: &Path) -> Result<usize> {
     let libs_dir = game_dir.join("libraries");
     let names: Vec<String> = archive
         .file_names()
@@ -456,11 +461,72 @@ fn extract_embedded_maven(installer_path: &Path, game_dir: &Path) -> Result<usiz
 /// 下载 `install_profile.libraries` 中未由内嵌 `maven/` 覆盖的依赖。
 ///
 /// 已存在的文件跳过（内嵌提取先行，或此前安装过）；带 sha1 的条目校验。
+/// One processor dependency still missing after the embedded-maven pass.
+struct PendingProcessorLib {
+    name: String,
+    url: String,
+    sha1: String,
+    dest: PathBuf,
+}
+
+/// Download one dependency through the mirror candidates, verifying SHA-1.
+async fn fetch_processor_lib(
+    client: reqwest::Client,
+    item: PendingProcessorLib,
+) -> Result<PendingProcessorLib> {
+    let mut last_error: Option<RmcccError> = None;
+    let mut downloaded: Option<Vec<u8>> = None;
+    for url in mirror_candidates(&item.url) {
+        match fetch_url(&client, &url).await {
+            Ok(bytes) => {
+                downloaded = Some(bytes);
+                break;
+            }
+            Err(e) => {
+                tracing::warn!(library = %item.name, url = %url, error = %e, "processor dependency candidate failed");
+                last_error = Some(e);
+            }
+        }
+    }
+    let bytes = match downloaded {
+        Some(bytes) => bytes,
+        None => {
+            return Err(last_error.unwrap_or_else(|| {
+                RmcccError::Other(format!("no candidates for {}", item.name))
+            }));
+        }
+    };
+    if !item.sha1.is_empty() {
+        use sha1::{Digest, Sha1};
+        let mut hasher = Sha1::new();
+        hasher.update(&bytes);
+        let actual = format!("{:x}", hasher.finalize());
+        if !actual.eq_ignore_ascii_case(&item.sha1) {
+            return Err(RmcccError::Other(format!(
+                "processor dependency {} SHA-1 mismatch (expected {}, got {})",
+                item.name, item.sha1, actual
+            )));
+        }
+    }
+    if let Some(parent) = item.dest.parent() {
+        tokio::fs::create_dir_all(parent).await?;
+    }
+    tokio::fs::write(&item.dest, &bytes).await?;
+    tracing::debug!(library = %item.name, "downloaded processor dependency");
+    Ok(item)
+}
+
+/// 下载 `install_profile.libraries` 中未由内嵌 `maven/` 覆盖的依赖。
+///
+/// 已存在的文件跳过（内嵌提取先行，或此前安装过）；带 sha1 的条目校验。
+/// Perf audit M1: 100+ processor deps used to download strictly serially —
+/// fetch with bounded concurrency (8), one failing library fails the batch.
 async fn download_processor_libraries(
     client: &reqwest::Client,
     libraries: &[rmccc_version::Library],
     libs_dir: &Path,
 ) -> Result<()> {
+    let mut pending: Vec<PendingProcessorLib> = Vec::new();
     for lib in libraries {
         let Some(downloads) = &lib.downloads else {
             continue;
@@ -484,50 +550,53 @@ async fn download_processor_libraries(
             );
             continue;
         }
-        // 镜像候选（2026-10-25 NeoForge 26.1 安装实测）：maven.neoforged.net 在
-        // 部分网络下直连超时；BMCLAPI 的 `/maven/` 路径镜像了 neoforged /
-        // minecraftforge maven（安装器本体即由它伺服）。原 URL 失败时切镜像。
-        let mut last_error: Option<RmcccError> = None;
-        let mut downloaded: Option<Vec<u8>> = None;
-        for url in mirror_candidates(&artifact.url) {
-            match fetch_url(client, &url).await {
-                Ok(bytes) => {
-                    downloaded = Some(bytes);
-                    break;
-                }
-                Err(e) => {
-                    tracing::warn!(library = %lib.name, url = %url, error = %e, "processor dependency candidate failed");
-                    last_error = Some(e);
-                }
-            }
-        }
-        let bytes = match downloaded {
-            Some(bytes) => bytes,
-            None => {
-                return Err(last_error.unwrap_or_else(|| {
-                    RmcccError::Other(format!("no candidates for {}", lib.name))
-                }));
-            }
-        };
-        if !artifact.sha1.is_empty() {
-            use sha1::{Digest, Sha1};
-            let mut hasher = Sha1::new();
-            hasher.update(&bytes);
-            let actual = format!("{:x}", hasher.finalize());
-            if !actual.eq_ignore_ascii_case(&artifact.sha1) {
-                return Err(RmcccError::Other(format!(
-                    "processor dependency {} SHA-1 mismatch (expected {}, got {})",
-                    lib.name, artifact.sha1, actual
-                )));
-            }
-        }
-        if let Some(parent) = dest.parent() {
-            std::fs::create_dir_all(parent)?;
-        }
-        std::fs::write(&dest, &bytes)?;
-        tracing::debug!(library = %lib.name, "downloaded processor dependency");
+        pending.push(PendingProcessorLib {
+            name: lib.name.clone(),
+            url: artifact.url.clone(),
+            sha1: artifact.sha1.clone(),
+            dest,
+        });
     }
-    Ok(())
+    if pending.is_empty() {
+        return Ok(());
+    }
+
+    const CONCURRENCY: usize = 8;
+    let shared_client = client.clone();
+    let sem = std::sync::Arc::new(tokio::sync::Semaphore::new(CONCURRENCY));
+    let mut handles = tokio::task::JoinSet::new();
+    for item in pending {
+        let permit = sem
+            .clone()
+            .acquire_owned()
+            .await
+            .map_err(|e| RmcccError::Other(format!("semaphore closed: {e}")))?;
+        let client = shared_client.clone();
+        handles.spawn(async move {
+            let _permit = permit;
+            fetch_processor_lib(client, item).await
+        });
+    }
+    let mut first_error: Option<RmcccError> = None;
+    while let Some(joined) = handles.join_next().await {
+        match joined {
+            Ok(Ok(_)) => {}
+            Ok(Err(e)) => {
+                // Keep going: the remaining downloads still finish, then the
+                // first failure is reported (same all-or-nothing semantics as
+                // the serial loop).
+                first_error.get_or_insert(e);
+            }
+            Err(e) => {
+                first_error
+                    .get_or_insert_with(|| RmcccError::Other(format!("download join error: {e}")));
+            }
+        }
+    }
+    match first_error {
+        Some(e) => Err(e),
+        None => Ok(()),
+    }
 }
 
 /// BMCLAPI maven 镜像根（`/maven/{maven path}`，无 `releases` 段）。
@@ -560,7 +629,7 @@ async fn fetch_url(client: &reqwest::Client, url: &str) -> Result<Vec<u8>> {
         .bytes()
         .await
         .map_err(|e| RmcccError::Network(e.to_string()))?;
-    Ok(bytes.to_vec())
+    Ok(Vec::from(bytes))
 }
 
 // ── Utilities ──

@@ -199,14 +199,23 @@ fn main() {
         .setup(|app| {
             let data_dir = paths::default_data_dir();
             let app_handle = app.handle().clone();
-            let app_state = AppState::new(&data_dir, app_handle)?;
-            app.manage(app_state);
 
-            // Ready-to-show: make window visible after setup
+            // Reveal the window shell *before* the heavyweight core init
+            // (config loads, instance-layout migration, full game-repository
+            // scan, plugin registry load). The webview page load is not
+            // affected by `show()` timing, so this only shortens the
+            // invisible-window phase instead of racing IPC readiness.
             if let Some(window) = app.get_webview_window("main") {
                 window.show().ok();
                 window.set_focus().ok();
+            }
 
+            let app_state = AppState::new(&data_dir, app_handle)?;
+            app.manage(app_state);
+
+            // Ready-to-show: window already revealed above; keep the rest of
+            // the startup checks after the state is managed.
+            if let Some(window) = app.get_webview_window("main") {
                 // A bundle embedded from a stale `dist/` renders nothing at all,
                 // so say so instead of leaving a transparent window behind.
                 if let Some(report) = bundle::inspect(app) {
