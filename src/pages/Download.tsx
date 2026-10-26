@@ -338,7 +338,7 @@ function InstallWizard(): JSX.Element {
                 {(local) => (
                   <RmListRow
                     title={local.id}
-                    subtitle={`${local.game_version}${local.modded ? ` · ${t("common.modded")}` : ""}`}
+                    subtitle={`${local.game_version}${local.loader_type ? ` · ${loaderLabel(local.loader_type)} ${local.loader_version ?? ""}` : ""}`}
                     trailing={
                       <RmTag tone={local.missing_count === 0 ? "success" : "warning"}>
                         {local.missing_count === 0

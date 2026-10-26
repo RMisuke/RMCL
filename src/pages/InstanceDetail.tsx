@@ -41,7 +41,7 @@ import { uiStore, toast, promptText } from "../stores/ui";
 import { t } from "../i18n";
 import type { TranslationKey } from "../i18n/locales/messages";
 import { relativeTime, elidePath } from "../lib/format";
-import { LOADER_CARDS } from "../lib/loaders";
+import { LOADER_CARDS, loaderLabel } from "../lib/loaders";
 import { loaderIcon } from "../lib/mcIcons";
 import * as versionCache from "../stores/versionCache";
 import { useHashTab } from "../lib/useHashTab";
@@ -269,7 +269,7 @@ function OverviewTab(props: { profile: Profile; onGoTab: (tab: string) => void }
         <div class="chip-row">
           <RmTag tone="accent">{props.profile.game_version}</RmTag>
           <Show when={props.profile.mod_loader}>
-            <RmTag tone="accent">{props.profile.mod_loader!.loader_type} {props.profile.mod_loader!.loader_version}</RmTag>
+            <RmTag tone="accent">{loaderLabel(props.profile.mod_loader!.loader_type)} {props.profile.mod_loader!.loader_version}</RmTag>
           </Show>
           <Show when={resolved()}>
             <RmTag>{resolved()!.max_memory_mb} MiB</RmTag>

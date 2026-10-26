@@ -334,17 +334,19 @@ html[data-motion="on"] .rm-progress-fill::after {
 .rm-card-body { padding: 18px; }
 html[data-motion="on"] .rm-card:hover { border-color: color-mix(in srgb, var(--rmccc-accent-secondary) 26%, var(--rmccc-border)); }
 
-.instance-card { overflow: hidden; border-radius: 18px; }
+/* 不能 overflow:hidden：卡片右下角的 "更多" 菜单是绝对定位在卡片内展开的，
+   裁切会让选项卡被卡片底边挡住（用户 2026-10-26 反馈）。装饰光斑改为内切。 */
+.instance-card { overflow: visible; border-radius: 18px; }
+/* 打开菜单的卡片抬到相邻卡片之上，避免下拉被后绘制的卡片盖住。 */
+.instance-card:has(.rm-menu) { z-index: 6; }
 .instance-card::after {
   content: "";
   position: absolute;
   z-index: -1;
-  top: -48px;
-  right: -48px;
-  width: 130px;
-  height: 130px;
-  border-radius: 50%;
-  background: radial-gradient(circle, color-mix(in srgb, var(--rmccc-accent-secondary) 13%, transparent), transparent 70%);
+  inset: 0;
+  border-radius: inherit;
+  background: radial-gradient(circle at 100% 0, color-mix(in srgb, var(--rmccc-accent-secondary) 13%, transparent), transparent 58%);
+  pointer-events: none;
 }
 .instance-card:hover {
   border-color: color-mix(in srgb, var(--rmccc-accent-secondary) 48%, var(--rmccc-border));

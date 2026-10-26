@@ -10,6 +10,25 @@
 
 ## 0. 更新记录
 
+**2026-10-27（实例页统一：loader 品牌 / 累计时长 / 菜单 / HMCL 外置目录）**：
+
+1. **Loader 品牌大小写**：实例网格、列表、实例详情、下载页「使用本地已有版本」全部改走 `loaderLabel()`
+   （Forge / NeoForge / Fabric / OptiFine / LiteLoader），不再直接渲染 `neo_forge` 等后端 id；
+   账号 provider 沿用 `providerLabel()`（Microsoft / Offline）。
+2. **实例卡**：meta 由 `last_played` 改为累计游玩（`playtimeLabel` 抽到 `src/lib/playtime.ts`，与主页启动卡共用）；
+   `.instance-card { overflow:hidden }` 会裁掉右下角「更多」下拉——改为 `visible` + 装饰光斑内切 +
+   `:has(.rm-menu)` 抬层；列表视图「...」容器补 `stopPropagation`，网格/列表现在一致弹出菜单而不是跳详情。
+3. **HMCL 外置目录**：新增 `rmccc_version::loader`，按 HMCL `LibraryAnalyzer` 的优先级识别加载器
+   （`patches` → `--fml.neoForgeVersion/forgeVersion` → 库坐标 → 主类），并从 `patches` 的 `game` 条目取基础
+   Minecraft 版本（HMCL 独立版本 JSON 没有 `inheritsFrom`）。`InstanceInfo` 新增
+   `loader_type` / `loader_version` / `path` / `hmcl`；外置目录展示改为与默认目录一致的卡片/列表双视图，
+   点击打开只读「版本详情」（基础版本 / 加载器 / 版本目录 / 完整性 / 来源，路径可复制）。
+   外置目录仍按只读浏览处理（启动/改设置需先设为游戏根目录并重启），详情内已写明指引。
+4. **HMCL 实测**：本机 `/Volumes/APPLE 1TB/Game/MC/.minecraft` 的 5 个真实版本识别正确——
+   Forge 14.23.5.2864（1.12.2）、NeoForge 47.1.106 / 21.1.213、Forge 47.4.20（1.20.1-暮色）、Fabric 0.19.2。
+5. 验证：`cargo test --workspace` **659 passed / 0 failed**、clippy 零警告、`cargo fmt --check`、
+   `pnpm typecheck`、`pnpm test`（34）、`pnpm build`；并打包 SNGL.app 供真机测试。
+
 **2026-10-26（实例累计游玩时长 + 主页账号卡/启动卡排版）**：
 
 1. **数据**：`Profile` 新增 `play_time_seconds`（`#[serde(default)]`，旧 profile JSON 自动读 0，无需迁移）；

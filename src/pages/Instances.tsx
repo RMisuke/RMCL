@@ -16,6 +16,8 @@ import { settingsStore } from "../stores/settings";
 import { uiStore, toast, confirmDanger, promptText } from "../stores/ui";
 import { t } from "../i18n";
 import { initialOf, relativeTime, elidePath } from "../lib/format";
+import { playtimeLabel } from "../lib/playtime";
+import { loaderLabel } from "../lib/loaders";
 import type { InstanceInfo } from "../ipc/types";
 import { readPref, writePref } from "../lib/prefs";
 import { Icon } from "../components/icons";
@@ -67,6 +69,15 @@ export default function Instances(): JSX.Element {
   const [rootVersions, setRootVersions] = createSignal<InstanceInfo[] | null>(null);
   const [manageOpen, setManageOpen] = createSignal(false);
   const [rootLoading, setRootLoading] = createSignal(false);
+  /** Read-only detail dialog for versions browsed in an extra game root. */
+  const [versionDetail, setVersionDetail] = createSignal<InstanceInfo | null>(null);
+
+  /** "Forge 47.4.20" / "原版（无加载器）" for a browsed version. */
+  function loaderLine(version: InstanceInfo): string {
+    if (!version.loader_type) return t("instances.versionDetail.vanilla");
+    const label = loaderLabel(version.loader_type);
+    return version.loader_version ? `${label} ${version.loader_version}` : label;
+  }
 
   async function refreshRootVersions(root: string): Promise<void> {
     if (!root) {
@@ -255,27 +266,78 @@ export default function Instances(): JSX.Element {
                 </span>
               </div>
               <div class="rm-card-body">
-                <div class="rm-list">
-                  <For each={rootVersions() ?? []}>
-                    {(version) => (
-                      <RmListRow
-                        icon={<InstanceIcon profile={{ name: version.id, icon: null }} />}
-                        title={version.id}
-                        subtitle={`${version.game_version}${version.modded ? ` · ${t("common.modded")}` : ""}`}
-                        trailing={
-                          <RmTag tone={version.missing_count === 0 ? "success" : "warning"}>
-                            {version.missing_count === 0
-                              ? t("settings.advanced.repo.complete")
-                              : t("settings.advanced.repo.missing", { n: version.missing_count })}
-                          </RmTag>
-                        }
-                      />
-                    )}
-                  </For>
-                  <Show when={!rootLoading() && (rootVersions()?.length ?? 0) === 0}>
-                    <div class="hero-empty">{t("instances.root.noVersions")}</div>
-                  </Show>
-                </div>
+                <Show
+                  when={!rootLoading() && (rootVersions()?.length ?? 0) === 0}
+                  fallback={
+                    <Show
+                      when={view() === "cards"}
+                      fallback={
+                        <div class="rm-list">
+                          <For each={rootVersions() ?? []}>
+                            {(version) => (
+                              <div class="rm-row is-clickable" onClick={() => setVersionDetail(version)}>
+                                <InstanceIcon profile={{ name: version.id, icon: null }} />
+                                <div class="rm-row-main">
+                                  <div class="rm-row-title">{version.id}</div>
+                                  <div class="rm-row-subtitle">
+                                    {version.game_version} · {loaderLine(version)}
+                                    <Show when={version.hmcl}> · {t("instances.versionDetail.hmcl")}</Show>
+                                  </div>
+                                </div>
+                                <div class="rm-row-trailing">
+                                  <RmTag tone={version.missing_count === 0 ? "success" : "warning"}>
+                                    {version.missing_count === 0
+                                      ? t("settings.advanced.repo.complete")
+                                      : t("settings.advanced.repo.missing", { n: version.missing_count })}
+                                  </RmTag>
+                                  <RmButton size="sm" icon="info" onClick={(e) => { e.stopPropagation(); setVersionDetail(version); }}>
+                                    {t("instances.versionDetail.open")}
+                                  </RmButton>
+                                </div>
+                              </div>
+                            )}
+                          </For>
+                        </div>
+                      }
+                    >
+                      <div class="instance-grid">
+                        <For each={rootVersions() ?? []}>
+                          {(version) => (
+                            <div class="instance-card" onClick={() => setVersionDetail(version)}>
+                              <InstanceIcon profile={{ name: version.id, icon: null }} large />
+                              <div class="instance-card-name">{version.id}</div>
+                              <div class="instance-card-tags">
+                                <RmTag>{version.game_version}</RmTag>
+                                <Show
+                                  when={version.loader_type}
+                                  fallback={<RmTag>{t("instances.versionDetail.vanillaShort")}</RmTag>}
+                                >
+                                  <RmTag tone="accent">{loaderLabel(version.loader_type)}</RmTag>
+                                </Show>
+                                <Show when={version.hmcl}>
+                                  <RmTag tone="success">HMCL</RmTag>
+                                </Show>
+                              </div>
+                              <div class="instance-card-meta">{loaderLine(version)}</div>
+                              <div class="instance-card-actions" onClick={(e) => e.stopPropagation()}>
+                                <RmButton size="sm" icon="info" onClick={() => setVersionDetail(version)}>
+                                  {t("instances.versionDetail.open")}
+                                </RmButton>
+                                <RmTag tone={version.missing_count === 0 ? "success" : "warning"}>
+                                  {version.missing_count === 0
+                                    ? t("settings.advanced.repo.complete")
+                                    : t("settings.advanced.repo.missing", { n: version.missing_count })}
+                                </RmTag>
+                              </div>
+                            </div>
+                          )}
+                        </For>
+                      </div>
+                    </Show>
+                  }
+                >
+                  <div class="hero-empty">{t("instances.root.noVersions")}</div>
+                </Show>
               </div>
             </div>
           }
@@ -316,10 +378,10 @@ export default function Instances(): JSX.Element {
                           <div class="rm-row-title">{profile.name}</div>
                           <div class="rm-row-subtitle">
                             {profile.game_version}
-                            <Show when={profile.mod_loader}> · {profile.mod_loader!.loader_type} {profile.mod_loader!.loader_version}</Show>
+                            <Show when={profile.mod_loader}> · {loaderLabel(profile.mod_loader!.loader_type)} {profile.mod_loader!.loader_version}</Show>
                           </div>
                         </div>
-                        <div class="rm-row-trailing">
+                        <div class="rm-row-trailing" onClick={(e) => e.stopPropagation()}>
                           <Show when={launchStore.isRunning(profile.id)} fallback={
                             <RmButton size="sm" icon="play" onClick={(e) => { e.stopPropagation(); void launch(profile.id, profile.name); }}>
                               {t("common.launch")}
@@ -351,11 +413,13 @@ export default function Instances(): JSX.Element {
                       <div class="instance-card-tags">
                         <RmTag>{profile.game_version}</RmTag>
                         <Show when={profile.mod_loader}>
-                          <RmTag tone="accent">{profile.mod_loader!.loader_type}</RmTag>
+                          <RmTag tone="accent">{loaderLabel(profile.mod_loader!.loader_type)}</RmTag>
                         </Show>
                       </div>
                       <div class="instance-card-meta">
-                        {profile.last_played ? relativeTime(profile.last_played) : t("instances.neverPlayed")}
+                        {profile.play_time_seconds > 0
+                          ? t("playtime.cumulative", { time: playtimeLabel(profile.play_time_seconds) })
+                          : t("playtime.none")}
                       </div>
                       <div class="instance-card-actions" onClick={(e) => e.stopPropagation()}>
                         <Show
@@ -433,6 +497,53 @@ export default function Instances(): JSX.Element {
           </RmButton>
         </div>
       </RmDialog>
+
+      <Show when={versionDetail()}>
+        {(version) => (
+          <RmDialog
+            open={true}
+            title={`${t("instances.versionDetail.title")} · ${version().id}`}
+            onClose={() => setVersionDetail(null)}
+            footer={
+              <RmButton variant="primary" onClick={() => setVersionDetail(null)}>
+                {t("common.close")}
+              </RmButton>
+            }
+          >
+            <div class="rm-list">
+              <RmListRow title={t("instances.versionDetail.baseVersion")} subtitle={version().game_version} />
+              <RmListRow title={t("instances.versionDetail.loader")} subtitle={loaderLine(version())} />
+              <div class="rm-field">
+                <div class="rm-field-label">{t("instances.versionDetail.path")}</div>
+                <div class="rm-field-control" style={{ display: "flex", "align-items": "flex-start", gap: "8px" }}>
+                  <span style={{ "word-break": "break-all", "font-size": "12px" }}>{version().path}</span>
+                  <RmIconButton
+                    icon="copy"
+                    label={t("common.copy")}
+                    onClick={() => {
+                      void navigator.clipboard.writeText(version().path);
+                      toast({ message: t("common.copied"), tone: "success" });
+                    }}
+                  />
+                </div>
+              </div>
+              <RmListRow
+                title={t("instances.versionDetail.completeness")}
+                subtitle={
+                  version().missing_count === 0
+                    ? t("settings.advanced.repo.complete")
+                    : t("settings.advanced.repo.missing", { n: version().missing_count })
+                }
+              />
+              <RmListRow
+                title={t("instances.versionDetail.source")}
+                subtitle={version().hmcl ? t("instances.versionDetail.hmcl") : t("instances.versionDetail.manual")}
+              />
+            </div>
+            <p class="muted-line" style={{ "margin-top": "12px" }}>{t("instances.versionDetail.hint")}</p>
+          </RmDialog>
+        )}
+      </Show>
 
       <Show when={deleteTarget()}>
         <DeleteInstanceDialog
