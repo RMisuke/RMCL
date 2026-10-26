@@ -1,7 +1,8 @@
 # Phase 7 — 插件目录、签名与生产分发
 
 > **对应指南**：§14.4、§16，§17 Phase 7。**状态**：pending。
-> **前置**：Phase 2–6 全部稳定 + 原生 CI runner 触达。**ADR-008**（插件目录/签名发布）须 accepted。
+> **前置**：Phase 2–6 全部稳定 + 原生 CI runner 触达。**ADR-008**（插件目录/签名发布）须 accepted
+> （草案已立 2026-10-26，见 [`../adr/ADR-008-plugin-registry-signing-and-distribution.md`](../adr/ADR-008-plugin-registry-signing-and-distribution.md)）。
 
 ## 1. 目标
 

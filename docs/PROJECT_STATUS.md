@@ -10,6 +10,16 @@
 
 ## 0. 更新记录
 
+**2026-10-26（ADR-008 草案入库：插件目录 / 发布者签名 / 分发）**：
+
+- 新增 [`adr/ADR-008-plugin-registry-signing-and-distribution.md`](adr/ADR-008-plugin-registry-signing-and-distribution.md)（**proposed**，待拍板）：
+  两把密钥（离线 root + 在线 index）、静态三件套（`registry.json` / `publishers.json` / `revocations.json`，
+  签名对象为文件原始字节）、分离式 Ed25519 包签名（规范化语句绑定 id/version/sha256/size/publisher/published）、
+  四档信任级别（official / verified / community / development）与 `TrustLevel` 扩展、安装/升级/撤回流水线
+  （失败关闭 + 离线缓存 + 权限扩张即停审）、更新默认手动且与应用 updater 分离、ed25519-dalek 体积约束。
+- 同步 ADR 索引、`docs/README.md`、roadmap 00/09/README、`guides/PLUGIN_AUTHORING.md` 中"ADR-008 未建立"的状态表述。
+- 未改任何代码/协议；accepted 前不得据此实现（ADR 状态机见 `adr/README.md`）。草案列出 5 个待拍板问题。
+
 **2026-10-26（前端审计 2026-10-26 整改：B0–B5 六批次全量执行）**（提交 `79b7965`）：
 
 基线为 [`audits/FRONTEND_AUDIT_2026-10-26/`](audits/FRONTEND_AUDIT_2026-10-26/README.md)：上轮 51 项复核后

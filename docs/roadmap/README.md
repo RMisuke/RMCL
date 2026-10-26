@@ -21,7 +21,7 @@
 后续工作以 [`docs/AI_AND_MCP_ARCHITECTURE.md`](../AI_AND_MCP_ARCHITECTURE.md)（S1–S7 切片）为准；
 `08_phase6_agent.md` 保留为历史记录。已完成的依赖扫描/补装/脱敏/审计代码已迁移并去 Agent 化
 （2026-10-23 完成：`ai_*` 5 条 + `mods_dependency_scan/apply_plan` 落地，`agent_*` 9 条移除）。
-Phase 7（插件目录/签名/分发）仍需先落 ADR-008。跨平台原生验证仍按 §1.4 记 deferred / release-blocked。
+Phase 7（插件目录/签名/分发）前置 ADR-008 已立草案（proposed），accepted 后开工。跨平台原生验证仍按 §1.4 记 deferred / release-blocked。
 
 ## 阅读顺序
 

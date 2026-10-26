@@ -18,13 +18,15 @@
 | [ADR-005](ADR-005-dashboard-layout-and-theme.md) | Dashboard 布局 Schema/归一化/断点/主题令牌 | **accepted**（2026-10-21） | Phase 3 | 指南 §9；ADR-003/004 |
 | [ADR-006](ADR-006-isolated-ui-container-and-host-bridge.md) | 插件隔离 UI 容器与版本化 Host Bridge | **accepted**（2026-10-21） | Phase 4 | 指南 §6.2/§9.6/§13/§14.2；ADR-003/004/005 |
 | [ADR-007](ADR-007-logic-runtime.md) | 逻辑插件运行时：独立宿主进程 + WASM 解释执行 | **accepted**（2026-10-21，含 PoC 实测） | Phase 5 | 指南 §6.2/§6.3/§17；ADR-003/006/011 |
+| [ADR-008](ADR-008-plugin-registry-signing-and-distribution.md) | 插件目录、发布者签名与分发（静态签名索引 + 分离式 Ed25519 包签名） | **proposed**（2026-10-26 草案） | Phase 7 | 指南 §6.4/§14.4/§15.3/§16.3；ADR-003/004/011；`../roadmap/09_phase7_distribution.md` |
 | [ADR-009](ADR-009-credential-storage.md) | 凭据存储：AES-256-GCM 文件 vault 为首选，系统密钥链可替换 | **accepted**（2026-10-22） | Phase 6 | 指南 §10.4/§12.1；ADR-011 |
 | [ADR-010](ADR-010-agent-session-audit-privacy.md) | Agent 会话、工具审计与隐私边界 | **accepted**（2026-10-22；部分被 ADR-013 修订） | Phase 6 | 指南 §10.1/§10.2/§10.5/§12.1；ADR-009 |
 | [ADR-011](ADR-011-binary-size-metric.md) | 主可执行体积门禁：度量对象与阈值（2026-10-24 起 < 20 MiB） | **accepted** | Phase 0 | AGENTS.md 体积红线；审计 §15.5 |
 | [ADR-012](ADR-012-macos-intel-build.md) | macOS Intel 的 runner、打包和最低系统版本 | proposed | Phase 0 | 指南 §5.1、§16.3 |
 | [ADR-013](ADR-013-lightweight-ai-and-external-mcp.md) | 轻干预 AI 架构：内部 LLM 服务 + 外部 MCP 控制（内建 Agent 退役） | **accepted**（2026-10-23） | Phase 6→AI/MCP | `../AI_AND_MCP_ARCHITECTURE.md`；ADR-009/010（修订）/011；`../ui-design/07_AI_AND_MCP.md` |
 
-> 尚未建立：ADR-008（插件目录/签名发布，Phase 7 前）。序号不按字母序排列以保持历史编号稳定。
+> ADR-008 已于 2026-10-26 建立草案（proposed）；accepted 前 Phase 7 不得据此改协议。
+> 序号不按字母序排列以保持历史编号稳定。
 
 ## 模板
 

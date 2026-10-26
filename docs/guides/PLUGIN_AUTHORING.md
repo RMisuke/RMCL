@@ -130,4 +130,4 @@ Phase 2 **不做签名验证**，所有安装记为 `development` 并显示“�
 - 隔离 UI（`entry.ui` + 宿主桥 `plugin_ui_invoke`）：✅ Phase 4（ADR-006）。
 - 逻辑运行时（`entry.logic`，只读调用白名单 + `logic.invoke` 能力）：✅ Phase 5（ADR-007）。
 - 宿主 AI 服务能力（`ai.chat`，经桥 `llm.chat`）：⬜ ADR-013 S6（未实现）。
-- 插件目录与签名分发：Phase 7（ADR-008，未建立）。
+- 插件目录与签名分发：Phase 7（ADR-008 草案，proposed）。

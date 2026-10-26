@@ -19,7 +19,7 @@ AI 方向重构为「内部轻量 AI 服务（`rmccc-llm`）+ 外部 Agent 经 M
 后续工作以 `docs/AI_AND_MCP_ARCHITECTURE.md`（S1–S7 切片）为准；
 `08_phase6_agent.md` 保留为历史记录；其依赖扫描/补装/脱敏/审计代码**已完成迁移并去 Agent 化**
 （2026-10-23：`rmccc-agent` 瘦身为 mods/audit/confirm，`rmccc-llm` 拆出，注册表 84 条）。
-**Phase 7（插件目录/签名/生产分发）未开始**，需先落 ADR-008。
+**Phase 7（插件目录/签名/生产分发）未开始**；ADR-008 已立草案（proposed），accepted 后开工。
 
 ## 2. 阶段总览与依赖
 
@@ -79,7 +79,7 @@ Phase 7  插件目录 / 签名 / 生产分发（registry / 签名 / updater / �
 | 平台执行散落 | ✅ 领域 crate 无平台 `#[cfg]`；插件原子替换经 `PlatformFs` | PLATFORM_ADAPTATION.md |
 | 环境回归 | Homebrew rustup 路径失效、`~/.cargo` 缺失；**`strip = true` 已于 2026-10-26 生效**（SNGL.app 主可执行 8.94 MiB） | 审计 §15.5、P2-7 |
 | Agent | 📌 M7 完成（2026-10-24，`crates/rmccc-agent`，63 测试）；**2026-10-23 起方向调整为 ADR-013**：内建 Agent 退役，改为内部 AI 服务 + 外部 MCP 控制（`../AI_AND_MCP_ARCHITECTURE.md` S1–S7）；ADR-009/010 accepted（010 部分修订） | `docs/AI_AND_MCP_ARCHITECTURE.md`、`docs/roadmap/08_phase6_agent.md`（历史） |
-| 发布 | release.yml 齐备但缺证书/Secret，updater `endpoints` 仍是 `<owner>/<repo>` 占位；无 `cargo bloat` 审计；E2E 未实跑；插件目录（ADR-008）未定 | 审计 §13.7、`09_phase7_distribution.md` |
+| 发布 | release.yml 齐备但缺证书/Secret，updater `endpoints` 仍是 `<owner>/<repo>` 占位；无 `cargo bloat` 审计；E2E 未实跑；ADR-008 草案已立（proposed） | 审计 §13.7、`09_phase7_distribution.md` |
 
 ## 5. 并行与串行
 
@@ -89,7 +89,7 @@ Phase 7  插件目录 / 签名 / 生产分发（registry / 签名 / updater / �
   内嵌 wasmi；fuel/内存/超时 kill；`logic.invoke` 只读扩展；5.6 打包分发并入 Phase 7）。
   **Phase 0–5 全部完成**；**Phase 6 M7 完成（2026-10-24）后方向调整**（ADR-013）：
   内建 Agent 退役，改为内部 AI 服务 + 外部 MCP 控制（`../AI_AND_MCP_ARCHITECTURE.md` S1–S7）；
-  Phase 7 待做（先落 ADR-008）。
+  Phase 7 待做（ADR-008 已立草案，待 accepted）。
 - **强串行**：Phase 2 依赖 Phase 1 的 Core Service 窄门面；Phase 3 依赖 Phase 2 注册表；Phase 4 依赖 Phase 2+3；Phase 5 依赖 Phase 1 适配层；Phase 6 依赖 Phase 1 Core + Phase 2/5 权限；Phase 7 依赖全链路 + 原生 CI。
 - **平台验证串行**：所有 Windows/Linux 原生验证推迟到原生 CI runner 触达后统一在 Phase 7 验收；在此之前各阶段只做 macOS 本机验收 + 适配层 trait 占位。
 
@@ -104,7 +104,7 @@ Phase 7  插件目录 / 签名 / 生产分发（registry / 签名 / updater / �
 | ADR-005 | Dashboard Layout Schema / 冲突算法 | Phase 3 |
 | ADR-006 | 隔离 UI 容器 + 消息桥 | **已 accepted（Phase 4）** |
 | ADR-007 | 逻辑运行时 WASM vs 进程（需 PoC） | **✅ accepted（Phase 5，独立 helper 进程 + wasmi）** |
-| ADR-008 | 插件目录 / 签名发布 | Phase 7 前 |
+| ADR-008 | 插件目录 / 签名发布 | **proposed（2026-10-26）** |
 | ADR-009 | 凭据存储：文件 vault（AES-256-GCM）为首选，Keychain 可替换 | **✅ accepted（Phase 6）** |
 | ADR-010 | Agent 会话存储 / 工具审计 / 隐私 | **✅ accepted（Phase 6）** |
 | ADR-011 | 体积门禁（stripped 主可执行；2026-10-24 起 < 20 MiB） | Phase 0 / 运行时 PoC 前 |
