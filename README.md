@@ -1,6 +1,6 @@
 # RMCCC — Rust Minecraft Core Client
 
-> 纯 Rust 实现的 Minecraft 启动器（RMCL / RMCLI）。跨平台、轻量（目标二进制 < 10MB）、可扩展。
+> 纯 Rust 实现的 Minecraft 启动器（RMCL / RMCLI，显示名 SNGL）。跨平台、轻量（strip 后主可执行 < 20 MiB，ADR-011）、可扩展。
 
 RMCCC（Rust Minecraft Core Client）是一个使用 **Rust** 编写的 Minecraft 启动器，采用 **Tauri 2.x + SolidJS** 构建桌面前端，并提供完整功能的命令行工具 `rmcli`。项目按 `docs/DEVELOPMENT_PLAN.md` 的 Phase 1→5 规划推进，所有架构决策记录于 `docs/ARCHITECTURE.md`。
 
@@ -9,11 +9,11 @@ RMCCC（Rust Minecraft Core Client）是一个使用 **Rust** 编写的 Minecraf
 - **认证**：Microsoft OAuth2（设备码流程）与离线模式登录，会话持久化。
 - **实例管理**：创建、列出、删除游戏实例，每个实例独立版本与加载器。
 - **资源管理**：游戏文件完整性检查、按需下载、SHA1 校验与自动修复。
-- **模组加载器**：安装/列出版本，支持 Fabric、Forge、NeoForge、Quilt、LiteLoader、OptiFine、Cleanroom、LegacyFabric。
+- **模组加载器**：安装/列出版本，支持 Fabric、Forge、NeoForge、Quilt、LiteLoader、OptiFine、LegacyFabric（Cleanroom 仍为 stub，未在 UI 暴露）。
 - **智能启动**：Java 版本自适应（`find_java` 自动选择最接近的兼容版本）、响应文件（Response file）传递 JVM 参数防止 `ps aux` 泄露 token、`--add-opens`/`--add-exports` 可重复参数正确保留。
-- **桌面 GUI（Tauri）**：SolidJS 前端，Dashboard（可拖放布局 + 主题）/ 登录 / 设置 / 实例设置 / Mod 浏览器 / 插件页面，通过 IPC 命令调用后端。
+- **桌面 GUI（Tauri）**：SolidJS 前端，主页（hero 双栏 + 主题氛围）/ 登录 / 设置 / 实例设置 / Mod 浏览器 / 插件页面，通过 IPC 命令调用后端。
 - **声明式插件（Phase 2）**：`.rmcpkg` 包（无第三方代码）、权限审查与审计、生命周期状态机、schema 校验配置；`rmcli plugin …` 与 `/plugins` 页面。
-- **Dashboard 布局/主题（Phase 3）**：12 列网格、拖放/宽度/隐藏/恢复、浅色/深色/跟随系统 + 插件主题令牌。
+- **主题引擎（Phase 3）**：8 token 主题 schema、内置 8 套主题 + 插件主题令牌、明暗/跟随系统；原 12 列拖放网格已由 hero 双栏主页取代（ADR-005 主题体系不变）。
 
 ## 技术栈
 
@@ -120,7 +120,7 @@ rmcli
 ## 已支持的游戏版本与 Loader
 
 - **游戏版本**：通过 Mojang 官方 manifest 获取全部版本；实测覆盖 26.2（最新）、1.20.1、1.12.2 等。
-- **加载器**：Fabric、Forge、NeoForge、Quilt、LiteLoader、OptiFine、Cleanroom、LegacyFabric。
+- **加载器**：Fabric、Forge、NeoForge、Quilt、LiteLoader、OptiFine、LegacyFabric（Cleanroom stub）。
 - **NeoForge 1.20.1 专项适配**：版本号标准化（`1.20.1-forge-XX` → `XX`）、`META-INF/NEOFORGE.RSA` 签名检测、`net.neoforged:forge` Maven 坐标切换，与 HMCL 行为对齐。
 
 ## 测试与验证结果摘要
@@ -145,9 +145,9 @@ rmcli
 
 - **NeoForge 1.20.1 游戏窗口**：ModLauncher 启动成功后，NeoForge 内部 `ImmediateWindowHandler` 在 macOS 上抛出 NPE（NeoForge 自身兼容性问题，与启动器无关），作为已知限制记录（Bug #16）。
 - **NeoForge 双 Maven API**：当前通过 BMCLAPI 代理获取版本，后续可对接 `net/neoforged/forge` + `net/neoforged/neoforge` 双端点。
-- **Forge/NeoForge Processor**：当前使用 `java -jar installer.jar --installClient` 整包安装，后续可改为进程内逐 processor 执行以支持幂等性检查。
-- **体积红线**：持续通过 `cargo bloat` 评估依赖体积，确保最终二进制 < 10MB。
-- **后续 Phase**：按 `docs/roadmap/` 推进 Phase 4–7（隔离 UI、逻辑运行时、Agent、签名分发）。
+- **Forge/NeoForge 安装路径**：NeoForge 已改为进程内逐 processor 执行（对齐 HMCL，含 maven 内嵌提取与依赖并发下载）；Forge 仍走 `java -jar installer.jar` 整包安装。
+- **体积红线**：strip 后的主可执行文件 < **20 MiB**（ADR-011，2026-10-24 由 10 MiB 放宽）；新增依赖须评估体积，`strip = true` 于 2026-10-26 实测生效。
+- **后续 Phase**：Phase 0–5 已完成；AI/MCP S1–S7 后端完成；剩余 **Phase 7**（插件目录/签名、平台产物与分发）需先落 ADR-008，见 `docs/roadmap/09_phase7_distribution.md`。
 
 ## 文档索引
 

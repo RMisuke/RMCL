@@ -8,9 +8,9 @@
 
 ## 1. 当前起点一句话
 
-引擎层（安装→索引→启动）已贯通并实机验证；**617 项 Rust 测试**（含插件 106 项 + Dashboard 17 项 +
+引擎层（安装→索引→启动）已贯通并实机验证；**654 项 Rust 测试**（2026-10-26 复测；含插件 106 项 + Dashboard 17 项 +
 逻辑运行时 8 项单测与 9 项 helper spawn 集成测试 + Agent 63 项 + 6 项嵌入资源校验）
-+ `pnpm sdk:test` **14 项**（含 5 项跨工件契约：schema ↔ Rust ↔ SDK），CI 三门禁本地全绿。
++ `pnpm sdk:test` **14 项**（含 5 项跨工件契约：schema ↔ Rust ↔ SDK）、前端 `pnpm test` **32 项**，CI 三门禁本地全绿。
 **Phase 0–5 全部完成**：结构债清偿（0/0.5/1）、声明式插件系统（2）、Dashboard 布局与主题（3）、
 隔离 UI + SDK（4）、逻辑运行时 helper 进程 + `logic.invoke` 只读扩展（5）。
 **Phase 6 已达 M7，随后方向调整（2026-10-23，ADR-013 accepted）**：ADR-009/010 落定，
@@ -67,17 +67,17 @@ Phase 7  插件目录 / 签名 / 生产分发（registry / 签名 / updater / �
 
 | 维度 | 当前事实 | 来源 |
 |------|---------|------|
-| Workspace | **18 成员**（15 crates + `src-tauri` + `src-cli` + `src-logic-host`），新增 `rmccc-agent` | `Cargo.toml` / `cargo metadata --no-deps` |
-| 测试 | **617 passed / 0 failed**（2026-10-22 本机全量复跑）；插件 106 项 + Dashboard 17 项 + 逻辑运行时 8 单测 + 9 项 helper spawn 集成 + Agent 63 项 + bundle 6 项；另 `pnpm sdk:test` **14 项** | `cargo test --workspace` + `pnpm sdk:test` |
-| IPC | **77 定义 = 77 注册**；`IPC_COMMANDS` 与 `generate_handler!` 由 `ipc_tests` 交叉校验；前端 `api.ts` 全覆盖（除显式白名单） | `handlers.rs` / `ipc_tests` |
+| Workspace | **19 成员**（16 crates + `src-tauri` + `src-cli` + `src-logic-host`），含 `rmccc-agent`（ADR-013 瘦身）与 `rmccc-llm` | `Cargo.toml` / `cargo metadata --no-deps` |
+| 测试 | **654 passed / 0 failed**（2026-10-26 本机复跑）；插件 106 项 + Dashboard 17 项 + 逻辑运行时 8 单测 + 9 项 helper spawn 集成 + Agent 63 项 + bundle 6 项；另 `pnpm sdk:test` **14 项**、前端 `pnpm test` **32 项** | `cargo test --workspace` + `pnpm test` + `pnpm sdk:test` |
+| IPC | **97 定义 = 97 注册**；`IPC_COMMANDS` 与 `generate_handler!` 由 `ipc_tests` 交叉校验；前端 `api.ts` 全覆盖（除显式白名单） | `handlers.rs` / `ipc_tests` |
 | 结构债 | ✅ pipeline 收口（P1-3）；✅ 平台适配层 + 领域零 `cfg`（1.1）；✅ loader 单体系（P1-4）；✅ context.rs 93 行（P2-1）；✅ 修 P2-12 | 审计 §5.3、§15.1/§15.2 |
 | 插件系统 | ✅ Phase 2：Manifest v1 / `.rmcpkg` 事务 / 状态机 / 权限 / 配置 / CLI / UI | ADR-003、ADR-004 |
-| Dashboard | ✅ Phase 3.1–3.5：布局 Schema/归一化/网格/拖放/主题令牌 | ADR-005、`rmccc-dashboard` |
+| Dashboard | ✅ Phase 3.1–3.5 主题引擎与 widget 注册表；12 列拖放布局已被 hero 双栏主页取代（2026-10-26 起 `dashboard_*_layout` 三条命令下线，ADR-005 主题体系不变） | ADR-005、`rmccc-dashboard` |
 | 隔离 UI | ✅ Phase 4.1–4.5：`rmcccplugin://` 独立源 iframe + 版本化 Host Bridge + TS SDK + 外部样例 | ADR-006、`plugin-sdk/` |
 | 逻辑运行时 | ✅ Phase 5.1–5.5：PoC 实测 → 独立 helper 进程 + wasmi、fuel/内存/超时 kill、`logic.invoke` 只读扩展；单版本 5.6 打包分发并入 Phase 7 | ADR-007、`rmccc-logic` / `src-logic-host` |
 | 安全缺口 | ✅ natives zip-slip（P1.5）；✅ 插件包 zip-slip/zip bomb/路径/类型限制（2.2） | 审计 §15.4 |
 | 平台执行散落 | ✅ 领域 crate 无平台 `#[cfg]`；插件原子替换经 `PlatformFs` | PLATFORM_ADAPTATION.md |
-| 环境回归 | Homebrew rustup 路径失效、`~/.cargo` 缺失、**`strip = true` 仍失效（缺 libLLVM）** | 审计 §15.5、P2-7 |
+| 环境回归 | Homebrew rustup 路径失效、`~/.cargo` 缺失；**`strip = true` 已于 2026-10-26 生效**（SNGL.app 主可执行 8.94 MiB） | 审计 §15.5、P2-7 |
 | Agent | 📌 M7 完成（2026-10-24，`crates/rmccc-agent`，63 测试）；**2026-10-23 起方向调整为 ADR-013**：内建 Agent 退役，改为内部 AI 服务 + 外部 MCP 控制（`../AI_AND_MCP_ARCHITECTURE.md` S1–S7）；ADR-009/010 accepted（010 部分修订） | `docs/AI_AND_MCP_ARCHITECTURE.md`、`docs/roadmap/08_phase6_agent.md`（历史） |
 | 发布 | release.yml 齐备但缺证书/Secret，updater `endpoints` 仍是 `<owner>/<repo>` 占位；无 `cargo bloat` 审计；E2E 未实跑；插件目录（ADR-008）未定 | 审计 §13.7、`09_phase7_distribution.md` |
 
@@ -107,12 +107,12 @@ Phase 7  插件目录 / 签名 / 生产分发（registry / 签名 / updater / �
 | ADR-008 | 插件目录 / 签名发布 | Phase 7 前 |
 | ADR-009 | 凭据存储：文件 vault（AES-256-GCM）为首选，Keychain 可替换 | **✅ accepted（Phase 6）** |
 | ADR-010 | Agent 会话存储 / 工具审计 / 隐私 | **✅ accepted（Phase 6）** |
-| ADR-011 | <10MB 度量对象与门禁 | Phase 0 / 运行时 PoC 前 |
+| ADR-011 | 体积门禁（stripped 主可执行；2026-10-24 起 < 20 MiB） | Phase 0 / 运行时 PoC 前 |
 | ADR-012 | macOS Intel runner/打包/最低系统 | Phase 0 |
 
 ## 7. 全程不变的硬约束
 
-- 体积红线 < 10MB（AGENTS.md）；新增依赖须评估体积（ADR-011 定度量对象）。
+- 体积红线：strip 后主可执行 < 20 MiB（AGENTS.md / ADR-011）；新增依赖须评估体积。
 - 设计文档优先：冲突先提 ADR，不静默改协议。
 - 生产路径禁 `unwrap/expect/panic`（CI 已门禁）。
 - 平台差异进适配层，领域核心只依赖 trait（指南 §5.7）。

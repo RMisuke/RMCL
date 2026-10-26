@@ -61,24 +61,30 @@
    体积门禁判为 **release-blocked**，不得用"未剥离"数字宣称通过。
 4. 每次新增依赖/运行时，记录 stripped 主可执行的增量（对照本 ADR 基线）。
 
+> **修订注（2026-10-24）**：硬红线阈值已放宽为 **< 20 MiB**（见文末状态变更记录）。
+> 本节保留 10 MiB 原始数值作为决策当时记录；度量对象（strip 后主可执行）、strip 失效即
+> release-blocked、安装包软指标这三项机制均未改变。
+
 ## 后果
 
-- 正面：门禁可自动化、跨平台语义一致；6.84 MiB 达标，后续有 ~3 MiB 余量。
-- 负面：必须修 strip 工具链（装 `llvm-tools` 或用 `llvm-strip` 后处理），否则门禁永远 release-blocked。
-- 对 CI：增加"构建 → strip → 断言 < 10 MiB"步骤；strip 失败即 fail。
+- 正面：门禁可自动化、跨平台语义一致；6.84 MiB 达标（当时余量 ~3 MiB；2026-10-24 阈值放宽后余量 ~13 MiB）。
+- 负面：必须修 strip 工具链（装 `llvm-tools` 或用 `llvm-strip` 后处理），否则门禁永远 release-blocked
+  （2026-10-26 已解：`strip = true` 实测生效，主可执行 9,376,512 B）。
+- 对 CI：增加"构建 → strip → 断言 < 20 MiB（2026-10-24 起）"步骤；strip 失败即 fail。
 - 对依赖决策：任何新增运行时（如 WASM 引擎）必须先测 stripped 增量，超余量则拒绝。
 
 ## 迁移影响
 
 - 无数据迁移；仅 CI 与发布脚本。
-- `AGENTS.md` 体积红线已更新为"strip 后的主可执行 < 10 MiB"。
+- `AGENTS.md` 体积红线已更新为"strip 后的主可执行 < 20 MiB"（2026-10-24 修订）。
 - 需在 `docs/guides/OPERATIONS.md` 记录 strip 方法与失败处理（后续补）。
 
 ## 跨平台验证方式
 
-- 本机 macOS ARM64：已实测（见上表）；strip 需手动（系统 `/usr/bin/strip`），CI 需补 llvm-tools。
+- 本机 macOS ARM64：已实测（见上表）；2026-10-26 实测 `strip = true` 自动生效（SNGL.app 主可执行
+  9,376,512 B / 8.94 MiB），不再依赖手动 llvm-strip。
 - Windows/Linux：待原生 CI runner，当前 **deferred**（服从指南 §1.4）。
-- 判定标准：三平台 stripped 主可执行均 < 10 MiB 才能称"体积达标"；缺平台数据不得填 pass。
+- 判定标准：三平台 stripped 主可执行均 < 20 MiB（2026-10-24 起）才能称"体积达标"；缺平台数据不得填 pass。
 
 ## 状态变更记录
 

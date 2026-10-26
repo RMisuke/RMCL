@@ -12,7 +12,7 @@
 | 审计条目 | 现状 | Phase 7 处理 |
 |----------|------|--------------|
 | §13.7 三平台产物 | release.yml 齐备缺证书/Secret | 配真实证书 + Secret；原生 CI 触达后实跑 |
-| §13.7 体积审计 | 未做 | cargo bloat + 前端 bundle，对照 ADR-011 < 10MB |
+| §13.7 体积审计 | 未做 | cargo bloat + 前端 bundle，对照 ADR-011 < 20 MiB |
 | §13.7 E2E | 配置未实跑 | tauri-driver 真实 E2E（含插件装/禁） |
 | §13.7 updater | endpoints 占位 + pubkey 示例 | 真实 endpoints + 签名密钥 |
 | §15.5 strip | 失效 | 修复（Phase 0 已尝试），此阶段确认 release 流水线 strip 生效 |

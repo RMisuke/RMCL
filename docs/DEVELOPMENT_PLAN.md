@@ -189,14 +189,16 @@
 > （2026-10-24 纠偏，审计 P2-32：此前列出的 `deep-link` 依赖与 capability **实际未接线**——
 > `src-tauri` 的 Cargo.toml / tauri.conf.json / capabilities / main.rs 四处均无痕迹，属声明超前于代码。）
 >
-> 已实测（2026-10-22）：`cargo fmt --check`、两条 clippy 门禁、**617 项测试 / 0 失败**、`pnpm typecheck` 全绿；
+> 已实测（2026-10-22）：`cargo fmt --check`、两条 clippy 门禁、**617 项测试 / 0 失败**、`pnpm typecheck` 全绿
+> （2026-10-26 复测：**654 项测试 / 0 失败**，前端新增 vitest 32 用例）；
 > GUI 手动 strip 后 **7.96 MiB**、CLI 手动 strip 4.48 MiB、逻辑 helper 2.25 MiB
-> （当时 ADR-011 口径 < 10 MiB ✅；2026-10-24 起红线放宽为 < 20 MiB；`strip = true` 仍失效，审计 P2-7）。
+> （当时 ADR-011 口径 < 10 MiB ✅；2026-10-24 起红线放宽为 < 20 MiB；`strip = true` 已于 2026-10-26
+> 实测生效——`SNGL.app` 主可执行 9,376,512 B / 8.94 MiB，审计 P2-7 可销账）。
 >
 > **未完成（已移交 Phase 7）**：`cargo bloat` 正式审计、前端 bundle 分析、wiremock 集成测试补全、
 > E2E 实跑（本地需 `RMCCC_RUN_E2E=1`）、三平台产物实测、updater 真实 `endpoints`
 > （`tauri.conf.json` 仍是 `https://github.com/<owner>/<repo>/...` 占位）与签名 Secret、macOS 证书公证、
-> 前端组件测试（当前 0，审计 P2-3）。→ 见 [`roadmap/09_phase7_distribution.md`](roadmap/09_phase7_distribution.md)。
+> 前端组件测试（2026-10-26 起有 vitest 32 用例，组件级仍待补；审计 P2-3）。→ 见 [`roadmap/09_phase7_distribution.md`](roadmap/09_phase7_distribution.md)。
 
 **目标**：生产级质量，可发布。
 
@@ -204,7 +206,7 @@
 
 | 类别 | 任务 | 说明 |
 |------|------|------|
-| 性能 | `cargo bloat` 审计 | 确保最终 binary < 10MB |
+| 性能 | `cargo bloat` 审计 | 确保 strip 后主可执行 < 20 MiB（ADR-011） |
 | 性能 | 前端 bundle 分析 | `vite build --mode production` 检查产物大小 |
 | 性能 | `pool_max_idle_per_host` 调优 | 大量小文件下载的连接池优化 |
 | 测试 | 单元测试补全 | 所有 crate 关键路径覆盖 |
@@ -220,7 +222,7 @@
 | 文档 | README | 安装说明 + 使用指南 + 开发者文档 |
 
 ### 验收标准
-- [ ] 三平台（Windows/macOS/Linux）构建产物均 < 10MB
+- [ ] 三平台（Windows/macOS/Linux）strip 后主可执行均 < 20 MiB（ADR-011）
 - [ ] CI 全绿：cargo test + clippy + fmt + typecheck
 - [ ] E2E 测试覆盖：登录 → 建 profile → 安装版本 → 启动游戏
 - [ ] 自动更新可用

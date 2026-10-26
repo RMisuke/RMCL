@@ -1,4 +1,4 @@
-# RMCCC 项目现状与继续开发交接（2026-10-23 更新）
+# RMCCC 项目现状与继续开发交接（2026-10-26 更新）
 
 > 本文档是**变更记录与交接入口**，按轮次记录"这轮改了什么"。
 > **完整架构说明 + 功能矩阵 + 技术债台账**见 [`audits/AUDIT_2026-10-20.md`](audits/AUDIT_2026-10-20.md)（横切全景，不按轮次组织）。
@@ -9,6 +9,33 @@
 ---
 
 ## 0. 更新记录
+
+**2026-10-26（前端审计 2026-10-26 整改：B0–B5 六批次全量执行）**（提交 `79b7965`）：
+
+基线为 [`audits/FRONTEND_AUDIT_2026-10-26/`](audits/FRONTEND_AUDIT_2026-10-26/README.md)：上轮 51 项复核后
+FIXED 2 / PARTIAL 9 / STILL 40，另新增 19 项（P1×3 + P2×4 + P3×12），合计 ≈59 项未解决 + 9 项部分残留。
+按 `03_FIX_PLAN.md` 的 B0→B5 执行，除两处显式决策外全部落地：
+
+1. **B0 止血**：P0-1 hash 内查询参数断链修复（5 个跳转源改 path query、删 ModDetail 手写 hash 解析、ModStore「退出上下文」响应式修复）。
+2. **B1 新 P1**：N-1 版本列表错误通道（`gameVersionsError`）+ 重试 + 恢复「绑定本地版本」；N-2 安装细节折叠状态提升到 TaskCenter 面板层；N-3 `profile_delete` 增加 `cleanup_game_dir`（MCP 保守传 `false`，删除对话框加开关，先删档案再删版本目录）。
+3. **B2 旧 P1 集群**：`useHashTab` 统一 Download/InstanceDetail/Settings 三页 tab；Settings 改显式保存 + touched/dirty 守卫（含内存/窗口/JVM/游戏参数/并发/分辨率复合锁）；launch `stop()` 统一确认 + `userKilled`；窗口 1280×760；bindings 漂移测试改只读比较。
+4. **B3 P2 清理**：删除 `HomeDashboard.tsx`、死 CSS ~150 行与三条 `dashboard_*_layout` 命令（IPC 100→97，五项能力回捞进 hero 首页）；cache/downloads/profiles/mcp/TaskCenter/SkinViewer/versionCache 一批竞态与缓存修复；三类吞错点补 toast；暗色星空与插件主题氛围层回归；实例设置补字段；MCP/插件/删除对话框确认；VirtualList 键盘可达。
+5. **B4 P3 收尾**：注释/错误字面量/`safeInvoke` 归一化/多播主题监听/`duration_ms` 类型/硬编码文案清零/LogDrawer 监听清理等。
+6. **B5 测试与守卫**：引入 vitest 5.0.5（独立 `vitest.config.ts`，与应用构建链隔离），5 个测试文件 32 用例（markdown 安全模型优先、format、exitCodes、loaders、versionCache TTL）。
+
+**未执行/偏离（显式记录）**：P0-2 首页三张假数据卡按产品决策保留为占位（D3 取「保留」，待后端 server ping 接入）；D2「停止游戏不再询问」checkbox 未做（仅保留确认）。
+
+验证：`pnpm typecheck`、`pnpm test`（32/32）、`pnpm build`、`cargo clippy --workspace --all-targets -D warnings` 零警告、`cargo test --workspace` 654 passed / 0 failed。
+
+**2026-10-26（视觉刷新 Chromatic Voxel：层叠玻璃 / 三色主题 / 体素几何）**（提交 `46a8e31`）：
+
+- **实现集中化**：新增 `src/styles/visual-system.css`（760 行）在 `app.css` 之后加载，集中覆盖圆角/阴影/动效数值；业务布局与安全语义色不变，未改 8-token 主题 schema。
+- **三装饰色由宿主派生**：内置主题各配 `accent / accent-secondary / accent-tertiary` 调色板（`theme/index.ts` 的 `visualPaletteFor`），`applyThemeTokens` 写入 CSS 变量与 `data-visual-theme`；插件主题回退按明暗取自内置基准色。
+- **主页装饰层**：hero 空白区新增漂浮体素方块、三色轨道环、透视网格与 SNGL 品牌标记，全部 `aria-hidden` 且不接管指针；粒子参数删除死字段。
+- **动效闸门不变**：继续受 `data-motion` 与 `prefers-reduced-motion` 双重控制。
+- **文档**：`ui-design/01_STYLE_GUIDE.md` 增视觉规范、`ui-design/02_HOME_DASHBOARD.md` 记录 hero 结构不变与新增装饰。
+
+验证：`pnpm typecheck` / `pnpm build` 通过；视觉验收采用无头 Edge 截图人工复核，未纳入自动化门禁。
 
 **2026-10-26（第二批性能优化：四项延期项落地）**：
 
