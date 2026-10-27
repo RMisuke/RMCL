@@ -32,6 +32,9 @@ const METHOD_TIMEOUTS: Record<string, number> = {
   "settings.get": 10_000,
   "instances.list": 10_000,
   "network.request": 30_000,
+  // ADR-013 S6: streaming replies arrive as `llm.delta/done/error` pushes;
+  // this timeout only bounds the non-streaming completion wait.
+  "llm.chat": 30_000,
 };
 
 /// Methods answered by the shell itself (no IPC round-trip). The shell applies
@@ -78,6 +81,34 @@ export class PluginBridge {
   private readonly onReady?: () => void;
   private readonly pending = new Set<string>();
   private readonly timers = new Map<string, number>();
+  /**
+   * Concrete origin learned from incoming messages. WebKit reports opaque
+   * ("null") origins for these sandboxed custom-scheme frames — those cannot
+   * be named in `targetOrigin`, so replies fall back to "*" while the
+   * navigation seal below is what protects them. On engines that do expose a
+   * real origin we pin it and cross-origin delivery becomes impossible.
+   */
+  private pinnedOrigin: string | null = null;
+  /**
+   * P1-1 (plugin security audit): a sandboxed frame may navigate itself
+   * anywhere. The FIRST `load` is the plugin's own package document; any
+   * later `load` means the window now hosts a different document, and
+   * in-flight replies must never be delivered to it. We drop all pending
+   * requests and seal the bridge (post() becomes a no-op until remount).
+   */
+  private initialLoadDone = false;
+  private sealed = false;
+  private readonly onFrameLoad = () => {
+    if (!this.initialLoadDone) {
+      this.initialLoadDone = true;
+      return;
+    }
+    this.sealed = true;
+    for (const timer of this.timers.values()) window.clearTimeout(timer);
+    this.timers.clear();
+    this.pending.clear();
+    this.diagnostic("frame navigated away from its package document; bridge sealed");
+  };
   private started = false;
   private disposed = false;
   private readonly listener = (event: MessageEvent) => this.onMessage(event);
@@ -94,6 +125,7 @@ export class PluginBridge {
     if (this.started) return;
     this.started = true;
     window.addEventListener("message", this.listener);
+    this.frame.addEventListener("load", this.onFrameLoad);
     let set = liveBridges.get(this.pluginId);
     if (!set) {
       set = new Set();
@@ -106,6 +138,7 @@ export class PluginBridge {
     this.disposed = true;
     if (this.started) {
       window.removeEventListener("message", this.listener);
+      this.frame.removeEventListener("load", this.onFrameLoad);
       const set = liveBridges.get(this.pluginId);
       set?.delete(this);
       if (set && set.size === 0) liveBridges.delete(this.pluginId);
@@ -126,15 +159,21 @@ export class PluginBridge {
   }
 
   private onMessage(event: MessageEvent): void {
-    if (this.disposed) return;
+    if (this.disposed || this.sealed) return;
     // The load-bearing check: only the frame window we created may talk to us.
     if (event.source !== this.frame.contentWindow) return;
     // `sandbox`ed custom-scheme frames report an opaque origin ("null") in
-    // WebKit; anything else must be this plugin's own scheme.
-    if (event.origin !== "null" && !event.origin.startsWith("rmcccplugin://")) {
+    // WebKit. When the engine exposes a concrete origin it must be **this
+    // plugin's own** origin — accepting any `rmcccplugin://` origin would let a
+    // frame that navigated to another plugin's document talk to this bridge
+    // under this plugin's capabilities (plugin security audit, 2026-10-27).
+    const ownOrigin = `rmcccplugin://${this.pluginId}`;
+    if (event.origin !== "null" && event.origin !== ownOrigin) {
       this.diagnostic(`dropped message from unexpected origin ${event.origin}`);
       return;
     }
+    // Learn the concrete origin when the engine exposes one (see pinnedOrigin).
+    if (event.origin === ownOrigin) this.pinnedOrigin = event.origin;
 
     const raw = event.data;
     if (typeof raw !== "string") {
@@ -298,11 +337,13 @@ export class PluginBridge {
   }
 
   private post(message: unknown): void {
+    if (this.sealed) return;
     const target = this.frame.contentWindow;
     if (!target) return;
-    // The frame is a distinct origin; `*` is correct here because we only send
-    // data the frame is already entitled to (its own id/theme/limits).
-    target.postMessage(JSON.stringify(message), "*");
+    // P1-1: pin the origin once we know it, so a navigated (cross-origin)
+    // window can never receive a reply. Opaque "null" origins cannot be
+    // named — for those "*" plus the navigation seal is the protection.
+    target.postMessage(JSON.stringify(message), this.pinnedOrigin ?? "*");
   }
 
   private clearTimer(id: string): void {

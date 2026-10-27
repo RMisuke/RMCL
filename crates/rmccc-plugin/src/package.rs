@@ -5,6 +5,7 @@
 
 use crate::manifest::{validate_manifest, ManifestContext, PluginManifest};
 use crate::path::{is_windows_reserved, validate_relative_path};
+use crate::theme::{ThemeDocument, MAX_THEME_BYTES};
 use rmccc_error::{PluginErrorCode, Result, RmcccError};
 use std::collections::BTreeSet;
 use std::fs::File;
@@ -262,7 +263,10 @@ fn inspect_reader<R: Read + Seek>(reader: R, ctx: &ManifestContext) -> Result<Ar
     let manifest = PluginManifest::parse(&manifest_json)?;
     validate_manifest(&manifest, ctx)?;
 
-    // Manifest 引用的包内文件必须存在。
+    // Manifest 引用的包内文件必须存在，且**内容通过主题校验**。
+    //
+    // 在这里做而不是等到应用主题时：让"能打包 = 能安装 = 能应用"，
+    // 避免装上一个永远选不中的主题（ADR-005 决策 7 / 主题编写规范）。
     for theme in &manifest.contributes.themes {
         if !file_paths.contains(&theme.path) {
             return Err(plugin_error(
@@ -270,6 +274,44 @@ fn inspect_reader<R: Read + Seek>(reader: R, ctx: &ManifestContext) -> Result<Ar
                 format!("主题 {} 引用的文件不存在：{}", theme.id, theme.path),
             ));
         }
+        let mut file = archive.by_name(&theme.path).map_err(|e| {
+            plugin_error(
+                PluginErrorCode::PackageInvalid,
+                format!("读取主题 {} 失败：{e}", theme.path),
+            )
+        })?;
+        if file.size() > MAX_THEME_BYTES {
+            return Err(plugin_error(
+                PluginErrorCode::PackageInvalid,
+                format!(
+                    "主题 {} 过大：{} 字节（上限 {MAX_THEME_BYTES}）",
+                    theme.path,
+                    file.size()
+                ),
+            ));
+        }
+        let mut raw = String::new();
+        (&mut file)
+            .take(MAX_THEME_BYTES + 1)
+            .read_to_string(&mut raw)
+            .map_err(|e| {
+                plugin_error(
+                    PluginErrorCode::PackageInvalid,
+                    format!("主题 {} 不是 UTF-8 文本：{e}", theme.path),
+                )
+            })?;
+        if raw.len() as u64 > MAX_THEME_BYTES {
+            return Err(plugin_error(
+                PluginErrorCode::PackageInvalid,
+                format!("主题 {} 超过 {MAX_THEME_BYTES} 字节上限", theme.path),
+            ));
+        }
+        ThemeDocument::parse(&raw).map_err(|e| {
+            plugin_error(
+                PluginErrorCode::PackageInvalid,
+                format!("主题 {}（{}）校验失败：{e}", theme.id, theme.path),
+            )
+        })?;
     }
 
     Ok(ArchiveInspection {
@@ -580,6 +622,19 @@ mod tests {
         })
     }
 
+    /// 包检查会解析主题内容，测试包必须带一份合法主题。
+    const VALID_THEME: &str = r##"{
+        "schemaVersion": 1,
+        "name": "Midnight",
+        "colors": {
+            "background": "#0b1020",
+            "surface": "#141a2e",
+            "text": "#e6e9f2",
+            "accent": "#7c6cff",
+            "border": "#2a3352"
+        }
+    }"##;
+
     fn zip_with(entries: &[(&str, &[u8], u32)]) -> Vec<u8> {
         let mut buf = std::io::Cursor::new(Vec::new());
         {
@@ -600,7 +655,7 @@ mod tests {
         let manifest = serde_json::to_string_pretty(&manifest()).unwrap();
         zip_with(&[
             ("manifest.json", manifest.as_bytes(), 0o644),
-            ("themes/midnight.json", b"{\"colors\":{}}", 0o644),
+            ("themes/midnight.json", VALID_THEME.as_bytes(), 0o644),
             ("README.md", b"# test", 0o644),
         ])
     }
@@ -635,13 +690,47 @@ mod tests {
         let manifest = serde_json::to_string(&manifest()).unwrap();
         let bytes = zip_with(&[
             ("manifest.json", manifest.as_bytes(), 0o644),
-            ("themes/a.json", b"{}", 0o644),
-            ("themes/A.json", b"{}", 0o644),
+            ("themes/a.json", VALID_THEME.as_bytes(), 0o644),
+            ("themes/A.json", VALID_THEME.as_bytes(), 0o644),
         ]);
         let err = inspect_package_bytes(&bytes, &ctx())
             .unwrap_err()
             .to_string();
         assert!(err.contains("重复"), "{err}");
+    }
+
+    #[test]
+    fn rejects_theme_content_that_would_inject_css() {
+        let manifest = serde_json::to_string(&manifest()).unwrap();
+        for theme in [
+            // 缺必需令牌
+            r##"{ "schemaVersion": 1, "colors": { "background": "#000" } }"##,
+            // CSS 注入 / 外链探针
+            r##"{ "schemaVersion": 1, "colors": { "background": "url(https://evil.example/p)", "surface": "#111", "text": "#fff", "accent": "#fff", "border": "#222" } }"##,
+            // 版本不匹配
+            r##"{ "schemaVersion": 2, "colors": { "background": "#000", "surface": "#111", "text": "#fff", "accent": "#fff", "border": "#222" } }"##,
+        ] {
+            let bytes = zip_with(&[
+                ("manifest.json", manifest.as_bytes(), 0o644),
+                ("themes/midnight.json", theme.as_bytes(), 0o644),
+            ]);
+            let err = inspect_package_bytes(&bytes, &ctx())
+                .unwrap_err()
+                .to_string();
+            assert!(err.contains("主题"), "unexpected error: {err}");
+        }
+    }
+
+    #[test]
+    fn rejects_theme_path_with_non_json_extension() {
+        let mut manifest = manifest();
+        manifest["contributes"]["themes"][0]["path"] = json!("themes/midnight.txt");
+        let raw = serde_json::to_string(&manifest).unwrap();
+        let bytes = zip_with(&[
+            ("manifest.json", raw.as_bytes(), 0o644),
+            ("themes/midnight.txt", b"{}", 0o644),
+        ]);
+        assert!(inspect_package_bytes(&bytes, &ctx()).is_err());
     }
 
     #[test]
@@ -651,7 +740,7 @@ mod tests {
         let manifest_json = serde_json::to_string(&manifest()).unwrap();
         let bytes = zip_with(&[
             ("manifest.json", manifest_json.as_bytes(), 0o644),
-            ("themes/midnight.json", b"{}", 0o644),
+            ("themes/midnight.json", VALID_THEME.as_bytes(), 0o644),
             ("ui/index.html", b"<!DOCTYPE html>", 0o644),
             ("ui/app.js", b"export {}", 0o644),
             ("ui/style.css", b"body{}", 0o644),
@@ -769,7 +858,7 @@ mod tests {
             serde_json::to_string_pretty(&manifest()).unwrap(),
         )
         .unwrap();
-        std::fs::write(dir.join("themes/midnight.json"), "{}").unwrap();
+        std::fs::write(dir.join("themes/midnight.json"), VALID_THEME).unwrap();
         let out = dir.join("demo.rmcpkg");
         pack_directory(&dir, &out, &ctx()).unwrap();
         let inspection = inspect_package(&out, &ctx()).unwrap();

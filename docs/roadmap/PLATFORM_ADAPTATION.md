@@ -104,6 +104,13 @@ grep -rn 'cfg(unix)|cfg(windows)|cfg(target_os|cfg!(target_os' crates/*/src --in
 | Linux (`x86_64-unknown-linux-gnu`) | **deferred** | 同上 |
 | macOS Intel (`x86_64-apple-darwin`) | **deferred** | 不在本机构建（Apple Silicon 单架构） |
 
+> **Windows 隔离插件 UI：release-blocked（2026-10-27）**：wry 0.55 的 WebView2 后端把
+> Tauri 初始化脚本注入所有子帧，而 Tauri 2.11 把已注册自定义协议视为 local origin——
+> 插件 iframe 可能直接拿到 `__TAURI_INTERNALS__`。当前在 `platform_id` 以 `windows`
+> 开头时不生成 `uiUrl`（插件卡片/页面降级为声明式），解除条件与替代方案见
+> [ADR-006 补充](../adr/ADR-006-isolated-ui-container-and-host-bridge.md)。
+> WebView2 实测通过前不得宣称 Windows 插件 UI 可用。
+
 ## 5.1 1.1c 真机烟测记录（2026-10-21）
 
 ```

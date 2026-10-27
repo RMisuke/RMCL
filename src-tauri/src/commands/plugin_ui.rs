@@ -11,6 +11,7 @@
 //! 资源与请求的判定规则都放在 `rmccc_plugin::ui`，与 SDK/schema 共用同一张方法表。
 
 use std::borrow::Cow;
+use std::net::{IpAddr, SocketAddr};
 use std::time::Duration;
 
 use rmccc_core::rmccc_plugin::ui::{self, BridgeError, BridgeErrorCode};
@@ -304,7 +305,7 @@ pub async fn plugin_ui_invoke(
                 Err(e) => BridgeReply::from_host(e),
             }
         }
-        "network.request" => match network_request(&state, &params).await {
+        "network.request" => match network_request(&params).await {
             Ok(value) => BridgeReply::ok(value),
             Err(e) => BridgeReply::from_bridge(e),
         },
@@ -318,6 +319,67 @@ pub async fn plugin_ui_invoke(
         ),
     };
     Ok(reply)
+}
+
+/// 明显的本地/私有域名（域名后缀，无法用 IP 规则覆盖）。
+///
+/// `.internal` 覆盖云厂商 metadata（如 `metadata.google.internal`），
+/// `.local` 覆盖 mDNS，`.home.arpa` 覆盖家庭网络。
+fn host_is_blocked(host: &str) -> bool {
+    let host = host.trim_end_matches('.').to_ascii_lowercase();
+    host == "localhost"
+        || host.ends_with(".localhost")
+        || host.ends_with(".local")
+        || host.ends_with(".internal")
+        || host == "home.arpa"
+        || host.ends_with(".home.arpa")
+}
+
+/// 解析域名并只保留公网地址；全部被过滤时拒绝。
+async fn resolve_public_addrs(host: &str, port: u16) -> Result<Vec<SocketAddr>, BridgeError> {
+    let resolved = tokio::net::lookup_host((host, port))
+        .await
+        .map_err(|e| BridgeError::new(BridgeErrorCode::Internal, format!("DNS 解析失败：{e}")))?;
+    let addrs: Vec<SocketAddr> = resolved
+        .filter(|addr| !is_forbidden_ip(addr.ip()))
+        .collect();
+    if addrs.is_empty() {
+        return Err(BridgeError::new(
+            BridgeErrorCode::HostNotAllowed,
+            format!("{host} 只解析到本地/私网/保留地址，禁止访问"),
+        ));
+    }
+    Ok(addrs)
+}
+
+/// 非公网地址判定：回环、私网、链路本地、未指定、组播、CGNAT、保留/文档段。
+fn is_forbidden_ip(ip: IpAddr) -> bool {
+    match ip {
+        IpAddr::V4(v4) => {
+            let octets = v4.octets();
+            v4.is_loopback()
+                || v4.is_private()
+                || v4.is_link_local()
+                || v4.is_unspecified()
+                || v4.is_broadcast()
+                || v4.is_multicast()
+                || v4.is_documentation()
+                // 0.0.0.0/8（"本网络"）与 100.64.0.0/10（CGNAT）在 std 中没有稳定谓词。
+                || octets[0] == 0
+                || (octets[0] == 100 && (64..=127).contains(&octets[1]))
+        }
+        IpAddr::V6(v6) => {
+            if let Some(v4) = v6.to_ipv4_mapped() {
+                return is_forbidden_ip(IpAddr::V4(v4));
+            }
+            let segments = v6.segments();
+            v6.is_loopback()
+                || v6.is_unspecified()
+                || v6.is_multicast()
+                || (segments[0] & 0xfe00) == 0xfc00 // fc00::/7 unique local
+                || (segments[0] & 0xffc0) == 0xfe80 // fe80::/10 link local
+        }
+    }
 }
 
 /// 目标域名（授权作用域）：只接受 http(s) 且带 host 的绝对 URL。
@@ -343,7 +405,7 @@ fn network_host(params: &Value) -> Result<String, BridgeError> {
 }
 
 /// 受控 HTTP：GET/POST、无重定向、2 MiB 响应上限、30 s 超时。
-async fn network_request(state: &AppState, params: &Value) -> Result<Value, BridgeError> {
+async fn network_request(params: &Value) -> Result<Value, BridgeError> {
     let raw_url = params.get("url").and_then(Value::as_str).ok_or_else(|| {
         BridgeError::new(
             BridgeErrorCode::Validation,
@@ -380,8 +442,33 @@ async fn network_request(state: &AppState, params: &Value) -> Result<Value, Brid
         }
     }
 
-    let mut request = state
-        .ui_http_client
+    // ── SSRF 防护（ADR-006 补充，2026-10-27）──
+    // 域名白名单只能约束"名字"，不能约束"解析到哪"：攻击者可以让自己的域名解析到
+    // 127.0.0.1 / 169.254.169.254 / 私网，借宿主 client 读本地服务。做法：
+    // 1) 拒绝明显的本地域名（localhost/.local/.internal/.home.arpa）；
+    // 2) 解析后过滤所有非公网地址，全部不合格即拒绝；
+    // 3) 用 `resolve_to_addrs` 把连接钉死在这批**已检查**的地址上，封掉二次 DNS
+    //    rebinding 的时间窗（代价是每次请求新建 client，插件网络调用频率很低）。
+    let host = url
+        .host_str()
+        .ok_or_else(|| BridgeError::new(BridgeErrorCode::Validation, "URL 缺少 host"))?
+        .to_string();
+    let port = url.port_or_known_default().unwrap_or(443);
+    if host_is_blocked(&host) {
+        return Err(BridgeError::new(
+            BridgeErrorCode::HostNotAllowed,
+            format!("{host} 是本地/私有域名，禁止访问"),
+        ));
+    }
+    let addrs = resolve_public_addrs(&host, port).await?;
+    let client = reqwest::Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
+        .timeout(Duration::from_secs(30))
+        .user_agent(concat!("RMCCC/", env!("CARGO_PKG_VERSION"), " (plugin-ui)"))
+        .resolve_to_addrs(&host, &addrs)
+        .build()
+        .map_err(|e| BridgeError::new(BridgeErrorCode::Internal, format!("HTTP client: {e}")))?;
+    let mut request = client
         .request(
             reqwest::Method::from_bytes(method.as_bytes()).map_err(|e| {
                 BridgeError::new(BridgeErrorCode::Validation, format!("方法非法：{e}"))
@@ -652,4 +739,59 @@ fn consume_stream(
     provider
         .stream_chat(request, cancel)
         .map_err(|e| e.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn blocks_local_and_private_addresses() {
+        for ip in [
+            "127.0.0.1",
+            "10.0.0.1",
+            "172.16.5.4",
+            "192.168.1.1",
+            "169.254.169.254",
+            "0.0.0.0",
+            "100.64.1.1",
+            "224.0.0.1",
+            "::1",
+            "::",
+            "fd00::1",
+            "fe80::1",
+            "::ffff:127.0.0.1",
+        ] {
+            let ip: IpAddr = ip.parse().unwrap();
+            assert!(is_forbidden_ip(ip), "{ip} must be blocked");
+        }
+        for ip in [
+            "1.1.1.1",
+            "8.8.8.8",
+            "93.184.216.34",
+            "2606:4700:4700::1111",
+        ] {
+            let ip: IpAddr = ip.parse().unwrap();
+            assert!(!is_forbidden_ip(ip), "{ip} must be allowed");
+        }
+    }
+
+    #[test]
+    fn blocks_private_dns_names() {
+        for host in [
+            "localhost",
+            "LOCALHOST.",
+            "a.localhost",
+            "printer.local",
+            "metadata.google.internal",
+            "instance-data.ec2.internal",
+            "foo.home.arpa",
+            "home.arpa",
+        ] {
+            assert!(host_is_blocked(host), "{host} must be blocked");
+        }
+        for host in ["example.com", "api.modrinth.com", "api.example.com"] {
+            assert!(!host_is_blocked(host), "{host} must be allowed");
+        }
+    }
 }

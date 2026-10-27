@@ -3,6 +3,9 @@
 第三方插件的公开开发接口。当前覆盖 **Phase 4：隔离 UI 扩展**
 （[ADR-006](../docs/adr/ADR-006-isolated-ui-container-and-host-bridge.md)）。
 
+> 主题插件是**纯数据插件**，不走 UI SDK：字段、颜色语法与验收见
+> [`docs/guides/THEME_PLUGIN_AUTHORING.md`](../docs/guides/THEME_PLUGIN_AUTHORING.md)。
+
 | 目录 | 内容 |
 |------|------|
 | `packages/plugin-api/` | 桥的线协议类型、方法表、限额（`@rmccc/plugin-api`） |

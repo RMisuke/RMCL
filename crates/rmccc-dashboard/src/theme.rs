@@ -1,11 +1,15 @@
 //! 主题令牌系统（ADR-005 决策 7）。
 //!
-//! 主题包 = Phase 2 的 `contributes.themes`（JSON + 静态资源，无 JS）。
-//! 安全语义色（danger/success/warning）由宿主拥有，主题不得覆盖。
+//! 主题包 = `contributes.themes`（JSON + 静态资源，无 JS）。文档格式与颜色语法的
+//! 权威校验在 [`rmccc_plugin::theme`]（打包/安装期已执行一次，这里是运行期第二道）；
+//! 本模块只负责把**已校验**的颜色映射成令牌，并守住宿主安全语义色边界。
+//!
+//! 安全语义色（danger/success/warning）由宿主拥有：即使出现在主题 JSON 里也会被忽略，
+//! 因此恶意主题无法把"删除/警告"染成与普通按钮相同的颜色来伪装操作。
 
-use rmccc_error::{PluginErrorCode, Result, RmcccError};
+use rmccc_error::Result;
+use rmccc_plugin::theme::{ThemeDocument, REQUIRED_COLORS, SAFETY_COLORS};
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeMap;
 use ts_rs::TS;
 
 /// 主题令牌（映射到 `--rmccc-*` CSS variables）。
@@ -52,15 +56,13 @@ impl SafetyColors {
 }
 
 /// 主题 JSON（插件 `themes/<id>.json` 格式）。
-#[derive(Debug, Clone, Deserialize)]
-pub struct ThemeJson {
-    #[serde(default)]
-    pub schema_version: Option<u32>,
-    #[serde(default)]
-    pub name: Option<String>,
-    #[serde(default)]
-    pub colors: BTreeMap<String, String>,
-}
+///
+/// 类型别名而不是复制一份结构：文档格式只有 `rmccc_plugin::theme` 一份定义，
+/// 包检查、安装、应用、主题选择共用同一个解析器。
+pub type ThemeJson = ThemeDocument;
+
+/// 主题文件大小上限（与包检查共用）。
+pub use rmccc_plugin::theme::MAX_THEME_BYTES;
 
 /// 解析后的主题信息。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
@@ -87,38 +89,84 @@ pub enum ThemePreference {
 }
 
 /// 从插件主题 JSON 提取令牌；忽略安全语义色。
+///
+/// 先调用共享校验（`ThemeDocument::validate`），因此这里的值一定是
+/// `#rgb`/`#rrggbb`/`#rrggbbaa`——不会把任意字符串写进 CSS 变量。
 pub fn extract_tokens(theme: &ThemeJson) -> Result<ThemeTokens> {
+    theme.validate()?;
     let c = &theme.colors;
-    let required = |key: &str| -> Result<String> {
-        c.get(key).cloned().ok_or_else(|| RmcccError::Plugin {
-            code: PluginErrorCode::ConfigInvalid,
-            message: format!("主题缺少必需颜色令牌：{key}"),
-        })
-    };
+    let required = |key: &str| -> String { c.get(key).cloned().unwrap_or_default() };
     let optional_or = |primary: &str, fallback: &str| -> Option<String> {
         c.get(primary).or_else(|| c.get(fallback)).cloned()
     };
 
     // 安全语义色出现在主题 JSON 中时忽略并记录（不报错）。
-    for forbidden in ["danger", "success", "warning"] {
-        if c.contains_key(forbidden) {
+    for forbidden in SAFETY_COLORS {
+        if c.contains_key(*forbidden) {
             tracing::warn!(key = forbidden, "主题 JSON 包含宿主安全语义色，已忽略");
         }
     }
 
+    debug_assert!(
+        REQUIRED_COLORS.iter().all(|k| c.contains_key(*k)),
+        "validate() 必须保证必需令牌存在"
+    );
+
     Ok(ThemeTokens {
-        background: required("background")?,
-        surface: required("surface")?,
+        background: required("background"),
+        surface: required("surface"),
         surface_elevated: optional_or("surfaceElevated", "surface_elevated")
-            .unwrap_or_else(|| required("surface").unwrap_or_default()),
-        text: required("text")?,
-        text_muted: optional_or("textMuted", "text_muted")
-            .unwrap_or_else(|| required("text").unwrap_or_default()),
-        accent: required("accent")?,
+            .unwrap_or_else(|| required("surface")),
+        text: required("text"),
+        text_muted: optional_or("textMuted", "text_muted").unwrap_or_else(|| required("text")),
+        accent: required("accent"),
         accent_contrast: optional_or("accentContrast", "accent_contrast")
             .unwrap_or_else(|| "#ffffff".into()),
-        border: required("border")?,
+        border: required("border"),
     })
+}
+
+/// 主题明暗：作者声明优先，否则按 `background` 亮度推断（与前端 `isDark` 同规则）。
+pub fn theme_mode(theme: &ThemeJson) -> &'static str {
+    match theme.declared_mode() {
+        Some("light") => "light",
+        Some("dark") => "dark",
+        _ => {
+            let background = theme
+                .colors
+                .get("background")
+                .map(String::as_str)
+                .unwrap_or("");
+            if is_dark(background) {
+                "dark"
+            } else {
+                "light"
+            }
+        }
+    }
+}
+
+/// 相对亮度 < 0.5 视为暗色（sRGB 近似，与 `src/theme/index.ts` 一致）。
+fn is_dark(hex: &str) -> bool {
+    let digits = hex.strip_prefix('#').unwrap_or(hex);
+    let expanded = if digits.len() == 3 {
+        digits
+            .chars()
+            .flat_map(|c| std::iter::repeat_n(c, 2))
+            .collect::<String>()
+    } else {
+        digits.to_string()
+    };
+    let channel = |index: usize| -> u32 {
+        expanded
+            .get(index * 2..index * 2 + 2)
+            .and_then(|pair| u32::from_str_radix(pair, 16).ok())
+            .unwrap_or(0)
+    };
+    let luminance =
+        (0.2126 * channel(0) as f64 + 0.7152 * channel(1) as f64 + 0.0722 * channel(2) as f64)
+            / 255.0;
+    luminance < 0.5
 }
 
 /// 内置安全主题令牌。
@@ -289,62 +337,80 @@ pub fn builtin_list() -> Vec<ThemeInfo> {
 mod tests {
     use super::*;
 
+    const MIDNIGHT: &str = r##"{
+        "schemaVersion": 1,
+        "name": "Midnight",
+        "mode": "dark",
+        "colors": {
+            "background": "#0b1020",
+            "surface": "#141a2e",
+            "surfaceElevated": "#1c2440",
+            "text": "#e6e9f2",
+            "textMuted": "#8b93a8",
+            "accent": "#7c6cff",
+            "accentContrast": "#ffffff",
+            "border": "#2a3352"
+        }
+    }"##;
+
     #[test]
     fn extracts_tokens_from_theme_json() {
-        let json = ThemeJson {
-            schema_version: Some(1),
-            name: Some("Midnight".into()),
-            colors: serde_json::from_str(
-                r##"{
-                    "background": "#0b1020",
-                    "surface": "#141a2e",
-                    "surfaceElevated": "#1c2440",
-                    "text": "#e6e9f2",
-                    "textMuted": "#8b93a8",
-                    "accent": "#7c6cff",
-                    "accentContrast": "#ffffff",
-                    "border": "#2a3352"
-                }"##,
-            )
-            .unwrap(),
-        };
+        let json = ThemeJson::parse(MIDNIGHT).unwrap();
         let tokens = extract_tokens(&json).unwrap();
         assert_eq!(tokens.background, "#0b1020");
         assert_eq!(tokens.accent, "#7c6cff");
+        assert_eq!(tokens.surface_elevated, "#1c2440");
     }
 
     #[test]
     fn ignores_safety_colors() {
-        let json = ThemeJson {
-            schema_version: None,
-            name: None,
-            colors: serde_json::from_str(
-                r##"{
-                    "background": "#000",
-                    "surface": "#111",
-                    "text": "#fff",
-                    "accent": "#fff",
-                    "border": "#222",
-                    "danger": "#ff0000",
-                    "success": "#00ff00",
-                    "warning": "#ffff00"
-                }"##,
-            )
-            .unwrap(),
-        };
+        let raw = MIDNIGHT.replace(
+            "\"border\": \"#2a3352\"",
+            "\"border\": \"#2a3352\", \"danger\": \"#ff0000\", \"success\": \"#00ff00\", \"warning\": \"#ffff00\"",
+        );
+        let json = ThemeJson::parse(&raw).unwrap();
         let tokens = extract_tokens(&json).unwrap();
-        // 不 panic，安全色被忽略。
-        assert_eq!(tokens.background, "#000");
+        // 不 panic；安全色永远不会出现在令牌里（ThemeTokens 没有对应字段）。
+        assert_eq!(tokens.background, "#0b1020");
     }
 
     #[test]
     fn rejects_missing_required_token() {
-        let json = ThemeJson {
-            schema_version: None,
-            name: None,
-            colors: BTreeMap::new(),
-        };
-        assert!(extract_tokens(&json).is_err());
+        let raw = r##"{ "schemaVersion": 1, "colors": { "background": "#000" } }"##;
+        assert!(ThemeJson::parse(raw).is_err());
+    }
+
+    #[test]
+    fn rejects_css_injection_in_theme_colors() {
+        // 运行期第二道闸：即使安装后有人手改主题文件，也不会把 url()/分号写进 CSS 变量。
+        let raw = MIDNIGHT.replace(
+            "\"background\": \"#0b1020\"",
+            "\"background\": \"url(https://tracker.example/pixel)\"",
+        );
+        let json = ThemeJson::parse(&raw).unwrap_err();
+        assert!(json.to_string().contains("颜色"));
+    }
+
+    #[test]
+    fn mode_uses_declaration_then_luminance() {
+        let declared = ThemeJson::parse(MIDNIGHT).unwrap();
+        assert_eq!(theme_mode(&declared), "dark");
+
+        let inferred_light = ThemeJson::parse(
+            &MIDNIGHT
+                .replace("\"mode\": \"dark\",", "")
+                .replace("\"#0b1020\"", "\"#fafafa\""),
+        )
+        .unwrap();
+        assert_eq!(theme_mode(&inferred_light), "light");
+
+        let inferred_dark = ThemeJson::parse(
+            &MIDNIGHT
+                .replace("\"mode\": \"dark\",", "")
+                .replace("\"#0b1020\"", "\"#101010\""),
+        )
+        .unwrap();
+        assert_eq!(theme_mode(&inferred_dark), "dark");
     }
 
     #[test]

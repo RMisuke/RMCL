@@ -288,7 +288,9 @@
           "maxLength": 80
         },
         "path": {
-          "$ref": "#/$defs/packagePath"
+          "$ref": "#/$defs/packagePath",
+          "pattern": "^themes/.+\\.json$",
+          "description": "必须位于 themes/ 下且以 .json 结尾（ADR-005 决策 7）。"
         }
       }
     }

@@ -1,4 +1,4 @@
-# RMCCC 项目现状与继续开发交接（2026-10-26 更新）
+# RMCCC 项目现状与继续开发交接（2026-10-27 更新）
 
 > 本文档是**变更记录与交接入口**，按轮次记录"这轮改了什么"。
 > **完整架构说明 + 功能矩阵 + 技术债台账**见 [`audits/AUDIT_2026-10-20.md`](audits/AUDIT_2026-10-20.md)（横切全景，不按轮次组织）。
@@ -9,6 +9,42 @@
 ---
 
 ## 0. 更新记录
+
+**2026-10-27（插件主题规范 + 安全审计：主题强校验 / Windows 隔离 UI 门禁 / SSRF 加固）**：
+
+1. **主题文档下沉**：新增 `crates/rmccc-plugin/src/theme.rs`（`ThemeDocument`、`REQUIRED_COLORS`、
+   `validate_color`）作为主题 JSON 的唯一解析器；只接受 `schemaVersion=1`、8 个颜色令牌、
+   `mode ∈ {dark,light}`，严格拒绝未知顶层字段；颜色只允许 `#rgb/#rrggbb/#rrggbbaa`
+   （`url()`/`var()`/`;` 等 CSS 注入面一律拒绝），单文件 ≤64 KiB。
+2. **三处校验**：包检查（`package::inspect_reader`，打包=安装即失败）、主题选择
+   （`dashboard_set_theme_preference` 先校验后落盘，损坏/不存在主题不再"保存成功但静默回退"）、
+   运行期令牌（`theme_tokens_for` 每次重读重校验）。`rmccc-dashboard` 不再复制 schema，
+   只做"已校验颜色 → 令牌"映射。
+3. **接口补齐**：`ThemeInfo.mode` 由 `custom` 改为声明/亮度推断的 `dark|light`；
+   `dashboard_get_theme_json` 对 `builtin:*` 合成同 schema JSON（原返回 null）；
+   能力目录 `settings.read`/`instance.read`/`network.request` 的 `executable` 修正为 true
+   （与桥方法表一致，并加一致性测试）。
+4. **安全审计**（[`audits/PLUGIN_SECURITY_AUDIT_2026-10-27.md`](audits/PLUGIN_SECURITY_AUDIT_2026-10-27.md)）：
+   逐层复核包安装/权限/隔离 UI/桥/WASM/网络/配置/主题，发现并处置 F-01～F-12。要点：
+   - **F-02（Windows，Critical）**：wry 0.55 的 WebView2 后端把初始化脚本注入所有子帧，Tauri 2.11
+     把已注册自定义协议判定为 local origin → 插件 iframe 可能拿到 `__TAURI_INTERNALS__`。
+     `PluginManager` 在 `platform_id` 以 `windows` 开头时不生成 `uiUrl`（声明式降级 + 诊断），
+     解除条件见 ADR-006 补充；Windows 隔离 UI 标记 **release-blocked**。
+   - **F-03（SSRF）**：`network.request` 增加本地域名黑名单 + DNS 解析过滤
+     （回环/私网/链路本地/CGNAT/组播/保留）+ `resolve_to_addrs` 固定已检查地址；移除共享
+     `ui_http_client`（每次请求新建，防 DNS rebinding）。
+   - **F-12**：桥 origin 由"任意 `rmcccplugin://` 前缀"收紧为 `rmcccplugin://<自己的 id>`
+     （WebKit 的 opaque `null` 分支保留）。
+5. **文档**：新增 [`guides/THEME_PLUGIN_AUTHORING.md`](guides/THEME_PLUGIN_AUTHORING.md)、
+   [`schemas/theme.schema.json`](schemas/theme.schema.json)；ADR-005/006 增补；
+   指南 §9.5、`PLUGIN_AUTHORING.md`、`plugin-sdk/docs/security.md`、`PLATFORM_ADAPTATION.md` 同步；
+   示例主题去掉宿主安全色并声明 `mode`。
+6. 验证：`cargo test --workspace` **681 passed / 0 failed**、clippy 零警告、`cargo fmt --check`、
+   `pnpm typecheck`、`pnpm test`（34）、`pnpm sdk:test`（14）、`pnpm build`；
+   并构建 `SNGL.app`（`--bundles app`，未生成 DMG）供真机测试：主可执行 9,492,544 B（约 9.05 MiB），
+   已 strip（1 个定义符号），版本 0.1.0。另用 `rmcli plugin pack` 验证恶意颜色主题被拒绝。
+7. **未执行**：Windows/WebView2 实测（release-blocked）、签名/可信目录（ADR-008 proposed）、
+   主窗口 CSP（F-05，纵深防御 TODO）；macOS 未做恶意包真机渗透。
 
 **2026-10-27（实例页统一：loader 品牌 / 累计时长 / 菜单 / HMCL 外置目录）**：
 

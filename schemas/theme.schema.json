@@ -1,0 +1,54 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://rmccc.dev/schemas/theme.schema.json",
+  "title": "RMCCC Theme Document",
+  "description": "插件包内 themes/<id>.json。宿主只读取 colors 并映射为 CSS 变量，不执行任何代码。颜色只允许十六进制写法；danger/success/warning 由宿主拥有，出现也会被忽略。",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "colors"],
+  "properties": {
+    "schemaVersion": {
+      "const": 1,
+      "description": "主题文档版本；当前只接受 1。"
+    },
+    "name": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 80,
+      "description": "展示名（可选；主题列表优先使用 manifest 里的 name）。"
+    },
+    "mode": {
+      "enum": ["dark", "light"],
+      "description": "明暗声明；缺省时宿主按背景色亮度推断。"
+    },
+    "colors": {
+      "type": "object",
+      "description": "颜色令牌。不认识的键会被宿主忽略（不会进入 CSS）。",
+      "required": ["background", "surface", "text", "accent", "border"],
+      "properties": {
+        "background": { "$ref": "#/$defs/color" },
+        "surface": { "$ref": "#/$defs/color" },
+        "surfaceElevated": { "$ref": "#/$defs/color" },
+        "text": { "$ref": "#/$defs/color" },
+        "textMuted": { "$ref": "#/$defs/color" },
+        "accent": { "$ref": "#/$defs/color" },
+        "accentContrast": { "$ref": "#/$defs/color" },
+        "border": { "$ref": "#/$defs/color" },
+        "danger": { "$ref": "#/$defs/color" },
+        "success": { "$ref": "#/$defs/color" },
+        "warning": { "$ref": "#/$defs/color" },
+        "surface_elevated": { "$ref": "#/$defs/color" },
+        "text_muted": { "$ref": "#/$defs/color" },
+        "accent_contrast": { "$ref": "#/$defs/color" }
+      },
+      "additionalProperties": { "$ref": "#/$defs/color" }
+    }
+  },
+  "$defs": {
+    "color": {
+      "type": "string",
+      "pattern": "^#([0-9a-fA-F]{3}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$",
+      "description": "#rgb / #rrggbb / #rrggbbaa。url()、var()、rgb()、颜色名一律拒绝。"
+    }
+  }
+}

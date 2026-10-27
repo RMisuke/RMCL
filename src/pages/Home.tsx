@@ -157,8 +157,12 @@ function ThemeAmbient(props: { themeKey: string }): JSX.Element {
       <Match when={key() === "builtin:paper"}><><PaperAmbient /><PaperGlow /></></Match>
       {/* 晨白（light）：无粒子，只保留令牌驱动的三团光斑 */}
       <Match when={key() === "builtin:light"}><DefaultGlow /></Match>
-      {/* 插件/未知主题回退暗色意象（N-5）——氛围层不再整层消失。 */}
-      <Match when={true}><><StarAmbient /><DefaultGlow /></></Match>
+      {/* 插件/未知主题按生效明暗回退：暗色用星野，亮色只保留令牌驱动的光斑。 */}
+      <Match when={true}>
+        <Show when={themeMode() === "light"} fallback={<><StarAmbient /><DefaultGlow /></>}>
+          <DefaultGlow />
+        </Show>
+      </Match>
     </Switch>
   );
 }

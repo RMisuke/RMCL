@@ -512,10 +512,13 @@ fn validate_contributions(manifest: &PluginManifest) -> Result<()> {
             ));
         }
         validate_relative_path(&theme.path)?;
-        if !theme.path.starts_with("themes/") {
+        if !theme.path.starts_with("themes/") || !theme.path.ends_with(".json") {
             return Err(plugin_error(
                 PluginErrorCode::ManifestInvalid,
-                format!("主题 {} 的 path 必须位于 themes/ 下", theme.id),
+                format!(
+                    "主题 {} 的 path 必须位于 themes/ 下且以 .json 结尾：{}",
+                    theme.id, theme.path
+                ),
             ));
         }
     }

@@ -219,6 +219,8 @@ pub struct PluginManager {
     diagnostics: Vec<PluginDiagnostic>,
     /// 注册表来自更新版本时为只读，禁止任何写操作（避免覆盖新字段）。
     registry_read_only: bool,
+    /// 是否允许生成隔离 UI 的 iframe 地址（Windows 关闭，见 [`Self::load`]）。
+    isolated_ui_allowed: bool,
 }
 
 impl PluginManager {
@@ -267,11 +269,27 @@ impl PluginManager {
             registry.schema_version = REGISTRY_SCHEMA_VERSION;
         }
 
+        // 隔离 UI 在 Windows 上关闭（安全门禁，2026-10-27 审计）：
+        // wry 0.55 的 WebView2 后端把 `initialization_script` 注入**所有子帧**
+        // （文档明确：Windows 忽略 `for_main_frame_only`），而 Tauri 2.11 把
+        // 已注册自定义协议视为 local origin。两者叠加会让插件 iframe 拿到
+        // `__TAURI_INTERNALS__` 并调用主窗口命令。macOS/WebKit 与 Linux/WebKitGTK
+        // 尊重 main-frame-only，因此仅 Windows 需要降级为声明式卡片。
+        let isolated_ui_allowed = !ctx.platform_id.starts_with("windows");
+        if !isolated_ui_allowed {
+            diagnostics.push(PluginDiagnostic::warning(
+                None,
+                "Windows 上隔离插件 UI 已禁用（等待 frame-sealed 容器）：插件卡片/页面降级为声明式渲染"
+                    .to_string(),
+            ));
+        }
+
         let mut manager = Self {
             paths,
             ctx,
             fs,
             registry,
+            isolated_ui_allowed,
             permissions,
             plugins: BTreeMap::new(),
             diagnostics,
@@ -891,6 +909,9 @@ impl PluginManager {
             // URL 生成失败（ID/入口非法）时退化为声明式卡片而不是让贡献项消失。
             let entry = plugin.manifest.entry.ui.as_deref();
             let ui_url = |card: Option<&str>| -> Option<String> {
+                if !self.isolated_ui_allowed {
+                    return None;
+                }
                 let entry = entry?;
                 match crate::ui::ui_url(&record.id, entry, card) {
                     Ok(url) => Some(url),

@@ -871,12 +871,19 @@ WidgetInstance
 
 ## 9.5 主题系统
 
-- 以设计令牌为第一层，例如背景、surface、文字、强调色、危险色、边框、圆角、间距、字体和阴影。
-- 令牌映射到现有 CSS variables；不要让主题插件覆盖宿主安全提示的语义色或关键状态。
-- 主题包默认只提供 JSON 与静态资源，不执行 JS。
-- 支持浅色/深色/跟随系统的策略；当前应用暗色为主的事实不意味着必须永久只有暗色。
-- 主题无效时回退到内置安全主题，并在日志中记录校验失败。
+- 以设计令牌为第一层：`background` / `surface` / `surfaceElevated` / `text` / `textMuted` /
+  `accent` / `accentContrast` / `border` 共 8 个颜色令牌（ADR-005 决策 7）。圆角/间距/字体/阴影
+  属于宿主视觉系统，**不开放给主题**，以免破坏可读性与可访问性。
+- 令牌映射到 `--rmccc-*` CSS variables，并桥接旧的 `--surface-*` / `--text-*` 变量；
+  宿主安全语义色（danger/success/warning）由宿主按明暗固定注入，主题不得覆盖。
+- 主题包只提供 JSON 与静态资源，**不执行 JS**；颜色只接受 `#rgb`/`#rrggbb`/`#rrggbbaa`，
+  文件 ≤ 64 KiB，`schemaVersion = 1`。包检查、主题选择、运行期令牌三处复用同一校验。
+- 支持浅色/深色/跟随系统；主题 JSON 可声明 `mode`，缺省按背景亮度推断。
+- 主题无效时回退到内置安全主题，并在日志中记录校验失败；**选择时**即拒绝损坏主题，
+  不允许"保存成功但界面回退"。
 - 主题/布局与功能插件分别启用；UI 主题不能声明或继承业务权限。
+- 作者规范：[`guides/THEME_PLUGIN_AUTHORING.md`](guides/THEME_PLUGIN_AUTHORING.md)；
+  Schema：[`schemas/theme.schema.json`](../schemas/theme.schema.json)。
 
 ## 9.6 插件 UI 技术约束
 

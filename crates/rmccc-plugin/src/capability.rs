@@ -77,7 +77,7 @@ pub const CAPABILITIES: &[CapabilitySpec] = &[
         risk: CapabilityRisk::Low,
         requires_hosts: false,
         instance_scoped: false,
-        executable: false,
+        executable: true,
     },
     CapabilitySpec {
         name: "instance.read",
@@ -85,7 +85,7 @@ pub const CAPABILITIES: &[CapabilitySpec] = &[
         risk: CapabilityRisk::Low,
         requires_hosts: false,
         instance_scoped: true,
-        executable: false,
+        executable: true,
     },
     CapabilitySpec {
         name: "mods.read",
@@ -182,7 +182,7 @@ pub const CAPABILITIES: &[CapabilitySpec] = &[
         risk: CapabilityRisk::High,
         requires_hosts: true,
         instance_scoped: false,
-        executable: false,
+        executable: true,
     },
     CapabilitySpec {
         name: "agent.tools.register",
@@ -348,6 +348,9 @@ fn validate_host(host: &str) -> Result<()> {
         "metadata.google.internal",
         "metadata",
         "instance-data",
+        "internal",
+        "local",
+        "home.arpa",
         "169.254.169.254",
         "fd00:ec2::254",
     ];
@@ -419,6 +422,9 @@ mod tests {
             "dev.localhost",
             "metadata.google.internal",
             "*.local",
+            "printer.local",
+            "printer.lan.internal",
+            "x.home.arpa",
             "example",
             "exa mple.com",
             "EXAMPLE.com",
@@ -426,6 +432,26 @@ mod tests {
             assert!(
                 validate_hosts(&[bad.to_string()]).is_err(),
                 "should reject {bad:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn bridge_methods_are_declared_executable() {
+        // 能力目录里的 `executable` 必须反映真实执行通道，否则 UI/CLI 会把
+        // "可调用"的能力展示成"仅声明"（2026-10-27 审计发现的目录漂移）。
+        for method in crate::ui::BRIDGE_METHODS {
+            let Some(capability) = method.capability else {
+                continue;
+            };
+            let spec = CAPABILITIES
+                .iter()
+                .find(|spec| spec.name == capability)
+                .unwrap_or_else(|| panic!("bridge method {} uses unknown capability", method.name));
+            assert!(
+                spec.executable,
+                "bridge method {} maps to {} but the catalog says not executable",
+                method.name, capability
             );
         }
     }

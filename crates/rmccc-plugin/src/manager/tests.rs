@@ -16,8 +16,12 @@ fn temp_dir(tag: &str) -> PathBuf {
 }
 
 fn manager(dir: &Path) -> PluginManager {
+    manager_for(dir, "darwin-aarch64")
+}
+
+fn manager_for(dir: &Path, platform_id: &str) -> PluginManager {
     let platform = Platform::mock().0;
-    PluginManager::load(dir, "0.1.0", "darwin-aarch64", platform.fs)
+    PluginManager::load(dir, "0.1.0", platform_id, platform.fs)
 }
 
 fn manifest(id: &str, version: &str) -> serde_json::Value {
@@ -147,7 +151,22 @@ fn uninstall_keeps_config_by_default_and_blocks_dependents() {
     m["contributes"] = json!({
         "themes": [{ "id": "midnight", "name": "Midnight", "path": "themes/midnight.json" }]
     });
-    let bytes = pack(&m, &[("themes/midnight.json", "{}")]);
+    let bytes = pack(
+        &m,
+        &[(
+            "themes/midnight.json",
+            "{
+        \"schemaVersion\": 1,
+        \"colors\": {
+            \"background\": \"#0b1020\",
+            \"surface\": \"#141a2e\",
+            \"text\": \"#e6e9f2\",
+            \"accent\": \"#7c6cff\",
+            \"border\": \"#2a3352\"
+        }
+    }",
+        )],
+    );
     mgr.install_from_bytes(&bytes, "test.rmcpkg", false)
         .unwrap();
 
@@ -475,7 +494,22 @@ fn revoking_a_capability_hides_its_contributions() {
     m["contributes"] = json!({
         "themes": [{ "id": "night", "name": "Night", "path": "themes/night.json" }]
     });
-    let bytes = pack(&m, &[("themes/night.json", "{}")]);
+    let bytes = pack(
+        &m,
+        &[(
+            "themes/night.json",
+            "{
+        \"schemaVersion\": 1,
+        \"colors\": {
+            \"background\": \"#0b1020\",
+            \"surface\": \"#141a2e\",
+            \"text\": \"#e6e9f2\",
+            \"accent\": \"#7c6cff\",
+            \"border\": \"#2a3352\"
+        }
+    }",
+        )],
+    );
     mgr.install_from_bytes(&bytes, "x", true).unwrap();
     assert_eq!(mgr.contributions().themes.len(), 1);
 
@@ -483,6 +517,51 @@ fn revoking_a_capability_hides_its_contributions() {
         .unwrap();
     assert!(mgr.contributions().themes.is_empty(), "撤销后立即停止登记");
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn isolated_ui_is_available_on_macos_but_gated_on_windows() {
+    // 2026-10-27 安全审计：Windows/WebView2 会把 Tauri 的初始化脚本注入子帧，
+    // 插件 iframe 因此可能直接拿到 IPC。门禁在贡献项层关闭 uiUrl（声明式卡片仍可用）。
+    fn ui_plugin() -> (serde_json::Value, Vec<(&'static str, &'static str)>) {
+        let mut m = manifest("dev.rmccc.ui-gate", "1.0.0");
+        m["permissions"] = json!([{ "capability": "dashboard.cards" }]);
+        m["entry"] = json!({ "ui": "ui/index.html" });
+        m["contributes"] = json!({
+            "dashboardCards": [{ "id": "status", "title": "Status", "defaultSize": { "w": 4, "h": 2 } }]
+        });
+        (
+            m,
+            vec![("ui/index.html", "<!doctype html><title>t</title>")],
+        )
+    }
+
+    let mac_dir = temp_dir("ui-gate-mac");
+    let mut mac = manager(&mac_dir);
+    let (m, extra) = ui_plugin();
+    mac.install_from_bytes(&pack(&m, &extra), "x", true)
+        .unwrap();
+    let cards = mac.contributions().dashboard_cards;
+    assert_eq!(
+        cards[0].ui_url.as_deref(),
+        Some("rmcccplugin://dev.rmccc.ui-gate/ui/index.html?card=status")
+    );
+    let _ = std::fs::remove_dir_all(&mac_dir);
+
+    let win_dir = temp_dir("ui-gate-win");
+    let mut win = manager_for(&win_dir, "windows-x86_64");
+    win.install_from_bytes(&pack(&m, &extra), "x", true)
+        .unwrap();
+    let cards = win.contributions().dashboard_cards;
+    assert_eq!(cards.len(), 1, "声明式卡片仍然登记");
+    assert!(cards[0].ui_url.is_none(), "Windows 不生成 iframe 地址");
+    assert!(
+        win.diagnostics()
+            .iter()
+            .any(|d| d.message.contains("隔离插件 UI")),
+        "降级必须留下诊断"
+    );
+    let _ = std::fs::remove_dir_all(&win_dir);
 }
 
 #[test]

@@ -128,7 +128,34 @@ Phase 3 要把固定 JSX 迁移为「注册表 + 布局配置 + 受控渲染」�
 - macOS WebKit 本机测；Windows WebView2 差异（高 DPI / 字体回退 / 输入法）deferred。
 - 布局算法在 Rust 单测覆盖，不依赖 WebView。
 
+## 补充（2026-10-27）：主题插件契约与运行期校验
+
+决策 7 落地后，主题插件需要一条"能打包 = 能安装 = 能应用"的硬契约。补充如下
+（编号接续决策 7，不改变原决策文本）：
+
+1. **文档格式唯一来源**：`crates/rmccc-plugin/src/theme.rs` 的 `ThemeDocument`
+   是主题 JSON 的权威解析器（`schemaVersion = 1`、严格拒绝未知顶层字段、`mode ∈ {dark, light}`）。
+   `rmccc-dashboard` 只做"令牌映射"，复用同一份类型与颜色校验，不复制 schema。
+2. **颜色语法收窄**：主题颜色只允许 `#rgb` / `#rrggbb` / `#rrggbbaa`。
+   主题值最终写进 CSS 自定义属性，若允许任意字符串，`url(...)` 可能被宿主样式消费成
+   外链/追踪请求，`;`/`}` 则是注入面。校验在三个位置执行：
+   包检查（`package::inspect_reader`）、主题选择（`dashboard_set_theme_preference`）、
+   运行期令牌（`theme_tokens_for`）。
+3. **安装期校验**：主题文件必须存在、`.json` 后缀、≤ 64 KiB，并通过
+   `ThemeDocument::parse`；不合法直接拒绝安装，而不是装完后"永远选不中"。
+4. **明暗**：`mode` 声明优先；缺省按 `background` 相对亮度推断（与前端 `isDark` 同规则），
+   `ThemeInfo.mode` 不再恒为 `custom`。
+5. **内置主题可对照**：`dashboard_get_theme_json` 对 `builtin:*` 合成同 schema 的 JSON，
+   方便作者以内置主题为起点；插件主题返回原文件（校验后）。
+6. **选择即校验**：不存在/损坏的 key 不再"保存成功但界面回退"，后端拒绝写入偏好。
+7. **安全语义色边界不变**：`danger`/`success`/`warning` 即使出现在主题文件中也不进入令牌，
+   宿主按明暗固定注入。
+
+主题作者-facing 规范见 [`docs/guides/THEME_PLUGIN_AUTHORING.md`](../guides/THEME_PLUGIN_AUTHORING.md)；
+JSON Schema 见 [`schemas/theme.schema.json`](../../schemas/theme.schema.json)。
+
 ## 状态变更记录
 
 - 2026-10-21：proposed（Phase 3 启动）
 - 2026-10-21：accepted（切片 3.1 实现前定稿）
+- 2026-10-27：补充决策 8（主题文档校验/安装期校验/颜色语法，见 `THEME_PLUGIN_AUTHORING.md`）

@@ -18,6 +18,7 @@
 //! | [`config`] | `plugin-data/<id>/config.json` + schema 子集 |
 //! | [`manager`] | 对 CLI/Tauri 暴露的窄门面 |
 //! | [`ui`] | 隔离 UI 资源白名单、CSP、版本化 Host Bridge 协议 |
+//! | [`theme`] | 主题文档（纯数据）格式、颜色语法与大小/schema 校验 |
 //!
 //! 平台归属：路径校验、zip 解压是 OS 无关逻辑；**原子替换/权限**经
 //! [`rmccc_platform::PlatformFs`]，不在本 crate 内写 `#[cfg]`（ADR-003 决策 7）。
@@ -34,6 +35,7 @@ pub mod paths;
 pub mod permissions;
 pub mod registry;
 pub mod storage;
+pub mod theme;
 pub mod ui;
 pub mod version;
 
@@ -52,6 +54,7 @@ pub use permissions::{PermissionGrant, PermissionStore, PermissionsFile};
 pub use registry::{
     PluginRecord, PluginRegistry, PluginSource, PluginSourceKind, PluginState, TrustLevel,
 };
+pub use theme::{ThemeDocument, MAX_THEME_BYTES, THEME_SCHEMA_VERSION};
 pub use ui::{
     BridgeError, BridgeErrorCode, BridgeMethod, BridgeRequest, BRIDGE_METHODS, CSP, UI_API_VERSION,
     UI_SCHEME,

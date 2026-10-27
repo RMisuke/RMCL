@@ -138,6 +138,50 @@ Windows WebView2 实测（本机 macOS-only，见指南 §1.4）、插件页面�
 - 前端：容器对 `postMessage` 来源/大小/版本的三类拒绝路径（Vitest 或纯函数测试）。
 - Windows/Linux：**deferred**（release-blocked），在 `PLATFORM_ADAPTATION.md` 记入待验证清单。
 
+## 补充（2026-10-27）：Windows 子帧 IPC 风险与网络出口加固
+
+2026-10-27 的插件系统安全审计复核了依赖源码，发现两处"文档假设强于实现"的地方，
+按"安全优先"原则收紧：
+
+### 1. Windows 上关闭隔离 UI（安全门禁）
+
+事实链：
+
+- wry 0.55 的 WebView2 后端把 `initialization_script` 注入**所有子帧**；
+  其文档明确："Windows: scripts are always added to subframes regardless of the
+  `for_main_frame_only` option"。Tauri 2.11 自己的 IPC 初始化脚本正是走这条路径。
+- Tauri 2.11 的 `is_local_url` 把**已注册自定义协议**（`rmcccplugin://`，
+  Windows 上是 `http://rmcccplugin.localhost`）判定为 local origin；
+  `Origin::Local` 会套用 `main` 窗口的 capabilities。
+- 结论：Windows 上插件 iframe 可能拿到 `__TAURI_INTERNALS__` 并直接调用主窗口命令，
+  绕过 Host Bridge 的逐条授权。macOS/WebKit 与 Linux/WebKitGTK 尊重
+  main-frame-only，不受影响；Android 在不支持 document-start 注入时也退化为 main frame。
+
+处置：`PluginManager::contributions` 在 `platform_id` 以 `windows` 开头时**不生成
+`uiUrl`**，插件卡片/页面降级为声明式渲染，并在诊断中留痕；包格式、权限模型、
+桥协议不变。这是**临时门禁**，不是最终架构。
+
+解除条件（任一）：
+
+1. Tauri/wry 提供"初始化脚本只进主帧"的 Windows 实现，且本机/CI 有 WebView2 实测；
+2. 或改成隔离容器方案 B'：独立 `Webview`（label `plugin-<id>`）+ **空 capability 集**，
+   由宿主按卡片位置摆放，UI 仍经同一 Bridge 通信。
+
+在此之前，Windows 的隔离 UI 记为 **release-blocked**（见 `PLATFORM_ADAPTATION.md`）。
+
+### 2. 网络出口 SSRF 加固
+
+`network.request` 的域名白名单只约束"名字"，不约束"解析到哪"：插件可以让自己的域名
+解析到 `127.0.0.1` / `169.254.169.254` / 私网，借宿主 client 读取本地服务。补充：
+
+- 拒绝本地域名后缀：`localhost`、`.localhost`、`.local`、`.internal`、`.home.arpa`；
+- 每次请求先 DNS 解析，过滤回环/私网/链路本地/CGNAT/组播/保留地址；全部不合格即
+  `host_not_allowed`；
+- 用 `reqwest::ClientBuilder::resolve_to_addrs` 把连接钉在已检查的地址上，封掉
+  二次 DNS rebinding 的时间窗（代价：每次请求新建 client，插件调用频率低，可接受）；
+- 仍然不跟随重定向（`Policy::none`），GET/POST、无 cookie、无自定义 header。
+
 ## 状态变更记录
 
 - 2026-10-21：proposed → accepted（Phase 4 开工，按本 ADR 实现 4.1–4.5）
+- 2026-10-27：补充 Windows 子帧 IPC 门禁与 `network.request` SSRF 加固（见文末补充）

@@ -3,9 +3,13 @@
 > 本指南覆盖**声明式插件**（主题、翻译、Dashboard 卡片/设置页声明、配置 schema、打包安装）——
 > 这仍是绝大多数插件的形态。Phase 4 起另有两种**受控执行**形态：
 > 隔离 UI 容器（`entry.ui`，ADR-006）与逻辑插件（`entry.logic`，WASM 只读白名单，ADR-007），
-> 详见 `plugin-sdk/` 与对应 ADR；插件调用宿主 AI 服务（`ai.chat` 能力）为规划中能力（ADR-013 S6，未实现）。
+> 详见 `plugin-sdk/` 与对应 ADR；插件调用宿主 AI 服务（`ai.chat`，桥方法 `llm.chat`，
+> ADR-013 S6）已实现。
 > 协议细节见 [ADR-003](../adr/ADR-003-plugin-package-and-install-transaction.md) 与
 > [ADR-004](../adr/ADR-004-plugin-manifest-and-versioning.md)。
+>
+> **只做主题？** 直接读 [THEME_PLUGIN_AUTHORING.md](THEME_PLUGIN_AUTHORING.md)：
+> 主题是纯数据插件，有独立的字段/颜色/校验规则与验收清单。
 
 ## 1. 目录结构
 
@@ -129,5 +133,9 @@ Phase 2 **不做签名验证**，所有安装记为 `development` 并显示“�
 - Dashboard 布局/主题渲染：✅ Phase 3（ADR-005）。
 - 隔离 UI（`entry.ui` + 宿主桥 `plugin_ui_invoke`）：✅ Phase 4（ADR-006）。
 - 逻辑运行时（`entry.logic`，只读调用白名单 + `logic.invoke` 能力）：✅ Phase 5（ADR-007）。
-- 宿主 AI 服务能力（`ai.chat`，经桥 `llm.chat`）：⬜ ADR-013 S6（未实现）。
-- 插件目录与签名分发：Phase 7（ADR-008 草案，proposed）。
+- 宿主 AI 服务能力（`ai.chat`，经桥 `llm.chat`，每插件 6 次/分钟限流）：✅ ADR-013 S6。
+- 主题插件（`contributes.themes` + 8 个颜色令牌，无 JS）：✅ Phase 3，规范见
+  [THEME_PLUGIN_AUTHORING.md](THEME_PLUGIN_AUTHORING.md)。
+- 插件目录与签名分发：Phase 7（ADR-008 草案，proposed）；当前所有安装记为 `development`。
+- **Windows 隔离 UI**：⛔ release-blocked（wry 子帧 IPC 风险，见 ADR-006 补充）——
+  Windows 上 `uiUrl` 不生成，卡片/页面降级为声明式；macOS 不受该机制影响，Linux 未实测。
