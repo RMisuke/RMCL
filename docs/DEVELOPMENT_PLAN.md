@@ -74,7 +74,7 @@
 | JVM 检测 | `rmccc-launch` | 自动发现系统 Java，版本匹配 |
 | 启动参数构建 | `rmccc-launch` | Classpath 拼接、response file、参数模板 |
 | 进程管理 | `rmccc-launch` | 启动游戏进程、stdout/stderr 捕获 |
-| Profile 管理 | `rmccc-profile` | 创建/删除/更新/列表 profile |
+| 实例管理 | `rmccc-instance` | 目录注册表 + 版本即实例 + 设置覆盖（ADR-016） |
 
 ### Tauri 侧
 | 任务 | 说明 |

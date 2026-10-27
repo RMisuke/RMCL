@@ -78,6 +78,21 @@ impl Harness {
         }
     }
 
+    /// Seed a minimal installed version in the default game root. Instance
+    /// creation only registers existing versions (ADR-016), so every create
+    /// test needs this.
+    pub fn seed_version(&self, version: &str) {
+        let dir = self._dir.join("instances").join("versions").join(version);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join(format!("{version}.json")),
+            format!(
+                r#"{{"id":"{version}","type":"release","mainClass":"net.minecraft.client.main.Main","assetIndex":{{"id":"","url":"","sha1":"","size":0,"totalSize":0}},"downloads":{{}},"libraries":[],"javaVersion":null}}"#
+            ),
+        )
+        .unwrap();
+    }
+
     /// Run one command line (e.g. `["profile", "create", "-n", "x"]`).
     pub async fn run(&self, args: &[&str]) -> i32 {
         let owned: Vec<String> = args.iter().map(|s| s.to_string()).collect();

@@ -2,14 +2,20 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://rmccc.dev/schemas/theme.schema.json",
   "title": "RMCCC Theme Document",
-  "description": "插件包内 themes/<id>.json。宿主只读取 colors 并映射为 CSS 变量，不执行任何代码。颜色只允许十六进制写法；danger/success/warning 由宿主拥有，出现也会被忽略。",
+  "description": "插件包内 themes/<id>.json（v1 仅 colors；v2 可加字体/形状/间距/背景/视频/组件/特效/导航，需 themes.skin）。",
   "type": "object",
   "additionalProperties": false,
-  "required": ["schemaVersion", "colors"],
+  "required": [
+    "schemaVersion",
+    "colors"
+  ],
   "properties": {
     "schemaVersion": {
-      "const": 1,
-      "description": "主题文档版本；当前只接受 1。"
+      "enum": [
+        1,
+        2
+      ],
+      "description": "1 = 仅颜色；2 = 外观皮肤（ADR-014）。"
     },
     "name": {
       "type": "string",
@@ -18,30 +24,208 @@
       "description": "展示名（可选；主题列表优先使用 manifest 里的 name）。"
     },
     "mode": {
-      "enum": ["dark", "light"],
+      "enum": [
+        "dark",
+        "light"
+      ],
       "description": "明暗声明；缺省时宿主按背景色亮度推断。"
     },
     "colors": {
       "type": "object",
       "description": "颜色令牌。不认识的键会被宿主忽略（不会进入 CSS）。",
-      "required": ["background", "surface", "text", "accent", "border"],
+      "required": [
+        "background",
+        "surface",
+        "text",
+        "accent",
+        "border"
+      ],
       "properties": {
-        "background": { "$ref": "#/$defs/color" },
-        "surface": { "$ref": "#/$defs/color" },
-        "surfaceElevated": { "$ref": "#/$defs/color" },
-        "text": { "$ref": "#/$defs/color" },
-        "textMuted": { "$ref": "#/$defs/color" },
-        "accent": { "$ref": "#/$defs/color" },
-        "accentContrast": { "$ref": "#/$defs/color" },
-        "border": { "$ref": "#/$defs/color" },
-        "danger": { "$ref": "#/$defs/color" },
-        "success": { "$ref": "#/$defs/color" },
-        "warning": { "$ref": "#/$defs/color" },
-        "surface_elevated": { "$ref": "#/$defs/color" },
-        "text_muted": { "$ref": "#/$defs/color" },
-        "accent_contrast": { "$ref": "#/$defs/color" }
+        "background": {
+          "$ref": "#/$defs/color"
+        },
+        "surface": {
+          "$ref": "#/$defs/color"
+        },
+        "surfaceElevated": {
+          "$ref": "#/$defs/color"
+        },
+        "text": {
+          "$ref": "#/$defs/color"
+        },
+        "textMuted": {
+          "$ref": "#/$defs/color"
+        },
+        "accent": {
+          "$ref": "#/$defs/color"
+        },
+        "accentContrast": {
+          "$ref": "#/$defs/color"
+        },
+        "border": {
+          "$ref": "#/$defs/color"
+        },
+        "danger": {
+          "$ref": "#/$defs/color"
+        },
+        "success": {
+          "$ref": "#/$defs/color"
+        },
+        "warning": {
+          "$ref": "#/$defs/color"
+        },
+        "surface_elevated": {
+          "$ref": "#/$defs/color"
+        },
+        "text_muted": {
+          "$ref": "#/$defs/color"
+        },
+        "accent_contrast": {
+          "$ref": "#/$defs/color"
+        }
       },
-      "additionalProperties": { "$ref": "#/$defs/color" }
+      "additionalProperties": {
+        "$ref": "#/$defs/color"
+      }
+    },
+    "typography": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "ui": {
+          "$ref": "#/$defs/font"
+        },
+        "display": {
+          "$ref": "#/$defs/font"
+        },
+        "mono": {
+          "$ref": "#/$defs/font"
+        }
+      }
+    },
+    "shape": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "tag": {
+          "$ref": "#/$defs/size"
+        },
+        "control": {
+          "$ref": "#/$defs/size"
+        },
+        "card": {
+          "$ref": "#/$defs/size"
+        },
+        "modal": {
+          "$ref": "#/$defs/size"
+        },
+        "pill": {
+          "type": "boolean"
+        }
+      }
+    },
+    "spacing": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "unit": {
+          "type": "integer",
+          "minimum": 3,
+          "maximum": 6
+        },
+        "density": {
+          "enum": [
+            "compact",
+            "comfortable",
+            "spacious"
+          ]
+        }
+      }
+    },
+    "background": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "image": {
+          "$ref": "#/$defs/asset"
+        },
+        "video": {
+          "$ref": "#/$defs/asset"
+        },
+        "poster": {
+          "$ref": "#/$defs/asset"
+        },
+        "fit": {
+          "enum": [
+            "cover",
+            "contain"
+          ]
+        },
+        "position": {
+          "enum": [
+            "center",
+            "top",
+            "bottom",
+            "left",
+            "right"
+          ]
+        },
+        "dim": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 0.9
+        },
+        "blur": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 40
+        },
+        "scope": {
+          "enum": [
+            "app",
+            "hero",
+            "both"
+          ]
+        }
+      }
+    },
+    "components": {
+      "type": "object",
+      "additionalProperties": {
+        "$ref": "#/$defs/component"
+      }
+    },
+    "effects": {
+      "type": "array",
+      "maxItems": 3,
+      "items": {
+        "type": "object",
+        "required": [
+          "type"
+        ]
+      }
+    },
+    "navigation": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "icons": {
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/$defs/asset"
+          }
+        },
+        "ornaments": {
+          "type": "array",
+          "maxItems": 2,
+          "items": {
+            "type": "object",
+            "required": [
+              "image"
+            ]
+          }
+        }
+      }
     }
   },
   "$defs": {
@@ -49,6 +233,126 @@
       "type": "string",
       "pattern": "^#([0-9a-fA-F]{3}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$",
       "description": "#rgb / #rrggbb / #rrggbbaa。url()、var()、rgb()、颜色名一律拒绝。"
+    },
+    "size": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 32
+    },
+    "asset": {
+      "type": "string",
+      "pattern": "^assets/[A-Za-z0-9._/-]+$"
+    },
+    "font": {
+      "type": "object",
+      "required": [
+        "family"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "family": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64
+        },
+        "fallback": {
+          "enum": [
+            "sans-serif",
+            "serif",
+            "monospace",
+            "system-ui"
+          ]
+        },
+        "files": {
+          "type": "array",
+          "maxItems": 4,
+          "items": {
+            "type": "object",
+            "required": [
+              "src"
+            ],
+            "additionalProperties": false,
+            "properties": {
+              "src": {
+                "$ref": "#/$defs/asset"
+              },
+              "weight": {
+                "type": "string"
+              },
+              "style": {
+                "enum": [
+                  "normal",
+                  "italic"
+                ]
+              },
+              "display": {
+                "enum": [
+                  "auto",
+                  "swap",
+                  "block",
+                  "fallback",
+                  "optional"
+                ]
+              }
+            }
+          }
+        }
+      }
+    },
+    "component": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "background": {
+          "$ref": "#/$defs/color"
+        },
+        "border": {
+          "$ref": "#/$defs/color"
+        },
+        "text": {
+          "$ref": "#/$defs/color"
+        },
+        "radius": {
+          "$ref": "#/$defs/size"
+        },
+        "shadow": {
+          "enum": [
+            "none",
+            "soft",
+            "strong"
+          ]
+        },
+        "blur": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 40
+        },
+        "padding": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 32
+        },
+        "image": {
+          "$ref": "#/$defs/asset"
+        },
+        "imageSlice": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 64
+        },
+        "imageMode": {
+          "enum": [
+            "background",
+            "border"
+          ]
+        },
+        "primaryBackground": {
+          "$ref": "#/$defs/color"
+        },
+        "primaryText": {
+          "$ref": "#/$defs/color"
+        }
+      }
     }
   }
 }

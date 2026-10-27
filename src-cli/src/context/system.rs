@@ -10,13 +10,14 @@ impl CliContext {
     pub async fn system_info(&self) -> Result<Value> {
         let core = self.core.read().await;
         let active_account = core.account_repo.load_active()?;
-        let profiles = core.profile_store.list()?;
-        let local_versions = {
-            let repo = core
-                .game_repository
-                .read()
-                .map_err(|_| RmcccError::Other("game repository lock poisoned".to_string()))?;
-            repo.get_instance_ids().len()
+        let (instances, local_versions, active_instance) = {
+            let mut service = core
+                .instances
+                .lock()
+                .map_err(|_| RmcccError::Other("instance service lock poisoned".to_string()))?;
+            let all = service.list(None, false, true)?;
+            let selected = service.selected_instance().map(str::to_string);
+            (all.len(), all.len(), selected)
         };
         let running = self.running_games.len();
         let java = core.platform.java.detect_all().unwrap_or_default();
@@ -31,8 +32,8 @@ impl CliContext {
                 "uuid": a.uuid,
                 "expires_at": a.expires_at,
             })),
-            "active_profile": core.launcher_state.selected_profile_id,
-            "profiles": profiles.len(),
+            "active_instance": active_instance,
+            "instances": instances,
             "local_versions": local_versions,
             "running_games": running,
             "java_installations": java.len(),

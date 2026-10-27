@@ -8,7 +8,7 @@ import { Show, For, createMemo, createSignal, createEffect, onCleanup } from "so
 import { Icon } from "./icons";
 import { RmButton, RmIconButton, RmInput, RmTag } from "./rm/controls";
 import { launchStore } from "../stores/launch";
-import { profilesStore } from "../stores/profiles";
+import { instancesStore } from "../stores/instances";
 import { aiStore } from "../stores/ai";
 import { uiStore, toast } from "../stores/ui";
 import { t } from "../i18n";
@@ -28,7 +28,7 @@ export function LogDrawer(): JSX.Element {
   const drawer = () => uiStore.logDrawer();
   const profileId = () => drawer()?.profileId ?? null;
   const profileName = createMemo(
-    () => profilesStore.items()?.find((p) => p.id === profileId())?.name ?? t("logs.sharedDir")
+    () => instancesStore.items()?.find((p) => p.summary.key === profileId())?.summary.display_name ?? t("logs.sharedDir")
   );
   const [filter, setFilter] = createSignal("");
   const [level, setLevel] = createSignal<LevelFilter>("all");

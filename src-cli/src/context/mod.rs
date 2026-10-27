@@ -16,7 +16,6 @@ use rmccc_auth::Account;
 use rmccc_core::pipeline::{self, GameOutputCb, ProgressCb};
 use rmccc_core::CoreContext;
 use rmccc_error::{Result, RmcccError};
-use rmccc_version::GameRepository as _;
 use serde_json::{json, Value};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -24,7 +23,7 @@ use std::sync::Arc;
 /// A currently running game process (for state observation).
 #[derive(Debug, Clone)]
 pub struct RunningGame {
-    pub profile_id: String,
+    pub key: String,
     pub pid: u32,
 }
 
@@ -50,9 +49,9 @@ pub struct CliContext {
     pub core: Arc<tokio::sync::RwLock<CoreContext>>,
     pub http_client: reqwest::Client,
     pub data_dir: PathBuf,
-    /// profile_id → OS pid of a running game (state sync).
+    /// instance key → OS pid of a running game (state sync).
     pub running_games: Arc<dashmap::DashMap<String, u32>>,
-    /// profile_id → exit-code watch channel (allows `launch wait`).
+    /// instance key → exit-code watch channel (allows `launch wait`).
     pub exit_signals: Arc<dashmap::DashMap<String, tokio::sync::watch::Receiver<Option<i32>>>>,
 }
 
@@ -84,11 +83,13 @@ impl CliContext {
         })
     }
 
-    /// Load a profile or fail with `ProfileNotFound`.
-    pub async fn get_profile(&self, id: &str) -> Result<rmccc_profile::Profile> {
+    /// Load an instance detail or fail with `ProfileNotFound`.
+    pub async fn get_instance(&self, key: &str) -> Result<rmccc_instance::InstanceDetail> {
         let core = self.core.read().await;
-        core.profile_store
-            .get(id)?
-            .ok_or_else(|| RmcccError::ProfileNotFound(id.to_string()))
+        let mut service = core
+            .instances
+            .lock()
+            .map_err(|_| RmcccError::Other("instance service lock poisoned".to_string()))?;
+        service.get(key)
     }
 }

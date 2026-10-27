@@ -3614,12 +3614,12 @@ dependencies = [
  "rmccc-core",
  "rmccc-download",
  "rmccc-error",
+ "rmccc-instance",
  "rmccc-launch",
  "rmccc-llm",
  "rmccc-logic",
  "rmccc-modloader",
  "rmccc-mods",
- "rmccc-profile",
  "rmccc-version",
  "serde",
  "serde_json",
@@ -3691,11 +3691,11 @@ dependencies = [
  "rmccc-core",
  "rmccc-download",
  "rmccc-error",
+ "rmccc-instance",
  "rmccc-launch",
  "rmccc-modloader",
  "rmccc-mods",
  "rmccc-plugin",
- "rmccc-profile",
  "rmccc-version",
  "rustyline",
  "serde",
@@ -3734,12 +3734,12 @@ dependencies = [
  "rmccc-dashboard",
  "rmccc-download",
  "rmccc-error",
+ "rmccc-instance",
  "rmccc-launch",
  "rmccc-modloader",
  "rmccc-mods",
  "rmccc-platform",
  "rmccc-plugin",
- "rmccc-profile",
  "rmccc-version",
  "serde",
  "serde_json",
@@ -3791,13 +3791,29 @@ dependencies = [
 ]
 
 [[package]]
+name = "rmccc-instance"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "rmccc-config",
+ "rmccc-error",
+ "rmccc-platform",
+ "rmccc-version",
+ "serde",
+ "serde_json",
+ "tracing",
+ "ts-rs",
+ "uuid",
+]
+
+[[package]]
 name = "rmccc-launch"
 version = "0.1.0"
 dependencies = [
  "rmccc-config",
  "rmccc-error",
+ "rmccc-instance",
  "rmccc-platform",
- "rmccc-profile",
  "rmccc-version",
  "serde",
  "serde_json",
@@ -3908,22 +3924,6 @@ dependencies = [
  "ts-rs",
  "uuid",
  "zip 2.4.2",
-]
-
-[[package]]
-name = "rmccc-profile"
-version = "0.1.0"
-dependencies = [
- "chrono",
- "rmccc-config",
- "rmccc-error",
- "rmccc-modloader",
- "serde",
- "serde_json",
- "tokio",
- "tracing",
- "ts-rs",
- "uuid",
 ]
 
 [[package]]

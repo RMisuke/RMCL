@@ -638,6 +638,22 @@ impl DefaultLauncher {
         if self.options.fullscreen {
             game_args.push("--fullscreen".to_string());
         }
+        if let Some(quick_play) = &self.options.quick_play {
+            match quick_play {
+                crate::QuickPlay::Singleplayer(world) => {
+                    game_args.push("--quickPlaySingleplayer".to_string());
+                    game_args.push(world.clone());
+                }
+                crate::QuickPlay::Multiplayer(address) => {
+                    game_args.push("--quickPlayMultiplayer".to_string());
+                    game_args.push(address.clone());
+                }
+                crate::QuickPlay::Realms(realm) => {
+                    game_args.push("--quickPlayRealms".to_string());
+                    game_args.push(realm.clone());
+                }
+            }
+        }
         for arg in &self.options.game_args {
             game_args.push(arg.clone());
         }

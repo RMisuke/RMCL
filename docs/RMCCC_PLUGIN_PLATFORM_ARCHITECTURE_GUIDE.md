@@ -73,7 +73,7 @@ Agent 不得：
 | `rmccc-launch` | Java 探测、启动参数、natives、进程管理 |
 | `rmccc-modloader` | Loader 版本与安装流程 |
 | `rmccc-mods` | 模组源接口及 Modrinth 实现 |
-| `rmccc-profile` | Profile JSON 存储与全局/实例设置继承 |
+| `rmccc-instance` | 游戏目录注册表、版本实例、全局/实例设置继承 |
 | `rmccc-core` | `CoreContext`、Pipeline、旧目录迁移及会话相关协调 |
 | `src-tauri` | 桌面命令、事件、状态和 WebView 桥接 |
 | `src-cli` | CLI 命令面、REPL、输出信封和业务门面 |
@@ -197,7 +197,7 @@ RMCCC 是一个跨平台的 Minecraft 桌面应用平台：
 ┌───────────────────────────────▼────────────────────────────────┐
 │                         Domain Engines                         │
 │ rmccc-version · rmccc-launch · rmccc-download · rmccc-auth     │
-│ rmccc-modloader · rmccc-mods · rmccc-profile · rmccc-config    │
+│ rmccc-modloader · rmccc-mods · rmccc-instance · rmccc-config   │
 └───────────────────────────────┬────────────────────────────────┘
                                 │
 ┌───────────────────────────────▼────────────────────────────────┐
@@ -236,7 +236,7 @@ crates/
   rmccc-launch/            # 现有
   rmccc-modloader/         # 现有
   rmccc-mods/              # 现有
-  rmccc-profile/           # 现有
+  rmccc-instance/          # 现有（ADR-016）
   rmccc-core/              # 现有；逐步收敛为稳定服务与编排层
 
   rmccc-platform/          # 将来：平台适配层。承载文件系统耐久、进程控制、凭据、
@@ -516,7 +516,7 @@ trait CredentialStore {
 | 能力域 | 必须封装的接口（概念） | 现有承载位置（待迁移） |
 |---|---|---|
 | 路径解析 | `default_data_dir`/`config_dir`/`state_dir`/`log_dir`/`cache_dir`/`game_root_dir` | `rmccc-config/paths.rs`（已用 `dirs` crate，**良好范例**） |
-| 文件系统耐久 | 原子写入（staging→rename/同卷限制）、flush/sync、旧文件备份、Windows 文件锁与 staging+rename、归档解压 zip-slip 防护 | `rmccc-config/file_utils.rs`、`rmccc-launch/natives.rs`（zip-slip 缺口）、`ProfileStore` 原子写 |
+| 文件系统耐久 | 原子写入（staging→rename/同卷限制）、flush/sync、旧文件备份、Windows 文件锁与 staging+rename、归档解压 zip-slip 防护 | `rmccc-config/file_utils.rs`、`rmccc-launch/natives.rs`（zip-slip 缺口）、`InstanceSettings` 原子写 |
 | 文件权限 | `.key`/argfile/敏感文件 0600（Unix）与 `icacls`（Windows）收紧 | `rmccc-auth/vault.rs`、`rmccc-launch/process.rs` |
 | 进程控制 | `terminate_tree`（Unix `killpg`/Windows Job Object 或 `taskkill /T`）、`set_priority`（`nice`/Windows priority class）、进程组建立、stdout/stderr 管道、退出收尾 | `rmccc-launch/process.rs`、`managed.rs`、`default_launcher.rs`、`src-tauri/commands/launch.rs` |
 | 进程/命令行生成 | 程序路径+参数数组+工作目录+env 分离传递、response file 生命周期、PATH 搜索 | `rmccc-launch/default_launcher.rs`、`process.rs` |

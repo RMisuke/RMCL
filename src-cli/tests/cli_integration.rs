@@ -89,6 +89,7 @@ async fn invalid_output_mode_is_rejected() {
 #[tokio::test]
 async fn json_success_emits_ok_envelope() {
     let h = Harness::json("env-success");
+    h.seed_version("1.21");
     let code = h
         .run(&["profile", "create", "-n", "Alpha", "-v", "1.21"])
         .await;
@@ -97,12 +98,15 @@ async fn json_success_emits_ok_envelope() {
     assert_eq!(envelope["ok"], true);
     assert_eq!(envelope["data"]["name"], "Alpha");
     assert_eq!(envelope["data"]["game_version"], "1.21");
+    assert_eq!(envelope["data"]["key"], "default/1.21");
 }
 
 #[tokio::test]
 async fn json_error_emits_error_envelope_with_exit_code() {
     let h = Harness::json("env-error");
-    let code = h.run(&["profile", "get", "--id", "missing-profile"]).await;
+    let code = h
+        .run(&["profile", "get", "--id", "default/missing-profile"])
+        .await;
     assert_eq!(code, 4, "ProfileNotFound must map to exit code 4");
     let envelope = h.last_json();
     assert_eq!(envelope["ok"], false);
@@ -116,6 +120,7 @@ async fn json_error_emits_error_envelope_with_exit_code() {
 #[tokio::test]
 async fn profile_full_lifecycle() {
     let h = Harness::json("profile-lifecycle");
+    h.seed_version("1.20.4");
 
     // Create
     let code = h
@@ -125,12 +130,15 @@ async fn profile_full_lifecycle() {
         .await;
     assert_eq!(code, 0);
     let created = h.last_json();
-    let id = created["data"]["id"].as_str().unwrap().to_string();
-    assert_eq!(created["data"]["mod_loader"]["loader_type"], "fabric");
-    assert_eq!(created["data"]["memory_mb"], 3072);
+    let key = created["data"]["key"].as_str().unwrap().to_string();
+    assert_eq!(key, "default/1.20.4");
+    // CLI create only registers the installed version; loader installation is
+    // a separate explicit step in the new model.
+    assert_eq!(created["data"]["loader"], json!(null));
+    assert_eq!(created["data"]["settings"]["max_memory_mb"], 3072);
 
     // Get
-    let code = h.run(&["profile", "get", "--id", &id]).await;
+    let code = h.run(&["profile", "get", "--id", &key]).await;
     assert_eq!(code, 0);
     assert_eq!(h.last_json()["data"]["name"], "Beta");
 
@@ -142,21 +150,21 @@ async fn profile_full_lifecycle() {
     // Update
     let code = h
         .run(&[
-            "profile", "update", "--id", &id, "--name", "Beta2", "--memory", "4096",
+            "profile", "update", "--id", &key, "--name", "Beta2", "--memory", "4096",
         ])
         .await;
     assert_eq!(code, 0);
     assert_eq!(h.last_json()["data"]["name"], "Beta2");
 
     // Select + Active
-    let code = h.run(&["profile", "select", "--id", &id]).await;
+    let code = h.run(&["profile", "select", "--id", &key]).await;
     assert_eq!(code, 0);
     let code = h.run(&["profile", "active"]).await;
     assert_eq!(code, 0);
-    assert_eq!(h.last_json()["data"]["id"], id);
+    assert_eq!(h.last_json()["data"]["key"], key);
 
     // Delete
-    let code = h.run(&["profile", "delete", "--id", &id]).await;
+    let code = h.run(&["profile", "delete", "--id", &key]).await;
     assert_eq!(code, 0);
     let code = h.run(&["profile", "list"]).await;
     assert_eq!(code, 0);
@@ -175,13 +183,14 @@ async fn profile_create_rejects_invalid_input() {
 #[tokio::test]
 async fn profile_unknown_loader_falls_back_to_vanilla() {
     let h = Harness::json("profile-loader");
-    // Unknown loader type is simply not attached (no validation at create);
-    // the loader type is validated at modloader install time.
+    h.seed_version("1.21");
+    // Unknown loader type is ignored at registration; loader installation is a
+    // separate step that validates the type.
     let code = h
         .run(&["profile", "create", "-n", "X", "-v", "1.21", "-l", "nope"])
         .await;
     assert_eq!(code, 0);
-    assert_eq!(h.last_json()["data"]["mod_loader"], json!(null));
+    assert_eq!(h.last_json()["data"]["loader"], json!(null));
 }
 
 // ────────────────────────── Auth (offline) path ──────────────────────────
@@ -282,19 +291,18 @@ async fn config_set_invalid_number_is_rejected() {
 #[tokio::test]
 async fn state_and_user_settings_paths() {
     let h = Harness::json("state-user");
+    h.seed_version("1.21");
     let code = h.run(&["profile", "create", "-n", "P", "-v", "1.21"]).await;
     assert_eq!(code, 0);
-    let id = h.last_json()["data"]["id"].as_str().unwrap().to_string();
+    let key = h.last_json()["data"]["key"].as_str().unwrap().to_string();
 
-    let code = h.run(&["profile", "select", "--id", &id]).await;
+    let code = h.run(&["profile", "select", "--id", &key]).await;
     assert_eq!(code, 0);
 
-    // State reflects the selected profile.
-    let code = h
-        .run(&["config", "state", "get", "selected_profile_id"])
-        .await;
+    // State reflects the selected instance.
+    let code = h.run(&["config", "state", "get", "selected_key"]).await;
     assert_eq!(code, 0);
-    assert_eq!(h.last_json()["data"], id);
+    assert_eq!(h.last_json()["data"], key);
 
     // User settings roundtrip.
     let code = h.run(&["config", "user", "set", "locale", "zh-CN"]).await;
@@ -318,11 +326,12 @@ async fn local_mod_install_list_toggle_remove() {
     let jar = common::temp_dir("jar").join("my-mod-1.0.0.jar");
     std::fs::write(&jar, b"PK\x03\x04 fake jar").unwrap();
 
+    h.seed_version("1.21");
     let code = h
         .run(&["profile", "create", "-n", "ModHost", "-v", "1.21"])
         .await;
     assert_eq!(code, 0);
-    let pid = h.last_json()["data"]["id"].as_str().unwrap().to_string();
+    let pid = h.last_json()["data"]["key"].as_str().unwrap().to_string();
 
     let code = h
         .run(&[
@@ -384,9 +393,10 @@ async fn local_mod_install_list_toggle_remove() {
 #[tokio::test]
 async fn local_mod_install_rejects_missing_file() {
     let h = Harness::json("mod-missing-file");
+    h.seed_version("1.21");
     let code = h.run(&["profile", "create", "-n", "M", "-v", "1.21"]).await;
     assert_eq!(code, 0);
-    let pid = h.last_json()["data"]["id"].as_str().unwrap().to_string();
+    let pid = h.last_json()["data"]["key"].as_str().unwrap().to_string();
 
     let code = h
         .run(&[
@@ -434,7 +444,7 @@ async fn system_info_snapshot() {
     let data = &h.last_json()["data"];
     assert!(data["data_dir"].is_string());
     assert!(data["game_root_dir"].is_string());
-    assert_eq!(data["profiles"], 0);
+    assert_eq!(data["instances"], 0);
     assert_eq!(data["running_games"], 0);
     assert!(data["version"].is_string());
 
@@ -461,6 +471,7 @@ async fn version_local_list_is_empty_then_reflects_profile_install() {
 #[tokio::test]
 async fn plain_mode_renders_human_table() {
     let h = Harness::plain("plain-render");
+    h.seed_version("1.21");
     h.run(&["profile", "create", "-n", "First", "-v", "1.21"])
         .await;
     let code = h.run(&["profile", "list"]).await;

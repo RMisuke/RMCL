@@ -18,19 +18,19 @@ impl CliContext {
     /// Install a modloader into a profile. Returns the resulting version id.
     pub async fn modloader_install(
         &self,
-        profile_id: &str,
+        key: &str,
         loader_type: &rmccc_modloader::ModLoaderType,
         loader_version: &str,
         progress: Option<rmccc_modloader::ProgressCallback>,
     ) -> Result<String> {
-        let profile = self.get_profile(profile_id).await?;
+        let instance = self.get_instance(key).await?;
 
         // 统一入口（P1-4）：Java 探测 / 基础版本解析 / 安装分流 / 增量 JSON
         // 写入 / profile 提交 / 索引刷新全在 `rmccc_core::modloader` 一处完成。
         let core = self.core.read().await;
         let installed = rmccc_core::modloader::install_loader(
             &core.handle(),
-            &profile,
+            &instance,
             loader_type,
             loader_version,
             None,
@@ -38,7 +38,7 @@ impl CliContext {
         .await?;
 
         tracing::info!(
-            profile_id = %profile_id,
+            key = %key,
             loader = %loader_type.library_id(),
             version_id = %installed.version_id,
             via_installer_jar = installed.via_installer_jar,
@@ -49,49 +49,28 @@ impl CliContext {
         Ok(installed.version_id)
     }
 
-    /// Remove the installed modloader from a profile (reset to the base
-    /// Minecraft version — the incremental model keeps the vanilla manifest
-    /// intact under the base id).
-    pub async fn modloader_remove(&self, profile_id: &str) -> Result<rmccc_profile::Profile> {
-        let core = self.core.write().await;
-        let mut profile = core
-            .profile_store
-            .get(profile_id)?
-            .ok_or_else(|| RmcccError::ProfileNotFound(profile_id.to_string()))?;
-
-        if profile.mod_loader.is_none() {
+    /// Remove the installed loader by deleting its version-backed instance and
+    /// selecting the base Minecraft instance (the incremental model keeps the
+    /// vanilla manifest intact under the base id).
+    pub async fn modloader_remove(&self, key: &str) -> Result<rmccc_instance::InstanceDetail> {
+        let instance = self.get_instance(key).await?;
+        if instance.summary.loader.is_none() {
             return Err(RmcccError::Other(format!(
-                "Profile '{profile_id}' has no modloader installed"
+                "Instance '{key}' has no modloader installed"
             )));
         }
+        let directory_id = instance.summary.directory_id.clone();
+        let base_key =
+            rmccc_instance::InstanceService::key(&directory_id, &instance.summary.game_version)?;
 
-        // Resolve the base Minecraft version (root of the inheritance chain).
-        let base = {
-            let repo = core
-                .game_repository
-                .read()
-                .map_err(|_| RmcccError::Other("game repository lock poisoned".to_string()))?;
-            repo.get_game_version(&profile.game_version)
-        };
-
-        let removed_version = profile.game_version.clone();
-        profile.game_version = base;
-        profile.mod_loader = None;
-        core.profile_store.save(&profile)?;
-
-        // Clean up the patched version directory (optional, non-fatal).
-        let patched_dir = profile.game_dir.join("versions").join(&removed_version);
-        if patched_dir.exists() {
-            let _ = std::fs::remove_dir_all(&patched_dir);
-        }
-
-        tracing::info!(
-            profile_id = %profile_id,
-            removed = %removed_version,
-            base = %profile.game_version,
-            "Modloader removed"
-        );
-        Ok(profile)
+        let core = self.core.read().await;
+        let mut service = core
+            .instances
+            .lock()
+            .map_err(|_| RmcccError::Other("instance service lock poisoned".to_string()))?;
+        service.remove(key, true)?;
+        tracing::info!(key = %key, base = %base_key, "Modloader instance removed");
+        service.get(&base_key)
     }
 
     /// Analyze which modloaders are installed in a version (for diagnostics).

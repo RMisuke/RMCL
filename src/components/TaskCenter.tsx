@@ -12,7 +12,7 @@ import { downloadsStore } from "../stores/downloads";
 import { downloads } from "../ipc/api";
 import { modloadersStore, type LoaderInstall } from "../stores/modloaders";
 import { launchStore } from "../stores/launch";
-import { profilesStore } from "../stores/profiles";
+import { instancesStore } from "../stores/instances";
 import { mcpStore } from "../stores/mcp";
 import { uiStore, toast, confirmDanger } from "../stores/ui";
 import { t } from "../i18n";
@@ -191,7 +191,7 @@ export function TaskCenterPanel(): JSX.Element {
 }
 
 function profileName(profileId: string): string {
-  return profilesStore.items()?.find((p) => p.id === profileId)?.name ?? profileId;
+  return instancesStore.items()?.find((p) => p.summary.key === profileId)?.summary.display_name ?? profileId;
 }
 
 /** Loader 安装行：进度条 + 当前阶段 + 安装器细节日志（可折叠，状态存面板层）。 */

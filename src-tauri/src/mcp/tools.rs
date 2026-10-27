@@ -93,19 +93,19 @@ static CATALOG: std::sync::LazyLock<Vec<ToolSpec>> = std::sync::LazyLock::new(||
         },
         ToolSpec {
             name: "profiles.list",
-            description: "列出全部启动实例（Profile）：id、名称、游戏版本、加载器。",
+            description: "列出当前游戏目录下的实例：key、显示名、游戏版本、加载器。",
             risk: ToolRisk::ReadOnly,
             schema: obj(&[], &[]),
         },
         ToolSpec {
             name: "profiles.get",
-            description: "按 id 读取单个 Profile 详情。",
+            description: "按 key（directory/id）读取实例详情（设置 + 生效值 + 路径）。",
             risk: ToolRisk::ReadOnly,
-            schema: obj(&[("profile_id", str_req())], &["profile_id"]),
+            schema: obj(&[("key", str_req())], &["key"]),
         },
         ToolSpec {
             name: "instances.list",
-            description: "列出磁盘 versions/ 中的已安装游戏版本（版本仓库视角，区别于 Profile）。",
+            description: "列出实例（与 instances.list 相同；保留为旧名称）。",
             risk: ToolRisk::ReadOnly,
             schema: obj(&[], &[]),
         },
@@ -126,15 +126,15 @@ static CATALOG: std::sync::LazyLock<Vec<ToolSpec>> = std::sync::LazyLock::new(||
         },
         ToolSpec {
             name: "mods.installed",
-            description: "列出 Profile 已安装的 Mod（含启用/禁用状态与缺失前置报告）。",
+            description: "列出实例已安装的 Mod（含启用/禁用状态）。",
             risk: ToolRisk::ReadOnly,
-            schema: obj(&[("profile_id", str_req())], &["profile_id"]),
+            schema: obj(&[("key", str_req())], &["key"]),
         },
         ToolSpec {
             name: "mods.dependency_scan",
             description: "纯逻辑依赖扫描（非 AI）：缺失必需前置 / 冲突 / 未解析。只解析 Fabric fabric.mod.json；Forge/NeoForge 元数据进入 unparsed。耗时 < 1s。",
             risk: ToolRisk::ReadOnly,
-            schema: obj(&[("profile_id", str_req())], &["profile_id"]),
+            schema: obj(&[("key", str_req())], &["key"]),
         },
         ToolSpec {
             name: "mods.search",
@@ -160,7 +160,7 @@ static CATALOG: std::sync::LazyLock<Vec<ToolSpec>> = std::sync::LazyLock::new(||
             name: "instance.check_completion",
             description: "完整性体检：报告实例缺失的文件。耗时数十秒（全量 SHA1 校验），请勿高频调用。",
             risk: ToolRisk::ReadOnly,
-            schema: obj(&[("profile_id", str_req())], &["profile_id"]),
+            schema: obj(&[("key", str_req())], &["key"]),
         },
         ToolSpec {
             name: "java.detect",
@@ -176,35 +176,26 @@ static CATALOG: std::sync::LazyLock<Vec<ToolSpec>> = std::sync::LazyLock::new(||
         },
         ToolSpec {
             name: "logs.game",
-            description: "最近一次游戏会话日志的尾部（已脱敏：home 路径 → ~，凭据遮蔽）。lines 默认 200，上限 1000。profile_id 缺省读共享目录日志。",
+            description: "最近一次游戏会话日志的尾部（已脱敏：home 路径 → ~，凭据遮蔽）。lines 默认 200，上限 1000。key 缺省读共享目录日志。",
             risk: ToolRisk::ReadOnly,
             schema: obj(
-                &[("profile_id", str_opt()), ("lines", u64_opt())],
+                &[("key", str_opt()), ("lines", u64_opt())],
                 &[],
             ),
         },
         // ───────────────────────── 操作（11） ─────────────────────────
         ToolSpec {
-            name: "profiles.create",
-            description: "创建启动实例（Profile）。仅创建元数据，不下载游戏文件。",
-            risk: ToolRisk::Operate,
-            schema: obj(
-                &[("name", str_req()), ("game_version", str_req())],
-                &["name", "game_version"],
-            ),
-        },
-        ToolSpec {
             name: "profiles.update",
-            description: "修改 Profile 设置（可逆）。fields 为部分更新对象（name/game_version/isolation/memory_mb 等），缺省字段保持不变。",
+            description: "修改实例设置（可逆）。fields 为 InstanceSettingsPatch，缺省字段保持不变。",
             risk: ToolRisk::Operate,
             schema: obj(
-                &[("profile_id", str_req()), ("fields", obj_req())],
-                &["profile_id", "fields"],
+                &[("key", str_req()), ("fields", obj_req())],
+                &["key", "fields"],
             ),
         },
         ToolSpec {
             name: "game.install",
-            description: "安装一个完整的游戏：创建 Profile → 下载游戏本体（后台执行，进度经 GUI 事件可见）→ 可选安装加载器。loader: {type, version}。",
+            description: "安装一个完整的游戏：创建实例 → 下载游戏本体（后台执行，进度经 GUI 事件可见）→ 可选安装加载器。loader: {type, version}。",
             risk: ToolRisk::Operate,
             schema: obj(
                 &[
@@ -217,28 +208,28 @@ static CATALOG: std::sync::LazyLock<Vec<ToolSpec>> = std::sync::LazyLock::new(||
         },
         ToolSpec {
             name: "modloader.install",
-            description: "为已有 Profile 安装加载器（Fabric/Forge/NeoForge 等）。版本列表先经 modloader.list 查询。",
+            description: "为已有实例安装加载器（Fabric/Forge/NeoForge 等）。会创建一个新的版本实例。",
             risk: ToolRisk::Operate,
             schema: obj(
                 &[
-                    ("profile_id", str_req()),
+                    ("key", str_req()),
                     ("loader_type", str_req()),
                     ("loader_version", str_req()),
                 ],
-                &["profile_id", "loader_type", "loader_version"],
+                &["key", "loader_type", "loader_version"],
             ),
         },
         ToolSpec {
             name: "mods.install",
-            description: "安装 Mod 到 Profile。version_id 缺省时自动选择与游戏版本+加载器兼容的最新版。",
+            description: "安装 Mod 到实例。version_id 缺省时自动选择与游戏版本+加载器兼容的最新版。",
             risk: ToolRisk::Operate,
             schema: obj(
                 &[
-                    ("profile_id", str_req()),
+                    ("key", str_req()),
                     ("mod_id", str_req()),
                     ("version_id", str_opt()),
                 ],
-                &["profile_id", "mod_id"],
+                &["key", "mod_id"],
             ),
         },
         ToolSpec {
@@ -246,8 +237,8 @@ static CATALOG: std::sync::LazyLock<Vec<ToolSpec>> = std::sync::LazyLock::new(||
             description: "从本机路径安装 Mod jar 到 Profile。path 必须是已存在的 .jar 文件。",
             risk: ToolRisk::Operate,
             schema: obj(
-                &[("profile_id", str_req()), ("path", str_req())],
-                &["profile_id", "path"],
+                &[("key", str_req()), ("path", str_req())],
+                &["key", "path"],
             ),
         },
         ToolSpec {
@@ -256,24 +247,24 @@ static CATALOG: std::sync::LazyLock<Vec<ToolSpec>> = std::sync::LazyLock::new(||
             risk: ToolRisk::Operate,
             schema: obj(
                 &[
-                    ("profile_id", str_req()),
+                    ("key", str_req()),
                     ("mod_filename", str_req()),
                     ("enabled", bool_req()),
                 ],
-                &["profile_id", "mod_filename", "enabled"],
+                &["key", "mod_filename", "enabled"],
             ),
         },
         ToolSpec {
             name: "mods.apply_plan",
             description: "一键补装缺失前置：按最新依赖扫描自动生成计划，从 Modrinth 下载兼容版本（SHA1 校验）。纯网络+本地逻辑，无 AI。",
             risk: ToolRisk::Operate,
-            schema: obj(&[("profile_id", str_req())], &["profile_id"]),
+            schema: obj(&[("key", str_req())], &["key"]),
         },
         ToolSpec {
             name: "instance.repair",
             description: "修复实例缺失文件（重新下载）。返回修复的文件数。耗时视缺失量可达数分钟。",
             risk: ToolRisk::Operate,
-            schema: obj(&[("profile_id", str_req())], &["profile_id"]),
+            schema: obj(&[("key", str_req())], &["key"]),
         },
         ToolSpec {
             name: "downloads.control",
@@ -288,34 +279,34 @@ static CATALOG: std::sync::LazyLock<Vec<ToolSpec>> = std::sync::LazyLock::new(||
             name: "launch.start",
             description: "启动游戏（Java 自动检测，启动参数经 response file 传递）。GUI 立即可见运行状态与日志。",
             risk: ToolRisk::Operate,
-            schema: obj(&[("profile_id", str_req())], &["profile_id"]),
+            schema: obj(&[("key", str_req())], &["key"]),
         },
         // ───────────────────────── 破坏性（5，默认 confirm） ─────────────────────────
         ToolSpec {
             name: "launch.kill",
             description: "强制停止运行中的游戏进程（进程组 SIGKILL，未保存进度丢失）。需要用户在 GUI 确认。",
             risk: ToolRisk::Destructive,
-            schema: obj(&[("profile_id", str_req())], &["profile_id"]),
+            schema: obj(&[("key", str_req())], &["key"]),
         },
         ToolSpec {
             name: "profiles.delete",
-            description: "删除 Profile 及其隔离游戏目录（不可逆）。需要用户在 GUI 确认。",
+            description: "隐藏实例（保留版本文件，不可见于列表）。需要用户在 GUI 确认。",
             risk: ToolRisk::Destructive,
-            schema: obj(&[("profile_id", str_req())], &["profile_id"]),
+            schema: obj(&[("key", str_req())], &["key"]),
         },
         ToolSpec {
             name: "instances.remove",
-            description: "从版本仓库删除一个游戏版本（jar+json，不可逆）。需要用户在 GUI 确认。",
+            description: "删除实例及其 versions/{id} 目录（不可逆）。需要用户在 GUI 确认。",
             risk: ToolRisk::Destructive,
             schema: obj(&[("version_id", str_req())], &["version_id"]),
         },
         ToolSpec {
             name: "mods.remove",
-            description: "从 Profile 删除 Mod 文件（不可逆）。mod_filename 来自 mods.installed。需要用户在 GUI 确认。",
+            description: "从实例删除 Mod 文件（不可逆）。mod_filename 来自 mods.installed。需要用户在 GUI 确认。",
             risk: ToolRisk::Destructive,
             schema: obj(
-                &[("profile_id", str_req()), ("mod_filename", str_req())],
-                &["profile_id", "mod_filename"],
+                &[("key", str_req()), ("mod_filename", str_req())],
+                &["key", "mod_filename"],
             ),
         },
         ToolSpec {
@@ -387,6 +378,16 @@ fn arg_opt_str(args: &Value, key: &str) -> Option<String> {
     args.get(key).and_then(Value::as_str).map(str::to_string)
 }
 
+async fn selected_directory_id(app: &tauri::AppHandle) -> Result<String, ToolError> {
+    let state = state(app);
+    let core = state.core.read().await;
+    let service = core
+        .instances
+        .lock()
+        .map_err(|_| "instance service lock poisoned".to_string())?;
+    Ok(service.selected_directory().id.to_string())
+}
+
 fn arg_u64(args: &Value, key: &str) -> Option<u64> {
     args.get(key).and_then(Value::as_u64)
 }
@@ -413,21 +414,14 @@ pub async fn call(app: &tauri::AppHandle, name: &str, args: Value) -> Result<Val
             let records = state(app).mcp.read_audit(limit)?;
             Ok(serde_json::to_value(records)?)
         }
-        "profiles.list" => {
-            let profiles = commands::profile::profile_list(state(app)).await?;
-            Ok(serde_json::to_value(profiles)?)
-        }
-        "profiles.get" => {
-            let id = arg_str(&args, "profile_id")?;
-            let profiles = commands::profile::profile_list(state(app)).await?;
-            match profiles.into_iter().find(|p| p.id == id) {
-                Some(profile) => Ok(serde_json::to_value(profile)?),
-                None => Err(format!("profile not found: {id}").into()),
-            }
-        }
-        "instances.list" => {
-            let list = commands::instance::instance_list(state(app), None).await?;
+        "profiles.list" | "instances.list" => {
+            let list = commands::instance::instance_list(state(app), None, None, None).await?;
             Ok(serde_json::to_value(list)?)
+        }
+        "profiles.get" | "instances.get" => {
+            let key = arg_str(&args, "key")?;
+            let detail = commands::instance::instance_get(state(app), key).await?;
+            Ok(serde_json::to_value(detail)?)
         }
         "versions.available" => {
             let versions = commands::version::version_list(state(app)).await?;
@@ -451,13 +445,12 @@ pub async fn call(app: &tauri::AppHandle, name: &str, args: Value) -> Result<Val
             Ok(serde_json::to_value(list)?)
         }
         "mods.installed" => {
-            let list = commands::mods::mod_list(state(app), arg_str(&args, "profile_id")?).await?;
+            let list = commands::mods::mod_list(state(app), arg_str(&args, "key")?).await?;
             Ok(serde_json::to_value(list)?)
         }
         "mods.dependency_scan" => {
             let view =
-                commands::mods::mods_dependency_scan(state(app), arg_str(&args, "profile_id")?)
-                    .await?;
+                commands::mods::mods_dependency_scan(state(app), arg_str(&args, "key")?).await?;
             Ok(serde_json::to_value(view)?)
         }
         "mods.search" => {
@@ -479,11 +472,9 @@ pub async fn call(app: &tauri::AppHandle, name: &str, args: Value) -> Result<Val
             Ok(serde_json::to_value(versions)?)
         }
         "instance.check_completion" => {
-            let missing = commands::instance::instance_check_completion(
-                state(app),
-                arg_str(&args, "profile_id")?,
-            )
-            .await?;
+            let missing =
+                commands::instance::instance_check_completion(state(app), arg_str(&args, "key")?)
+                    .await?;
             Ok(serde_json::to_value(missing)?)
         }
         "java.detect" => {
@@ -499,57 +490,47 @@ pub async fn call(app: &tauri::AppHandle, name: &str, args: Value) -> Result<Val
         "logs.game" => game_logs(app, &args).await,
 
         // ── 操作 ──
-        "profiles.create" => {
-            let profile = commands::profile::profile_create(
-                state(app),
-                arg_str(&args, "name")?,
-                arg_str(&args, "game_version")?,
-            )
-            .await?;
-            Ok(serde_json::to_value(profile)?)
-        }
         "profiles.update" => {
-            let id = arg_str(&args, "profile_id")?;
+            let key = arg_str(&args, "key")?;
             let fields = args.get("fields").cloned().unwrap_or_else(|| json!({}));
-            let opts: commands::profile::ProfileUpdateOpts =
+            let opts: rmccc_instance::InstanceSettingsPatch =
                 serde_json::from_value(fields).map_err(|e| format!("invalid fields: {e}"))?;
-            let profile = commands::profile::profile_update(state(app), id, opts).await?;
-            Ok(serde_json::to_value(profile)?)
+            let detail =
+                commands::instance::instance_update_settings(state(app), key, opts).await?;
+            Ok(serde_json::to_value(detail)?)
         }
         "game.install" => {
             let game_version = arg_str(&args, "game_version")?;
-            let name = arg_opt_str(&args, "name").unwrap_or_else(|| game_version.clone());
-            let profile =
-                commands::profile::profile_create(state(app), name, game_version.clone()).await?;
-            commands::version::version_install(state(app), game_version, profile.id.clone())
-                .await?;
-            let mut result = json!({ "profile_id": profile.id, "status": "installing" });
-            if let Some(loader) = args.get("loader") {
-                let loader_type = loader
-                    .get("type")
-                    .and_then(Value::as_str)
-                    .ok_or("loader.type is required")?
-                    .to_string();
-                let loader_version = loader
-                    .get("version")
-                    .and_then(Value::as_str)
-                    .ok_or("loader.version is required")?
-                    .to_string();
-                commands::modloader::modloader_install(
-                    state(app),
-                    profile.id.clone(),
-                    loader_type,
-                    loader_version,
-                )
-                .await?;
-                result["loader"] = loader.clone();
-            }
-            Ok(result)
+            let instance_id = arg_opt_str(&args, "name").unwrap_or_else(|| game_version.clone());
+            let directory_id = selected_directory_id(app).await?;
+            let loader_type = args
+                .get("loader")
+                .and_then(|l| l.get("type"))
+                .and_then(Value::as_str)
+                .map(str::to_string);
+            let loader_version = args
+                .get("loader")
+                .and_then(|l| l.get("version"))
+                .and_then(Value::as_str)
+                .map(str::to_string);
+            commands::instance::instance_install(
+                state(app),
+                directory_id.clone(),
+                game_version.clone(),
+                Some(instance_id.clone()),
+                loader_type,
+                loader_version,
+            )
+            .await?;
+            Ok(json!({
+                "key": format!("{directory_id}/{instance_id}"),
+                "status": "installing",
+            }))
         }
         "modloader.install" => {
             commands::modloader::modloader_install(
                 state(app),
-                arg_str(&args, "profile_id")?,
+                arg_str(&args, "key")?,
                 arg_str(&args, "loader_type")?,
                 arg_str(&args, "loader_version")?,
             )
@@ -557,18 +538,17 @@ pub async fn call(app: &tauri::AppHandle, name: &str, args: Value) -> Result<Val
             Ok(json!({ "ok": true }))
         }
         "mods.install" => {
-            let profile_id = arg_str(&args, "profile_id")?;
+            let key = arg_str(&args, "key")?;
             let mod_id = arg_str(&args, "mod_id")?;
             let version =
-                pick_mod_version(app, &profile_id, &mod_id, arg_opt_str(&args, "version_id"))
-                    .await?;
-            let filename = commands::mods::mod_install(state(app), profile_id, version).await?;
+                pick_mod_version(app, &key, &mod_id, arg_opt_str(&args, "version_id")).await?;
+            let filename = commands::mods::mod_install(state(app), key, version).await?;
             Ok(json!({ "installed": filename }))
         }
         "mods.install_local" => {
             let filename = commands::mods::mod_install_local(
                 state(app),
-                arg_str(&args, "profile_id")?,
+                arg_str(&args, "key")?,
                 arg_str(&args, "path")?,
             )
             .await?;
@@ -577,7 +557,7 @@ pub async fn call(app: &tauri::AppHandle, name: &str, args: Value) -> Result<Val
         "mods.toggle" => {
             commands::mods::mod_toggle(
                 state(app),
-                arg_str(&args, "profile_id")?,
+                arg_str(&args, "key")?,
                 arg_str(&args, "mod_filename")?,
                 args.get("enabled")
                     .and_then(Value::as_bool)
@@ -588,13 +568,12 @@ pub async fn call(app: &tauri::AppHandle, name: &str, args: Value) -> Result<Val
         }
         "mods.apply_plan" => {
             let report =
-                commands::mods::mods_apply_plan(state(app), arg_str(&args, "profile_id")?).await?;
+                commands::mods::mods_apply_plan(state(app), arg_str(&args, "key")?).await?;
             Ok(serde_json::to_value(report)?)
         }
         "instance.repair" => {
             let repaired =
-                commands::instance::instance_repair(state(app), arg_str(&args, "profile_id")?)
-                    .await?;
+                commands::instance::instance_repair(state(app), arg_str(&args, "key")?).await?;
             Ok(json!({ "repaired_files": repaired }))
         }
         "downloads.control" => {
@@ -611,29 +590,30 @@ pub async fn call(app: &tauri::AppHandle, name: &str, args: Value) -> Result<Val
             Ok(json!({ "ok": true }))
         }
         "launch.start" => {
-            commands::launch::launch_start(state(app), arg_str(&args, "profile_id")?).await?;
+            commands::launch::launch_start(state(app), arg_str(&args, "key")?).await?;
             Ok(json!({ "ok": true }))
         }
 
         // ── 破坏性（协议层已放行）──
         "launch.kill" => {
-            commands::launch::launch_kill(state(app), arg_str(&args, "profile_id")?).await?;
+            commands::launch::launch_kill(state(app), arg_str(&args, "key")?).await?;
             Ok(json!({ "ok": true }))
         }
         "profiles.delete" => {
-            // MCP surface keeps the conservative default: record-only removal.
-            commands::profile::profile_delete(state(app), arg_str(&args, "profile_id")?, false)
+            // Conservative default: hide the instance, keep version files.
+            commands::instance::instance_remove(state(app), arg_str(&args, "key")?, Some(false))
                 .await?;
             Ok(json!({ "ok": true }))
         }
         "instances.remove" => {
-            commands::instance::instance_remove(state(app), arg_str(&args, "version_id")?).await?;
+            commands::instance::instance_remove(state(app), arg_str(&args, "key")?, Some(true))
+                .await?;
             Ok(json!({ "ok": true }))
         }
         "mods.remove" => {
             commands::mods::mod_remove(
                 state(app),
-                arg_str(&args, "profile_id")?,
+                arg_str(&args, "key")?,
                 arg_str(&args, "mod_filename")?,
             )
             .await?;
@@ -655,7 +635,7 @@ pub async fn call(app: &tauri::AppHandle, name: &str, args: Value) -> Result<Val
 /// `mods.install` 的版本选择：精确 version_id → 兼容过滤（游戏版本+加载器）→ 第一个。
 async fn pick_mod_version(
     app: &tauri::AppHandle,
-    profile_id: &str,
+    key: &str,
     mod_id: &str,
     version_id: Option<String>,
 ) -> Result<rmccc_mods::ModVersion, ToolError> {
@@ -669,16 +649,14 @@ async fn pick_mod_version(
     }
     let (game_version, loader) = {
         let core = state.core.read().await;
-        let profile = core
-            .profile_store
-            .get(profile_id)?
-            .ok_or_else(|| format!("profile not found: {profile_id}"))?;
+        let mut service = core
+            .instances
+            .lock()
+            .map_err(|_| "instance service lock poisoned".to_string())?;
+        let detail = service.get(key)?;
         (
-            profile.game_version.clone(),
-            profile
-                .mod_loader
-                .as_ref()
-                .map(|l| format!("{:?}", l.loader_type).to_lowercase()),
+            detail.summary.game_version.clone(),
+            detail.summary.loader.as_ref().map(|l| l.kind.clone()),
         )
     };
     let compatible = versions
@@ -766,16 +744,15 @@ async fn game_logs(app: &tauri::AppHandle, args: &Value) -> Result<Value, ToolEr
     use rmccc_llm::redact;
     let state = state(app);
     let lines = arg_u64(args, "lines").unwrap_or(200).min(1000) as usize;
-    let path = match arg_opt_str(args, "profile_id") {
-        Some(id) => {
+    let path = match arg_opt_str(args, "key") {
+        Some(key) => {
             let core = state.core.read().await;
-            let profile = core
-                .profile_store
-                .get(&id)?
-                .ok_or_else(|| format!("profile not found: {id}"))?;
-            rmccc_launch::instance_run_dir(&core.config, &profile)
-                .join("logs")
-                .join("latest.log")
+            let mut service = core
+                .instances
+                .lock()
+                .map_err(|_| "instance service lock poisoned".to_string())?;
+            let detail = service.get(&key)?;
+            detail.paths.logs_dir.join("latest.log")
         }
         None => {
             let core = state.core.read().await;
@@ -794,7 +771,7 @@ async fn game_logs(app: &tauri::AppHandle, args: &Value) -> Result<Value, ToolEr
         }
         // latest.log 未生成（log4j 初始化前崩溃）或为空 → 启动器捕获的输出。
         _ => {
-            let captured = arg_opt_str(args, "profile_id")
+            let captured = arg_opt_str(args, "key")
                 .and_then(|id| state.game_output.get(&id))
                 .map(|buf| {
                     buf.lock()

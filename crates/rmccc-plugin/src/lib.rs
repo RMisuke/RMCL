@@ -36,6 +36,7 @@ pub mod permissions;
 pub mod registry;
 pub mod storage;
 pub mod theme;
+pub mod theme_assets;
 pub mod ui;
 pub mod version;
 
@@ -54,7 +55,11 @@ pub use permissions::{PermissionGrant, PermissionStore, PermissionsFile};
 pub use registry::{
     PluginRecord, PluginRegistry, PluginSource, PluginSourceKind, PluginState, TrustLevel,
 };
-pub use theme::{ThemeDocument, MAX_THEME_BYTES, THEME_SCHEMA_VERSION};
+pub use theme::{
+    AssetKind, AssetSpec, ThemeDocument, MAX_THEME_BYTES, THEME_SCHEMA_VERSION,
+    THEME_SCHEMA_VERSION_V2,
+};
+pub use theme_assets::{validate_theme_assets, AssetReader, FsAssetReader};
 pub use ui::{
     BridgeError, BridgeErrorCode, BridgeMethod, BridgeRequest, BRIDGE_METHODS, CSP, UI_API_VERSION,
     UI_SCHEME,

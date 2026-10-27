@@ -198,26 +198,29 @@ pub async fn ai_models_probe(
 /// 收集一次分析的输入：run_dir/logs/latest.log 尾部（脱敏）+ 实例上下文行。
 async fn gather_analysis_input(
     state: &AppState,
-    profile_id: Option<&str>,
+    instance_key: Option<&str>,
 ) -> rmccc_error::Result<(String, String, usize)> {
     let core = state.core.read().await;
-    let (log_path, context) = match profile_id {
-        Some(id) => {
-            let profile = core
-                .profile_store
-                .get(id)?
-                .ok_or_else(|| RmcccError::ProfileNotFound(id.to_string()))?;
-            let run_dir = rmccc_launch::instance_run_dir(&core.config, &profile);
-            let loader = profile
-                .mod_loader
+    let (log_path, context) = match instance_key {
+        Some(key) => {
+            let detail = {
+                let mut service = core
+                    .instances
+                    .lock()
+                    .map_err(|_| RmcccError::Other("Instance service lock poisoned".to_string()))?;
+                service.get(key)?
+            };
+            let loader = detail
+                .summary
+                .loader
                 .as_ref()
-                .map(|loader| format!("{:?}", loader.loader_type).to_lowercase())
+                .map(|loader| loader.kind.clone())
                 .unwrap_or_else(|| "无".into());
             (
-                run_dir.join("logs").join("latest.log"),
+                detail.paths.logs_dir.join("latest.log"),
                 format!(
                     "实例「{}」：Minecraft {}，加载器 {}",
-                    profile.name, profile.game_version, loader
+                    detail.summary.display_name, detail.summary.game_version, loader
                 ),
             )
         }
@@ -229,6 +232,8 @@ async fn gather_analysis_input(
             "共享游戏目录（未指定实例）".into(),
         ),
     };
+    let log_path = log_path.clone();
+    let captured_key = instance_key.map(str::to_string);
     drop(core);
 
     // Perf audit 1.3: read only a tail window off-thread — the full
@@ -263,8 +268,9 @@ async fn gather_analysis_input(
         // latest.log 未生成（log4j 初始化前崩溃，如 BootstrapLauncher 阶段的
         // ExceptionInInitializerError）或为空 → 回退启动器捕获的进程输出。
         _ => {
-            let captured = profile_id
-                .and_then(|id| state.game_output.get(id))
+            let captured = captured_key
+                .as_ref()
+                .and_then(|key| state.game_output.get(key))
                 .map(|buf| {
                     buf.lock()
                         .unwrap_or_else(|poisoned| poisoned.into_inner())
@@ -308,11 +314,10 @@ fn tail_chars(text: &str, max_chars: usize) -> &str {
 #[tracing::instrument(skip(state))]
 pub async fn ai_analyze_log(
     state: tauri::State<'_, AppState>,
-    profile_id: Option<String>,
+    key: Option<String>,
 ) -> Result<AiAnalysisHandle, IpcError> {
     let credential = load_credential(&state).await?;
-    let (log_text, context, sent_lines) =
-        gather_analysis_input(&state, profile_id.as_deref()).await?;
+    let (log_text, context, sent_lines) = gather_analysis_input(&state, key.as_deref()).await?;
 
     let analysis_id = uuid::Uuid::new_v4().simple().to_string();
     let cancel = CancelToken::new();

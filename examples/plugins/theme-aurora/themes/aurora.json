@@ -1,0 +1,82 @@
+{
+  "schemaVersion": 2,
+  "name": "Aurora Glass",
+  "mode": "dark",
+  "colors": {
+    "background": "#06111b",
+    "surface": "#0c1b28",
+    "surfaceElevated": "#132635",
+    "text": "#e7f4f2",
+    "textMuted": "#93abaa",
+    "accent": "#6fe7d2",
+    "accentContrast": "#04130f",
+    "border": "#22394c"
+  },
+  "typography": {
+    "ui": { "family": "Avenir Next", "fallback": "sans-serif" },
+    "display": { "family": "Iowan Old Style", "fallback": "serif" },
+    "mono": { "family": "SF Mono", "fallback": "monospace" }
+  },
+  "shape": { "tag": 9, "control": 14, "card": 22, "modal": 26, "pill": true },
+  "spacing": { "unit": 5, "density": "comfortable" },
+  "background": {
+    "video": "assets/bg/loop.mp4",
+    "poster": "assets/bg/poster.jpg",
+    "fit": "cover",
+    "position": "center",
+    "dim": 0.42,
+    "scope": "both"
+  },
+  "components": {
+    "card": {
+      "background": "#0a18268c",
+      "border": "#96f0e624",
+      "radius": 22,
+      "shadow": "soft",
+      "blur": 18,
+      "padding": 20
+    },
+    "hero": {
+      "background": "#0a18268c",
+      "border": "#96f0e624",
+      "radius": 24,
+      "blur": 26
+    },
+    "button": {
+      "radius": 24,
+      "primaryBackground": "#6fe7d2",
+      "primaryText": "#04130f"
+    },
+    "input": { "background": "#040e1880", "border": "#96f0e624", "radius": 14 },
+    "menu": { "background": "#081420dc", "radius": 18, "blur": 26 },
+    "dialog": { "background": "#081420e6", "radius": 26, "blur": 26 },
+    "tag": { "background": "#0a2233cc", "border": "#96f0e628", "radius": 9 },
+    "titlebar": { "background": "#06111b6b", "blur": 24 }
+  },
+  "effects": [
+    { "type": "aurora", "intensity": 0.6, "speed": 26, "area": "app" },
+    {
+      "type": "rotating-blocks",
+      "texture": "assets/tex/cube.png",
+      "count": 7,
+      "size": 54,
+      "speed": 20,
+      "opacity": 0.5,
+      "area": "hero"
+    },
+    { "type": "particles", "kind": "star", "color": "#9fe8ff", "count": 18, "speed": 22, "area": "hero" }
+  ],
+  "navigation": {
+    "icons": {
+      "home": "assets/icons/home.svg",
+      "gamepad": "assets/icons/gamepad.svg",
+      "download": "assets/icons/download.svg",
+      "person": "assets/icons/person.svg",
+      "extension": "assets/icons/extension.svg",
+      "settings": "assets/icons/settings.svg"
+    },
+    "ornaments": [
+      { "image": "assets/ui/ornament.png", "side": "right", "width": 120, "opacity": 0.55 }
+    ]
+  }
+}

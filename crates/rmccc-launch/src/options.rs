@@ -7,12 +7,21 @@
 //! persisted `Profile`.
 
 use crate::java::JavaInstallation;
+use rmccc_instance::{EffectiveGameSettings, InstanceDetail, QuickPlayType, WindowType};
 use std::collections::HashMap;
 use std::path::PathBuf;
 
 /// OS process priority — 定义在平台适配层（`nice`/`SetPriorityClass` 的实现侧），
 /// 这里 re-export 以保持 `rmccc_launch::ProcessPriority` 的历史路径可用。
 pub use rmccc_platform::ProcessPriority;
+
+/// Quick-play target (HMCL `QuickPlayOption`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum QuickPlay {
+    Singleplayer(String),
+    Multiplayer(String),
+    Realms(String),
+}
 
 /// Launch options for a single game launch (HMCL `LaunchOptions`).
 #[derive(Debug, Clone)]
@@ -73,6 +82,8 @@ pub struct LaunchOptions {
     pub post_exit_command: Option<String>,
     /// Enable debug log output (affects log4j config selection).
     pub enable_debug_log_output: bool,
+    /// Quick-play target, if configured.
+    pub quick_play: Option<QuickPlay>,
     /// 平台适配层：描述符（classpath 分隔符 / natives 命名 / library 规则）+
     /// 执行后端（权限位、符号链接、进程组、终止进程树）。由组装层注入一次，
     /// 领域代码不裸写 `cfg!`（指南 §5.7.1）。
@@ -80,112 +91,80 @@ pub struct LaunchOptions {
 }
 
 impl LaunchOptions {
-    /// Build launch options from a persisted profile + detected Java runtime.
+    /// Build launch options from a resolved instance + detected Java runtime.
     ///
-    /// Maps every extended [`Profile`](rmccc_profile::Profile) field onto the
-    /// corresponding [`LaunchOptions`] field so both the Tauri and CLI
-    /// orchestration layers share a single conversion.
-    /// Builds the launcher options from a profile plus the launcher-wide
-    /// defaults.
-    ///
-    /// Both directories are derived here so every caller agrees on them:
-    /// `game_dir` is the shared game root from the config (versions, libraries,
-    /// assets), and `run_dir` is that root unless the instance's isolation
-    /// setting gives it its own (HMCL `getRunDirectory`).
-    pub fn from_profile(
-        profile: &rmccc_profile::Profile,
-        config: &rmccc_config::AppConfig,
+    /// Every value comes from [`EffectiveGameSettings`] (global preset merged
+    /// with the instance's overrides); the two directories come from
+    /// [`InstanceDetail::paths`], which is the only run-directory derivation.
+    pub fn from_instance(
+        instance: &InstanceDetail,
         java: JavaInstallation,
         platform: std::sync::Arc<rmccc_platform::Platform>,
     ) -> Self {
-        let resolved = profile.resolve(config);
-        let game_dir = instance_game_root(config, profile);
-        let run_dir = instance_run_dir(config, profile);
+        let effective = &instance.effective;
+        let non_empty = |value: &str| {
+            let value = value.trim();
+            (!value.is_empty()).then(|| value.to_string())
+        };
 
         Self {
             java,
-            game_dir,
-            run_dir,
+            game_dir: instance.paths.game_dir.clone(),
+            run_dir: instance.paths.run_dir.clone(),
+            version_name: Some(instance.summary.display_name.clone()),
+            profile_name: Some(instance.summary.display_name.clone()),
+            version_type: Some(instance.summary.release_type.clone()),
+            // `auto_memory` currently means "use the configured heap" (there is
+            // no host-memory probe in the domain layer yet). Never emit no
+            // `-Xmx` at all: that lets the JVM pick an unbounded default.
+            max_memory: effective.max_memory_mb,
+            min_memory: effective.min_memory_mb.unwrap_or(0),
+            metaspace: effective.metaspace_mb.unwrap_or(0),
+            jvm_args: effective.jvm_args.clone(),
+            // The new model folds the legacy "override JVM args" into
+            // `jvm_args` at migration time, so there is no second list.
+            override_jvm_args: Vec::new(),
+            game_args: effective.game_args.clone(),
+            java_agents: effective.java_agents.clone(),
+            env_vars: effective
+                .env_vars
+                .iter()
+                .map(|(key, value)| (key.clone(), value.clone()))
+                .collect(),
+            process_priority: effective.process_priority.to_platform(),
+            wrapper: non_empty(&effective.wrapper),
+            width: (effective.width > 0).then_some(effective.width),
+            height: (effective.height > 0).then_some(effective.height),
+            fullscreen: effective.window_type == WindowType::Fullscreen,
+            no_generated_jvm_args: effective.no_generated_jvm_args,
+            no_generated_optimizing_jvm_args: effective.no_generated_optimizing_jvm_args,
+            use_native_glfw: effective.use_native_glfw,
+            use_native_openal: effective.use_native_openal,
+            use_custom_natives: effective.use_custom_natives,
+            pre_launch_command: non_empty(&effective.pre_launch_command),
+            post_exit_command: non_empty(&effective.post_exit_command),
+            enable_debug_log_output: effective.enable_debug_log_output,
+            quick_play: quick_play(effective),
             platform,
-            version_name: Some(profile.name.clone()),
-            profile_name: Some(profile.name.clone()),
-            version_type: None,
-            max_memory: resolved.max_memory_mb,
-            min_memory: resolved.min_memory_mb,
-            metaspace: resolved.metaspace_mb,
-            jvm_args: resolved.jvm_args.clone(),
-            override_jvm_args: resolved.override_jvm_args.clone(),
-            game_args: resolved.game_args.clone(),
-            java_agents: resolved.java_agents.clone(),
-            env_vars: resolved.env_vars.clone(),
-            process_priority: match resolved.process_priority.as_str() {
-                "low" => ProcessPriority::Low,
-                "below_normal" => ProcessPriority::BelowNormal,
-                "above_normal" => ProcessPriority::AboveNormal,
-                "high" => ProcessPriority::High,
-                _ => ProcessPriority::Normal,
-            },
-            wrapper: resolved.wrapper.clone(),
-            width: resolved.width,
-            height: resolved.height,
-            fullscreen: resolved.fullscreen,
-            use_native_glfw: resolved.use_native_glfw,
-            use_native_openal: resolved.use_native_openal,
-            use_custom_natives: resolved.use_custom_natives,
-            no_generated_jvm_args: resolved.no_generated_jvm_args,
-            no_generated_optimizing_jvm_args: resolved.no_generated_optimizing_jvm_args,
-            enable_debug_log_output: resolved.enable_debug_log_output,
-            pre_launch_command: resolved.pre_launch_command.clone(),
-            post_exit_command: resolved.post_exit_command.clone(),
         }
     }
 }
 
-/// The authoritative game root for an instance.
-///
-/// Ordinary profiles share the launcher-configured root; profiles imported from
-/// an external game directory (HMCL etc.) carry their own root in
-/// `profile.game_dir` and set `external_root`.
-pub fn instance_game_root(
-    config: &rmccc_config::AppConfig,
-    profile: &rmccc_profile::Profile,
-) -> std::path::PathBuf {
-    if profile.external_root && !profile.game_dir.as_os_str().is_empty() {
-        profile.game_dir.clone()
-    } else {
-        config.resolved_game_root()
+fn quick_play(effective: &EffectiveGameSettings) -> Option<QuickPlay> {
+    let target = |value: &str| {
+        let value = value.trim();
+        (!value.is_empty()).then(|| value.to_string())
+    };
+    match effective.quick_play {
+        QuickPlayType::None => None,
+        QuickPlayType::Singleplayer => {
+            target(&effective.quick_play_singleplayer).map(QuickPlay::Singleplayer)
+        }
+        QuickPlayType::Multiplayer => {
+            target(&effective.quick_play_multiplayer).map(QuickPlay::Multiplayer)
+        }
+        QuickPlayType::Realms => target(&effective.quick_play_realms).map(QuickPlay::Realms),
     }
-}
-
-/// The run directory (`--gameDir`) for an instance.
-///
-/// Equals the instance game root unless the instance's isolation setting gives
-/// it its own directory (HMCL `HMCLGameRepository.getRunDirectory`): `always`
-/// isolates every instance, `modded` only instances carrying a mod loader, and
-/// `never` shares one `.minecraft`.
-///
-/// Every consumer of per-instance runtime files (launch, mods, saves) must use
-/// this rather than `profile.game_dir`, which is the shared root.
-pub fn instance_run_dir(
-    config: &rmccc_config::AppConfig,
-    profile: &rmccc_profile::Profile,
-) -> std::path::PathBuf {
-    let isolation = rmccc_version::IsolationType::parse(&profile.effective_isolation(config))
-        .unwrap_or_default();
-    rmccc_version::isolation::run_directory(
-        &instance_game_root(config, profile),
-        &profile.game_version,
-        isolation,
-        profile.mod_loader.is_some(),
-    )
-}
-
-/// The `mods/` directory for an instance, following its run directory.
-pub fn instance_mods_dir(
-    config: &rmccc_config::AppConfig,
-    profile: &rmccc_profile::Profile,
-) -> std::path::PathBuf {
-    instance_run_dir(config, profile).join("mods")
 }
 
 impl Default for LaunchOptions {
@@ -224,6 +203,7 @@ impl Default for LaunchOptions {
             pre_launch_command: None,
             post_exit_command: None,
             enable_debug_log_output: false,
+            quick_play: None,
         }
     }
 }
@@ -233,162 +213,26 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_priority_nice_values() {
-        assert_eq!(ProcessPriority::Normal.nice_value(), None);
-        assert_eq!(ProcessPriority::High.nice_value(), Some("-5"));
-        assert_eq!(ProcessPriority::Low.nice_value(), Some("5"));
-    }
-
-    #[test]
     fn test_default_options() {
         let o = LaunchOptions::default();
         assert_eq!(o.max_memory, 0);
         assert!(o.jvm_args.is_empty());
         assert_eq!(o.process_priority, ProcessPriority::Normal);
-    }
-    fn isolation_config(default_isolation: &str) -> rmccc_config::AppConfig {
-        rmccc_config::AppConfig {
-            game_root_dir: Some(std::path::PathBuf::from("/g")),
-            default_isolation: default_isolation.to_string(),
-            ..Default::default()
-        }
+        assert!(o.quick_play.is_none());
     }
 
-    /// Built through serde so the test does not need a direct dependency on the
-    /// modloader crate just to name its enum.
-    fn loader() -> rmccc_profile::ModLoaderConfig {
-        serde_json::from_value(serde_json::json!({
-            "loader_type": "fabric",
-            "loader_version": "0.16.9"
-        }))
-        .expect("valid ModLoaderConfig")
-    }
-
-    /// 外置目录（HMCL）的 profile：game_dir 优先于全局游戏根，run dir 也落在
-    /// 该目录的 versions/<id> 下（isolation=always）。
     #[test]
-    fn test_external_root_uses_profile_game_dir() {
-        let config = isolation_config("modded");
-        let profile = rmccc_profile::Profile {
-            game_version: "1.20.1".into(),
-            game_dir: std::path::PathBuf::from("/ext/.minecraft"),
-            external_root: true,
-            isolation: Some("always".into()),
+    fn quick_play_mapping_requires_a_target() {
+        let mut effective = EffectiveGameSettings {
+            quick_play: QuickPlayType::Singleplayer,
+            quick_play_singleplayer: "   ".to_string(),
             ..Default::default()
         };
+        assert!(quick_play(&effective).is_none());
+        effective.quick_play_singleplayer = "world".to_string();
         assert_eq!(
-            instance_game_root(&config, &profile),
-            std::path::PathBuf::from("/ext/.minecraft")
-        );
-        assert_eq!(
-            instance_run_dir(&config, &profile),
-            std::path::PathBuf::from("/ext/.minecraft/versions/1.20.1")
-        );
-        assert_eq!(
-            instance_mods_dir(&config, &profile),
-            std::path::PathBuf::from("/ext/.minecraft/versions/1.20.1/mods")
-        );
-    }
-
-    /// The run directory is what isolation actually controls: `always` isolates
-    /// everything, `modded` only instances carrying a loader, `never` shares the
-    /// game root — and an instance's own value beats the global default.
-    #[test]
-    fn test_instance_run_dir_follows_isolation() {
-        let modded_default = isolation_config("modded");
-        let always_default = isolation_config("always");
-        let never_default = isolation_config("never");
-
-        // modded + loader → own directory
-        let with_loader = rmccc_profile::Profile {
-            game_version: "1.20.4-fabric-0.16.9".into(),
-            mod_loader: Some(loader()),
-            ..Default::default()
-        };
-        assert_eq!(
-            instance_run_dir(&modded_default, &with_loader),
-            std::path::PathBuf::from("/g/versions/1.20.4-fabric-0.16.9")
-        );
-        assert_eq!(
-            instance_mods_dir(&modded_default, &with_loader),
-            std::path::PathBuf::from("/g/versions/1.20.4-fabric-0.16.9/mods")
-        );
-
-        // modded without a loader → shared root (libraries/assets stay shared)
-        let vanilla = rmccc_profile::Profile {
-            game_version: "1.20.4".into(),
-            ..Default::default()
-        };
-        assert_eq!(
-            instance_run_dir(&modded_default, &vanilla),
-            std::path::PathBuf::from("/g")
-        );
-
-        // always → isolated even without a loader
-        assert_eq!(
-            instance_run_dir(&always_default, &vanilla),
-            std::path::PathBuf::from("/g/versions/1.20.4")
-        );
-
-        // never → shared even with a loader
-        assert_eq!(
-            instance_run_dir(&never_default, &with_loader),
-            std::path::PathBuf::from("/g")
-        );
-
-        // an instance-level value overrides the global default
-        let pinned_never = rmccc_profile::Profile {
-            isolation: Some("never".into()),
-            ..with_loader.clone()
-        };
-        assert_eq!(
-            instance_run_dir(&modded_default, &pinned_never),
-            std::path::PathBuf::from("/g")
-        );
-        let pinned_always = rmccc_profile::Profile {
-            isolation: Some("always".into()),
-            ..vanilla.clone()
-        };
-        assert_eq!(
-            instance_run_dir(&never_default, &pinned_always),
-            std::path::PathBuf::from("/g/versions/1.20.4")
-        );
-    }
-
-    /// `from_profile` must feed the resolved values (not the raw profile) and use
-    /// the same two directories as `instance_run_dir`.
-    #[test]
-    fn test_from_profile_uses_resolved_values_and_dirs() {
-        let config = rmccc_config::AppConfig {
-            game_root_dir: Some(std::path::PathBuf::from("/g")),
-            default_isolation: "always".into(),
-            default_max_memory_mb: 3072,
-            default_jvm_args: vec!["-Dglobal=1".into()],
-            ..Default::default()
-        };
-        let profile = rmccc_profile::Profile {
-            game_version: "1.20.4".into(),
-            memory_mb: 8192, // ignored: not in override_properties
-            ..Default::default()
-        };
-
-        let options = LaunchOptions::from_profile(
-            &profile,
-            &config,
-            JavaInstallation {
-                path: std::path::PathBuf::from("/java"),
-                major_version: 21,
-                vendor: String::new(),
-                is_64bit: true,
-            },
-            std::sync::Arc::new(rmccc_platform::Platform::current()),
-        );
-        assert_eq!(options.max_memory, 3072, "inherits the global default");
-        assert_eq!(options.jvm_args, vec!["-Dglobal=1"]);
-        assert_eq!(options.game_dir, std::path::PathBuf::from("/g"));
-        assert_eq!(
-            options.run_dir,
-            std::path::PathBuf::from("/g/versions/1.20.4")
+            quick_play(&effective),
+            Some(QuickPlay::Singleplayer("world".to_string()))
         );
     }
 }

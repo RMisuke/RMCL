@@ -8,6 +8,22 @@ use rmccc_mods::ModSearchQuery;
 use serde::Serialize;
 use ts_rs::TS;
 
+fn locked_error() -> IpcError {
+    IpcError {
+        code: rmccc_error::ErrorCode::InternalError,
+        message: "Instance service lock poisoned".into(),
+        retryable: false,
+    }
+}
+
+fn load_instance(
+    core: &rmccc_core::CoreContext,
+    key: &str,
+) -> Result<rmccc_instance::InstanceDetail, IpcError> {
+    let mut service = core.instances.lock().map_err(|_| locked_error())?;
+    Ok(service.get(key)?)
+}
+
 #[tauri::command]
 #[tracing::instrument(skip(state))]
 pub async fn mod_search(
@@ -93,28 +109,17 @@ pub async fn mod_get_download_url(
 
 #[tauri::command]
 #[tracing::instrument(skip(state))]
-pub async fn mod_list(
-    state: tauri::State<'_, AppState>,
-    profile_id: String,
-) -> Result<ModList, IpcError> {
+pub async fn mod_list(state: tauri::State<'_, AppState>, key: String) -> Result<ModList, IpcError> {
     // A2: snapshot (config, profile) under a short read lock — no core lock is
     // held across the work below (perf audit 1.1).
-    let (config, profile) = {
+    let detail = {
         let core = state.core.read().await;
-        let profile = core
-            .profile_store
-            .get(&profile_id)?
-            .ok_or_else(|| IpcError {
-                code: rmccc_error::ErrorCode::ProfileNotFound,
-                message: format!("Profile not found: {profile_id}"),
-                retryable: false,
-            })?;
-        (core.config.clone(), profile)
+        load_instance(&core, &key)?
     };
 
     // Mods follow the instance run directory, so an isolated instance keeps
     // its own mods (HMCL behaviour) instead of writing into the shared root.
-    let mods_dir = rmccc_launch::instance_mods_dir(&config, &profile);
+    let mods_dir = detail.paths.mods_dir.clone();
     let disabled_dir = mods_dir.join("disabled");
 
     let scan = |dir: &std::path::Path| -> Vec<String> {
@@ -139,7 +144,7 @@ pub async fn mod_list(
     let enabled = scan(&mods_dir);
     let disabled = scan(&disabled_dir);
     tracing::info!(
-        profile_id = %profile_id,
+        key = %key,
         enabled = enabled.len(),
         disabled = disabled.len(),
         "Mods listed"
@@ -155,28 +160,20 @@ pub async fn mod_list(
 #[tracing::instrument(skip(state))]
 pub async fn mod_toggle(
     state: tauri::State<'_, AppState>,
-    profile_id: String,
+    key: String,
     mod_filename: String,
     enabled: bool,
 ) -> Result<(), IpcError> {
     // A2: snapshot (config, profile) under a short read lock — no core lock is
     // held across the work below (perf audit 1.1).
-    let (config, profile) = {
+    let detail = {
         let core = state.core.read().await;
-        let profile = core
-            .profile_store
-            .get(&profile_id)?
-            .ok_or_else(|| IpcError {
-                code: rmccc_error::ErrorCode::ProfileNotFound,
-                message: format!("Profile not found: {profile_id}"),
-                retryable: false,
-            })?;
-        (core.config.clone(), profile)
+        load_instance(&core, &key)?
     };
 
     // Mods follow the instance run directory, so an isolated instance keeps
     // its own mods (HMCL behaviour) instead of writing into the shared root.
-    let mods_dir = rmccc_launch::instance_mods_dir(&config, &profile);
+    let mods_dir = detail.paths.mods_dir.clone();
     let disabled_dir = mods_dir.join("disabled");
     let src = if enabled {
         disabled_dir.join(&mod_filename)
@@ -251,32 +248,25 @@ pub(crate) fn validate_mod_filename(name: &str) -> Result<(), IpcError> {
 #[tracing::instrument(skip(state))]
 pub async fn mod_install(
     state: tauri::State<'_, AppState>,
-    profile_id: String,
+    key: String,
     version: rmccc_mods::ModVersion,
 ) -> Result<String, IpcError> {
     // A2: snapshot source + (config, profile) under a short read lock — the
     // download below runs lock-free (perf audit 1.1).
-    let (source, config, profile) = {
+    let (source, detail) = {
         let core = state.core.read().await;
-        let profile = core
-            .profile_store
-            .get(&profile_id)?
-            .ok_or_else(|| IpcError {
-                code: rmccc_error::ErrorCode::ProfileNotFound,
-                message: format!("Profile not found: {profile_id}"),
-                retryable: false,
-            })?;
+        let detail = load_instance(&core, &key)?;
         let source = core.mod_sources.first().cloned().ok_or_else(|| IpcError {
             code: rmccc_error::ErrorCode::Unknown,
             message: "No mod source available".into(),
             retryable: false,
         })?;
-        (source, core.config.clone(), profile)
+        (source, detail)
     };
 
     // Mods follow the instance run directory, so an isolated instance keeps
     // its own mods (HMCL behaviour) instead of writing into the shared root.
-    let mods_dir = rmccc_launch::instance_mods_dir(&config, &profile);
+    let mods_dir = detail.paths.mods_dir.clone();
     std::fs::create_dir_all(&mods_dir)?;
 
     let filename = version
@@ -298,7 +288,7 @@ pub async fn mod_install(
         .await
         .map_err(IpcError::from)?;
 
-    tracing::info!(profile_id = %profile_id, filename = %filename, "Mod installed");
+    tracing::info!(key = %key, filename = %filename, "Mod installed");
     Ok(filename)
 }
 
@@ -307,22 +297,14 @@ pub async fn mod_install(
 #[tracing::instrument(skip(state))]
 pub async fn mod_install_local(
     state: tauri::State<'_, AppState>,
-    profile_id: String,
+    key: String,
     source_path: String,
 ) -> Result<String, IpcError> {
     // A2: snapshot (config, profile) under a short read lock — no core lock is
     // held across the work below (perf audit 1.1).
-    let (config, profile) = {
+    let detail = {
         let core = state.core.read().await;
-        let profile = core
-            .profile_store
-            .get(&profile_id)?
-            .ok_or_else(|| IpcError {
-                code: rmccc_error::ErrorCode::ProfileNotFound,
-                message: format!("Profile not found: {profile_id}"),
-                retryable: false,
-            })?;
-        (core.config.clone(), profile)
+        load_instance(&core, &key)?
     };
 
     let src = std::path::Path::new(&source_path);
@@ -334,7 +316,7 @@ pub async fn mod_install_local(
         });
     }
 
-    let mods_dir = rmccc_launch::instance_mods_dir(&config, &profile);
+    let mods_dir = detail.paths.mods_dir.clone();
     std::fs::create_dir_all(&mods_dir)?;
 
     let filename = src
@@ -355,7 +337,7 @@ pub async fn mod_install_local(
 
     let dest = mods_dir.join(&filename);
     std::fs::copy(src, &dest)?;
-    tracing::info!(profile_id = %profile_id, filename = %filename, "Local mod installed");
+    tracing::info!(key = %key, filename = %filename, "Local mod installed");
     Ok(filename)
 }
 
@@ -365,7 +347,7 @@ pub async fn mod_install_local(
 pub async fn mod_pick_and_install(
     app: tauri::AppHandle,
     state: tauri::State<'_, AppState>,
-    profile_id: String,
+    key: String,
 ) -> Result<Option<String>, IpcError> {
     use tauri_plugin_dialog::DialogExt;
 
@@ -393,20 +375,12 @@ pub async fn mod_pick_and_install(
 
     // A2: snapshot (config, profile) under a short read lock — no core lock is
     // held across the work below (perf audit 1.1).
-    let (config, profile) = {
+    let detail = {
         let core = state.core.read().await;
-        let profile = core
-            .profile_store
-            .get(&profile_id)?
-            .ok_or_else(|| IpcError {
-                code: rmccc_error::ErrorCode::ProfileNotFound,
-                message: format!("Profile not found: {profile_id}"),
-                retryable: false,
-            })?;
-        (core.config.clone(), profile)
+        load_instance(&core, &key)?
     };
 
-    let mods_dir = rmccc_launch::instance_mods_dir(&config, &profile);
+    let mods_dir = detail.paths.mods_dir.clone();
     std::fs::create_dir_all(&mods_dir)?;
 
     let filename = source
@@ -427,7 +401,7 @@ pub async fn mod_pick_and_install(
 
     let dest = mods_dir.join(&filename);
     std::fs::copy(&source, &dest)?;
-    tracing::info!(profile_id = %profile_id, filename = %filename, "Local mod installed via picker");
+    tracing::info!(key = %key, filename = %filename, "Local mod installed via picker");
     Ok(Some(filename))
 }
 
@@ -436,29 +410,21 @@ pub async fn mod_pick_and_install(
 #[tracing::instrument(skip(state))]
 pub async fn mod_remove(
     state: tauri::State<'_, AppState>,
-    profile_id: String,
+    key: String,
     mod_filename: String,
 ) -> Result<(), IpcError> {
     validate_mod_filename(&mod_filename)?;
 
     // A2: snapshot (config, profile) under a short read lock — no core lock is
     // held across the work below (perf audit 1.1).
-    let (config, profile) = {
+    let detail = {
         let core = state.core.read().await;
-        let profile = core
-            .profile_store
-            .get(&profile_id)?
-            .ok_or_else(|| IpcError {
-                code: rmccc_error::ErrorCode::ProfileNotFound,
-                message: format!("Profile not found: {profile_id}"),
-                retryable: false,
-            })?;
-        (core.config.clone(), profile)
+        load_instance(&core, &key)?
     };
 
     // Mods follow the instance run directory, so an isolated instance keeps
     // its own mods (HMCL behaviour) instead of writing into the shared root.
-    let mods_dir = rmccc_launch::instance_mods_dir(&config, &profile);
+    let mods_dir = detail.paths.mods_dir.clone();
     let active = mods_dir.join(&mod_filename);
     let disabled = mods_dir.join("disabled").join(&mod_filename);
 
@@ -513,20 +479,17 @@ pub struct ModsDependencyScanView {
 }
 
 /// 解析实例上下文：mods 目录 / 游戏版本 / 加载器（Modrinth 检索用）。
-fn profile_mods_context(
+fn instance_mods_context(
     core: &rmccc_core::CoreContext,
-    profile_id: &str,
-) -> rmccc_error::Result<(std::path::PathBuf, String, Option<String>)> {
-    let profile = core
-        .profile_store
-        .get(profile_id)?
-        .ok_or_else(|| RmcccError::ProfileNotFound(profile_id.to_string()))?;
-    let mods_dir = rmccc_launch::instance_mods_dir(&core.config, &profile);
-    let loader = profile
-        .mod_loader
+    key: &str,
+) -> Result<(std::path::PathBuf, String, Option<String>), IpcError> {
+    let detail = load_instance(core, key)?;
+    let loader = detail
+        .summary
+        .loader
         .as_ref()
-        .map(|loader| format!("{:?}", loader.loader_type).to_lowercase());
-    Ok((mods_dir, profile.game_version, loader))
+        .map(|loader| loader.kind.clone());
+    Ok((detail.paths.mods_dir, detail.summary.game_version, loader))
 }
 
 /// 检查缺失前置（纯本地扫描：fabric.mod.json 依赖图 × 已装集合对比）。
@@ -534,10 +497,10 @@ fn profile_mods_context(
 #[tracing::instrument(skip(state))]
 pub async fn mods_dependency_scan(
     state: tauri::State<'_, AppState>,
-    profile_id: String,
+    key: String,
 ) -> Result<ModsDependencyScanView, IpcError> {
     let core = state.core.read().await;
-    let (mods_dir, _, _) = profile_mods_context(&core, &profile_id)?;
+    let (mods_dir, _, _) = instance_mods_context(&core, &key)?;
     drop(core);
 
     // 实例还没建过 mods 目录 = 没装任何 mod = 没有可扫的依赖，直接给空报告。
@@ -561,7 +524,7 @@ pub async fn mods_dependency_scan(
     };
     let plan = plan_from_report(&report, &mods_dir);
     tracing::info!(
-        profile_id = %profile_id,
+        key = %key,
         missing = report.missing_required.len(),
         conflicts = report.conflicts.len(),
         "Dependency scan completed"
@@ -649,10 +612,10 @@ impl ModrinthPlanApplier {
 #[tracing::instrument(skip(state))]
 pub async fn mods_apply_plan(
     state: tauri::State<'_, AppState>,
-    profile_id: String,
+    key: String,
 ) -> Result<AppliedPlanReport, IpcError> {
     let core = state.core.read().await;
-    let (mods_dir, game_version, loader) = profile_mods_context(&core, &profile_id)?;
+    let (mods_dir, game_version, loader) = instance_mods_context(&core, &key)?;
     let source = rmccc_mods::modrinth::ModrinthSource::new(core.http_client.clone());
     drop(core);
 
@@ -677,7 +640,7 @@ pub async fn mods_apply_plan(
         })
         .await?;
     tracing::info!(
-        profile_id = %profile_id,
+        key = %key,
         installed = report.installed.len(),
         failed = report.failed.len(),
         "Missing dependencies applied"

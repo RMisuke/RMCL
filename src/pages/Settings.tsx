@@ -10,8 +10,8 @@ import { PageHeader } from "../components/PageHeader";
 import { RmButton, RmIconButton, RmInput, RmSelect, RmSwitch, RmTag } from "../components/rm/controls";
 import { RmDialog, RmMenu } from "../components/rm/overlays";
 import { RmCard, RmSideTabs, RmListRow, RmAdvancedSection, RmFieldRow, RmEmptyState, RmErrorState } from "../components/rm/surfaces";
-import { settings as settingsApi, userSettings, instances, logs, external, mcp as mcpApi, ai as aiApi, plugins as pluginsApi, dashboard } from "../ipc/api";
-import type { AppInfoView, JavaInfo, InstanceInfo, LocaleInfo, McpToolView, ThemeTokens } from "../ipc/types";
+import { settings as settingsApi, userSettings, instances, gameDirectories, logs, external, mcp as mcpApi, ai as aiApi, plugins as pluginsApi, dashboard } from "../ipc/api";
+import type { AppInfoView, JavaInfo, InstanceDetail, LocaleInfo, McpToolView, ThemeTokens, GlobalGameSettings, GameDirectory } from "../ipc/types";
 import { settingsStore } from "../stores/settings";
 import { aiStore } from "../stores/ai";
 import { mcpStore } from "../stores/mcp";
@@ -21,6 +21,7 @@ import { listThemes, visualPaletteFor } from "../theme";
 import { cacheStore } from "../stores/cache";
 import { formatBytes } from "../lib/format";
 import { t } from "../i18n";
+import { loaderLabel } from "../lib/loaders";
 import type { TranslationKey } from "../i18n/locales/messages";
 import { elidePath } from "../lib/format";
 import { useHashTab } from "../lib/useHashTab";
@@ -72,11 +73,14 @@ export default function Settings(): JSX.Element {
 // ── Game defaults ──
 
 function GameDefaults(): JSX.Element {
+  const navigate = useNavigate();
   const config = () => settingsStore.config();
   const [rootDir, setRootDir] = createSignal("");
   const [rootDirty, setRootDirty] = createSignal(false);
   const [javas, setJavas] = createSignal<JavaInfo[]>([]);
   const [autoMemory, setAutoMemory] = createSignal(false);
+  const [gameSettings, setGameSettings] = createSignal<GlobalGameSettings | null>(null);
+  const [selectedDirectory, setSelectedDirectory] = createSignal<GameDirectory | null>(null);
 
   // Explicit-save drafts (P1-12): edit locally, one IPC per Save click. The
   // `touched` flags stop the config backfill below from clobbering in-progress
@@ -106,12 +110,44 @@ function GameDefaults(): JSX.Element {
     if (!touched.game) setGameText((c.default_game_args ?? []).join("\n"));
   });
 
-  onMount(() => void settingsApi.detectJava().then((r) => r.ok && setJavas(r.data)));
+  createEffect(() => {
+    const gs = gameSettings();
+    if (!gs) return;
+    if (!touched.memory) {
+      setMinMem(gs.min_memory_mb ?? 1024);
+      setMaxMem(gs.max_memory_mb);
+    }
+    if (!touched.window) {
+      setWinW(gs.width);
+      setWinH(gs.height);
+    }
+    if (!touched.jvm) setJvmText(gs.jvm_args.join("\n"));
+    if (!touched.game) setGameText(gs.game_args.join("\n"));
+    setAutoMemory(gs.auto_memory);
+  });
+
+  onMount(() => {
+    void settingsApi.detectJava().then((r) => r.ok && setJavas(r.data));
+    void instances.globalSettings().then((r) => r.ok && setGameSettings(r.data));
+    void gameDirectories.selected().then((r) => r.ok && setSelectedDirectory(r.data));
+  });
 
   async function patch(update: Parameters<typeof settingsStore.update>[0]): Promise<boolean> {
     const res = await settingsStore.update(update);
     if (!res.ok) toast({ message: res.message ?? "", tone: "error" });
     return res.ok;
+  }
+
+  async function patchGame(update: Partial<GlobalGameSettings>): Promise<boolean> {
+    const current = gameSettings();
+    if (!current) return false;
+    const res = await instances.updateGlobalSettings({ ...current, ...update });
+    if (!res.ok) {
+      toast({ message: res.error.message, tone: "error" });
+      return false;
+    }
+    setGameSettings(res.data);
+    return true;
   }
 
   return (
@@ -130,23 +166,11 @@ function GameDefaults(): JSX.Element {
       <div class="info-note">{t("settings.game.intro")}</div>
       <RmCard title={t("settings.game.rootDir")}>
         <div class="btn-row">
-          <RmInput
-            value={rootDir()}
-            onInput={(v) => {
-              setRootDir(v);
-              setRootDirty(v !== (config()?.game_root_dir ?? ""));
-            }}
-            placeholder={t("settings.game.rootDirPlaceholder")}
-          />
-          <RmButton
-            size="sm"
-            variant="primary"
-            disabled={!rootDirty()}
-            onClick={() =>
-              void patch({ game_root_dir: rootDir().trim() || null }).then((ok) => ok && setRootDirty(false))
-            }
-          >
-            {t("common.save")}
+          <span class="rm-input" style={{ flex: "1", "min-width": "220px" }}>
+            {selectedDirectory() ? elidePath(selectedDirectory()!.path, 52) : "-"}
+          </span>
+          <RmButton size="sm" icon="folder" onClick={() => navigate("/instances")}>
+            {t("instances.title")}
           </RmButton>
         </div>
         <div class="muted-line">{t("settings.game.rootDirNote")}</div>
@@ -155,8 +179,13 @@ function GameDefaults(): JSX.Element {
       <RmCard title={t("settings.game.java")}>
         <RmFieldRow label={t("settings.game.javaDefault")}>
           <RmSelect
-            value={config()?.default_java_path ?? ""}
-            onChange={(v) => void patch({ default_java_path: v || null })}
+            value={gameSettings()?.java_type === "custom" ? gameSettings()!.custom_java_path : ""}
+            onChange={(v) =>
+              void patchGame({
+                java_type: v ? "custom" : "auto",
+                custom_java_path: v,
+              })
+            }
             options={[
               { value: "", label: t("instanceDetail.settings.javaAuto") },
               ...javas().map((j) => ({ value: j.path, label: `Java ${j.major_version} · ${j.vendor}` })),
@@ -171,8 +200,8 @@ function GameDefaults(): JSX.Element {
           hint={<span class="muted-line">{t("settings.game.isolationHint")}</span>}
         >
           <RmSelect
-            value={config()?.default_isolation ?? "modded"}
-            onChange={(v) => void patch({ default_isolation: v })}
+            value={gameSettings()?.default_isolation ?? "modded"}
+            onChange={(v) => void patchGame({ default_isolation: v as GlobalGameSettings["default_isolation"] })}
             options={[
               { value: "never", label: t("instanceDetail.maintenance.isolationShared") },
               { value: "modded", label: t("instanceDetail.maintenance.isolationModded") },
@@ -188,7 +217,7 @@ function GameDefaults(): JSX.Element {
             checked={autoMemory()}
             onChange={(v) => {
               setAutoMemory(v);
-              void patch({ auto_memory: v });
+              void patchGame({ auto_memory: v });
             }}
           />
         </RmFieldRow>
@@ -221,7 +250,7 @@ function GameDefaults(): JSX.Element {
                 size="sm"
                 variant="primary"
                 onClick={() =>
-                  void patch({ default_min_memory_mb: minMem(), default_max_memory_mb: maxMem() })
+                  void patchGame({ min_memory_mb: minMem(), max_memory_mb: maxMem() })
                     .then((ok) => ok && (touched.memory = false))
                 }
               >
@@ -259,13 +288,16 @@ function GameDefaults(): JSX.Element {
             size="sm"
             variant="primary"
             onClick={() =>
-              void patch({ default_window_width: winW(), default_window_height: winH() })
+              void patchGame({ width: winW(), height: winH() })
                 .then((ok) => ok && (touched.window = false))
             }
           >
             {t("common.save")}
           </RmButton>
-          <RmSwitch checked={config()?.default_fullscreen ?? false} onChange={(v) => void patch({ default_fullscreen: v })} />
+          <RmSwitch
+            checked={gameSettings()?.window_type === "fullscreen"}
+            onChange={(v) => void patchGame({ window_type: v ? "fullscreen" : "windowed" })}
+          />
           <span>{t("instanceDetail.settings.fullscreen")}</span>
         </div>
       </RmCard>
@@ -286,7 +318,7 @@ function GameDefaults(): JSX.Element {
               size="sm"
               variant="primary"
               onClick={() =>
-                void patch({ default_jvm_args: jvmText().split("\n").map((l) => l.trim()).filter(Boolean) })
+                void patchGame({ jvm_args: jvmText().split("\n").map((l) => l.trim()).filter(Boolean) })
                   .then((ok) => ok && (touched.jvm = false))
               }
             >
@@ -309,7 +341,7 @@ function GameDefaults(): JSX.Element {
               size="sm"
               variant="primary"
               onClick={() =>
-                void patch({ default_game_args: gameText().split("\n").map((l) => l.trim()).filter(Boolean) })
+                void patchGame({ game_args: gameText().split("\n").map((l) => l.trim()).filter(Boolean) })
                   .then((ok) => ok && (touched.game = false))
               }
             >
@@ -1026,7 +1058,7 @@ function PluginsHost(): JSX.Element {
 // ── Advanced (version repository) ──
 
 function Advanced(): JSX.Element {
-  const [repo, setRepo] = createSignal<InstanceInfo[] | null>(null);
+  const [repo, setRepo] = createSignal<InstanceDetail[] | null>(null);
   const [error, setError] = createSignal<string | null>(null);
 
   async function refresh(): Promise<void> {
@@ -1039,38 +1071,38 @@ function Advanced(): JSX.Element {
 
   onMount(() => void refresh());
 
-  async function rename(instance: InstanceInfo): Promise<void> {
+  async function rename(instance: InstanceDetail): Promise<void> {
     const next = await promptText({
       title: t("settings.advanced.repo.rename.title"),
       label: t("settings.advanced.repo.rename.prompt"),
-      initial: instance.id,
+      initial: instance.summary.id,
     });
-    if (!next || next === instance.id) return;
-    const res = await instances.rename(instance.id, next);
+    if (!next || next === instance.summary.id) return;
+    const res = await instances.rename(instance.summary.key, next);
     if (res.ok) void refresh();
     else toast({ message: res.error.message, tone: "error" });
   }
 
-  async function duplicate(instance: InstanceInfo): Promise<void> {
+  async function duplicate(instance: InstanceDetail): Promise<void> {
     const next = await promptText({
       title: t("settings.advanced.repo.duplicate.title"),
       label: t("settings.advanced.repo.duplicate.prompt"),
-      initial: `${instance.id}-copy`,
+      initial: `${instance.summary.id}-copy`,
     });
     if (!next) return;
-    const res = await instances.duplicate(instance.id, next);
+    const res = await instances.duplicate(instance.summary.key, next, false);
     if (res.ok) void refresh();
     else toast({ message: res.error.message, tone: "error" });
   }
 
-  async function remove(instance: InstanceInfo): Promise<void> {
+  async function remove(instance: InstanceDetail): Promise<void> {
     const allowed = await confirmDanger({
       title: t("settings.advanced.repo.remove.title"),
-      body: t("settings.advanced.repo.remove.body", { id: instance.id }),
+      body: t("settings.advanced.repo.remove.body", { id: instance.summary.id }),
       confirmLabel: t("common.delete"),
     });
     if (!allowed) return;
-    const res = await instances.remove(instance.id);
+    const res = await instances.remove(instance.summary.key, true);
     if (res.ok) void refresh();
     else toast({ message: res.error.message, tone: "error" });
   }
@@ -1091,12 +1123,12 @@ function Advanced(): JSX.Element {
             <For each={repo() ?? []}>
               {(instance) => (
                 <RmListRow
-                  title={instance.id}
-                  subtitle={`${instance.game_version}${instance.modded ? ` · ${t("common.modded")}` : ""}`}
+                  title={instance.summary.display_name}
+                  subtitle={`${instance.summary.game_version}${instance.summary.loader ? ` · ${loaderLabel(instance.summary.loader.kind)}` : ""}`}
                   trailing={
                     <div class="btn-row">
-                      <RmTag tone={instance.missing_count === 0 ? "success" : "warning"}>
-                        {instance.missing_count === 0 ? t("settings.advanced.repo.complete") : t("settings.advanced.repo.missing", { n: instance.missing_count })}
+                      <RmTag tone={instance.directory.kind === "external" ? "success" : "neutral"}>
+                        {instance.directory.kind === "external" ? "External" : "Managed"}
                       </RmTag>
                       <RmMenu
                         align="right"

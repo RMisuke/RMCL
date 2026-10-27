@@ -1,9 +1,13 @@
 # ADR-002: Profile 与 Instance 的语义分界
 
-- **状态**：accepted（2026-10-21 定稿）
+- **状态**：superseded by [ADR-016](ADR-016-instance-management-v2.md)（2026-10-27）
 - **日期**：2026-10-21
 - **阶段**：Phase 1（切片 1.7）
 - **关联**：审计 P2-10、§7.4、P2-9；指南 §3.4、§4
+
+> **取代说明（2026-10-27）**：本 ADR 的"profile 是唯一用户可见实体"与"同一前缀两套 id"已被
+> [ADR-016](ADR-016-instance-management-v2.md) 取代。新模型取消 Profile，版本目录即实例，
+> 以 `GameDirectory + InstanceId` 为唯一标识。下文保留为历史决策记录。
 
 ## 背景
 

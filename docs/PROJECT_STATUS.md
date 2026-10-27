@@ -10,6 +10,54 @@
 
 ## 0. 更新记录
 
+**2026-10-27（实例管理 v2：目录注册表 + 版本即实例 + 设置覆盖，ADR-016 accepted）**：
+
+1. **领域重构**：新增 `rmccc-instance`，删除 `rmccc-profile`。实例不再有 UUID Profile：
+   实例 = `versions/{id}/{id}.json`，标识为 `InstanceKey { directory_id, instance_id }`
+   （IPC/路由统一 `{directory_id}/{instance_id}`）。`instances/`、`extra_game_roots`
+   迁移为 `config/game-directories.json`；全局启动默认值迁移为 `config/game-settings.json`；
+   实例设置落在 `{instance_root}/.rmccc/instance.json`。
+2. **设置模型**：覆盖 HMCL `GameSettings` 全集（Java 四种选择、JVM/游戏参数、自动/最小/最大内存、
+   Metaspace、窗口类型/尺寸、运行目录、进程优先级、启动器可见性、图形后端/渲染器、环境变量、
+   wrapper、前后命令、快速进入、原生库/GLFW/OpenAL、调试与完整性开关）；`override_properties`
+   保持"值 + 是否覆盖"分离。
+3. **生命周期**：`rename` 同步改写 manifest id/jar 与所有子实例的 `inheritsFrom`；`duplicate`
+   支持跳过 `saves/` 并重置运行目录覆盖/游玩时长；`remove(delete_files=false)` 只隐藏实例，
+   `true` 才删除 `versions/{id}`。`loader` 安装生成**新实例**，不再原地改旧实例。
+4. **迁移**：首启把旧 `profiles/*.json` 迁移到 `.rmccc/instance.json`（版本不存在则跳过并记诊断），
+   标记 `state/instance-migration-v2.json`；旧文件只读保留。
+5. **前端**：实例列表改为目录选择器 + 实例卡片（不再有 Profile/版本仓库双轨）；详情页数据改走
+   `instance_get`，设置/路径/完整性/Mod/加载器命令全部改 key；wizard 走 `instance_install`
+   （可同批安装 loader）。
+6. **门禁**（2026-10-27 本机实测全绿）：`cargo fmt --all -- --check` ✅、
+   `cargo clippy --workspace --all-targets -- -D warnings` ✅、
+   `cargo test --workspace` ✅（42 个 test binary / 680 passed / 0 failed）、
+   `pnpm typecheck` ✅、`pnpm test` ✅（5 files / 34 tests）、`pnpm build` ✅
+   （主 chunk 205.22 kB / gzip 67.37 kB）、`pnpm tauri build --bundles app` ✅
+   （`SNGL.app` 产出成功）。体积门禁：`target/release/rmccc` strip 后 **9,889,824 B
+   ≈ 9.43 MiB**（阈值 20 MiB，通过；`strip = true` 生效，符号表仅剩 358 个未定义动态符号）。
+
+**2026-10-27（主题 v2 实施：字体 / 圆角 / 间距 / 背景视频 / 组件贴图 / 主界面特效 / Tab 装饰）**：
+
+1. **主题协议 v2**（ADR-014 accepted）：`schemaVersion: 2` 新增 `typography` / `shape` /
+   `spacing` / `background`（图片或 mp4/webm + poster）/ `components`（8 个槽，含九宫格贴图）/
+   `effects`（rotating-blocks、aurora、particles）/ `navigation`（Dock 图标 + 装饰）。
+   `themes.skin`（medium）门槛：含非颜色段的主题安装后需显式授权，未授权只应用配色。
+2. **资产管线**：包检查新增 `theme_assets`（扩展名/魔数/SVG script-DOCTYPE-ENTITY-外部 href/
+   大小上限：图片 8 MiB、字体 2 MiB、视频 16 MiB）；资源路由 `rmcccplugin://<id>/assets/...`
+   需要 `themes.apply` + `themes.skin`，字体 CORS、视频 Range、SVG CSP。
+3. **前端皮肤层**：`src/styles/theme-skin.css` + `applyThemeSkinPayload`（字体/@font-face、
+   圆角、间距、背景图/视频、组件槽、九宫格按钮伪元素）；`ThemeBackdrop` / `ThemeHeroLayer` /
+   `ThemeEffects` 渲染宿主预设特效；TitleBar 支持主题图标与装饰。动效受 `data-motion` 与
+   `prefers-reduced-motion` 约束。
+4. **示例**：`examples/plugins/theme-aurora`（极光视频 + 玻璃 + 3 种特效 + 自定义 Dock 图标）、
+   `examples/plugins/theme-grass`（KenPixel 字体 + MC 九宫格面板/按钮 + 草方块特效 + 全景图）；
+   均已打包安装验证（`themes.skin` 待授权 → 授权 → 启用）。
+5. **未实现（后续切片）**：用户覆盖 UI（密度/圆角/逐项开关/自定义背景）、主题预览确认、
+   多套外观预设。当前用户想关闭字体/背景/特效需切换回内置主题。
+6. 验证：`cargo test --workspace`、clippy、fmt、`pnpm typecheck`、`pnpm test`、`pnpm build`、
+   `SNGL.app` 构建；demo 截图见 `target/skin-probe/`。
+
 **2026-10-27（主题 v2 设计：字体 / 圆角 / 间距 / 背景图 / 组件槽 + 用户覆盖，ADR-014 proposed）**：
 
 1. **研究结论**：主题 v1 的 8 色令牌不足以支撑"全新体验"，但也不应把任意 CSS 交给插件。

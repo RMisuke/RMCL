@@ -16,7 +16,6 @@ use crate::CoreHandle;
 use rmccc_auth::Account;
 use rmccc_error::{Result, RmcccError};
 use rmccc_launch::{ManagedProcess, ProcessListener};
-use rmccc_version::GameRepository as _;
 use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
@@ -175,12 +174,11 @@ pub async fn resolve_version(
                 // resolve through the local repository (offline, no manifest
                 // round-trip or deep copy) and only fall back to the network
                 // provider when the parent is not indexed.
-                let local_parent = core.game_repository.read().ok().and_then(|repo| {
-                    if repo.has_instance(&parent_id) {
-                        repo.get_resolved(&parent_id).ok().map(|r| r.launch)
-                    } else {
-                        None
-                    }
+                let local_parent = core.instances.lock().ok().and_then(|mut instances| {
+                    instances
+                        .resolved_in_root(game_dir, &parent_id)
+                        .ok()
+                        .map(|resolved| resolved.launch)
                 });
                 let mut resolved = match local_parent {
                     Some(parent) => parent,
@@ -219,13 +217,11 @@ pub async fn resolve_version(
 /// [`commit_install`] 完成（CLI 与 Tauri 共用同一条提交路径）。
 pub async fn install_game(
     core: &CoreHandle,
-    profile: &rmccc_profile::Profile,
+    game_dir: &Path,
     version_id: &str,
     progress: Option<&ProgressCb>,
 ) -> Result<SetupReport> {
-    // 安装目标 = profile 的共享游戏根（profile 创建时即 `resolved_game_root()`，
-    // 与 `GameRepository` 索引的是同一个目录，P2-9 单一取值点）。
-    let game_dir = profile.game_dir.clone();
+    let game_dir = game_dir.to_path_buf();
     let version = resolve_version(core, version_id, &game_dir).await?;
 
     for subdir in &["versions", "libraries", "assets"] {
@@ -306,8 +302,8 @@ pub async fn install_game(
     }
 
     tracing::info!(
-        profile_id = %profile.id,
         version = %version_id,
+        game_dir = %game_dir.display(),
         total_files = total,
         failed_files,
         "Version resources installed"
@@ -315,26 +311,26 @@ pub async fn install_game(
     Ok(report)
 }
 
-/// 安装完成后的提交：把 profile 指向新版本并刷新本地索引。
+/// 安装完成后的提交：确保实例设置存在、固定隔离策略并刷新目录索引。
 ///
-/// 重新从 store 读取 profile（而不是复用安装开始时的快照），避免用几秒前的
-/// 旧数据覆盖用户在下载期间改过的设置。
-pub fn commit_install(core: &CoreHandle, profile_id: &str, version_id: &str) -> Result<()> {
-    let mut profile = core
-        .profile_store
-        .get(profile_id)?
-        .ok_or_else(|| RmcccError::ProfileNotFound(profile_id.to_string()))?;
-    profile.game_version = version_id.to_string();
-    core.profile_store.save(&profile)?;
-    refresh_repository(core)
+/// 版本目录本身就是实例（ADR-016），所以这里不再"把 profile 指向新版本"。
+pub fn commit_install(
+    core: &CoreHandle,
+    directory_id: &str,
+    version_id: &str,
+) -> Result<rmccc_instance::InstanceDetail> {
+    let mut instances = core.instances.lock().map_err(|_| repo_lock_error())?;
+    instances.refresh(Some(directory_id), true)?;
+    instances.ensure_instance(directory_id, version_id)
 }
 
-/// 重新扫描本地版本索引（安装 / 修复后调用，让新文件被观察到）。
-pub fn refresh_repository(core: &CoreHandle) -> Result<()> {
-    core.game_repository
-        .write()
+/// 重新扫描某个目录的版本索引（安装 / 修复后调用）。
+pub fn refresh_repository(core: &CoreHandle, directory_id: &str) -> Result<()> {
+    core.instances
+        .lock()
         .map_err(|_| repo_lock_error())?
-        .refresh()
+        .refresh(Some(directory_id), true)
+        .map(|_| ())
 }
 
 /// 写入 `versions/{id}/{id}.json`（已存在则保留，patched JSON 不被冲掉）。
@@ -470,18 +466,12 @@ fn extract_natives(
 /// 每次 launch 都跑），显式修复命令传 `Hash`（全量 SHA1 复核）。
 pub async fn repair_instance(
     core: &CoreHandle,
+    game_dir: &Path,
     version_id: &str,
     progress: Option<&ProgressCb>,
     verify: rmccc_version::completion::CompletionVerify,
 ) -> Result<SetupReport> {
-    repair_instance_at(
-        core,
-        version_id,
-        &core.config.resolved_game_root(),
-        progress,
-        verify,
-    )
-    .await
+    repair_instance_at(core, version_id, game_dir, progress, verify).await
 }
 
 /// Repair a version under an explicit game root (external HMCL directories).
@@ -492,31 +482,11 @@ pub async fn repair_instance_at(
     progress: Option<&ProgressCb>,
     verify: rmccc_version::completion::CompletionVerify,
 ) -> Result<SetupReport> {
-    let primary_root = core.config.resolved_game_root();
-    // 解析阶段持有 std RwLock 读锁，必须在 await 前释放。外置目录建临时仓库
-    //（refresh 是同步磁盘扫描，放到 blocking 池）。
-    let (game_root, resolved) = if game_root == primary_root.as_path() {
-        let repo = core.game_repository.read().map_err(|_| repo_lock_error())?;
-        let resolved = repo
-            .get_resolved(version_id)
-            .map_err(|e| RmcccError::Other(e.to_string()))?;
-        (repo.game_dir().to_path_buf(), resolved)
-    } else {
-        let root = game_root.to_path_buf();
-        let id = version_id.to_string();
-        tokio::task::spawn_blocking(
-            move || -> Result<(std::path::PathBuf, rmccc_version::ResolvedVersion)> {
-                let mut repo = rmccc_version::DefaultGameRepository::new(root.clone());
-                repo.refresh()
-                    .map_err(|e| RmcccError::Other(e.to_string()))?;
-                let resolved = repo
-                    .get_resolved(&id)
-                    .map_err(|e| RmcccError::Other(e.to_string()))?;
-                Ok((root, resolved))
-            },
-        )
-        .await
-        .map_err(|e| RmcccError::Other(format!("repository join error: {e}")))??
+    // 解析阶段只持实例服务锁做同步读取，随后立即释放；下载/解压期间不持锁。
+    let (game_root, resolved) = {
+        let mut instances = core.instances.lock().map_err(|_| repo_lock_error())?;
+        let resolved = instances.resolved_in_root(game_root, version_id)?;
+        (game_root.to_path_buf(), resolved)
     };
 
     let items = rmccc_version::completion::build_completion_downloads(
@@ -550,8 +520,7 @@ pub async fn repair_instance_at(
         .await?;
     core.download_manager.wait_for_batch(&handle.id).await;
 
-    // 重新扫描仓库，让缺失计数刷新。
-    refresh_repository(core)?;
+    // 版本文件已补齐；调用方负责刷新仓库/实例列表。
 
     emit(
         progress,
@@ -568,7 +537,7 @@ pub async fn repair_instance_at(
 /// [`repair_instance`] 的 profile 视图：用 profile 当前指向的版本做修复。
 pub async fn ensure_launch_ready(
     core: &CoreHandle,
-    profile: &rmccc_profile::Profile,
+    instance: &rmccc_instance::InstanceDetail,
     progress: Option<&ProgressCb>,
 ) -> Result<SetupReport> {
     // 启动路径用 Size 级校验（每次 launch 都跑，只 stat 不读文件内容）；
@@ -576,8 +545,8 @@ pub async fn ensure_launch_ready(
     // 尺寸级修复也不会装上坏内容。
     repair_instance_at(
         core,
-        &profile.game_version,
-        &rmccc_launch::instance_game_root(&core.config, profile),
+        &instance.summary.id,
+        &instance.paths.game_dir,
         progress,
         rmccc_version::completion::CompletionVerify::Size,
     )
@@ -612,24 +581,33 @@ async fn run_extract_natives(
     .map_err(|e| RmcccError::Other(format!("natives extraction join error: {e}")))?
 }
 
-/// 检测启动所需 Java（自定义路径优先，否则自动探测）。
+/// 检测启动所需 Java。
 ///
-/// 自定义路径不存在时返回 [`RmcccError::JavaNotFound`]——此前 CLI 检查而
-/// Tauri 只检查"路径形态"，于是填了个错路径仍会走到 spawn 才失败。
+/// 选择顺序由实例生效设置决定（HMCL `JavaVersionType`）：自动探测 / 自定义
+/// 路径 / 指定主版本 / 指定已检测运行时。自定义路径仍做真实探测与版本门控
+/// （`not_check_jvm` 可关闭门控）。
 fn detect_launch_java(
     platform: &std::sync::Arc<rmccc_platform::Platform>,
-    profile: &rmccc_profile::Profile,
+    instance: &rmccc_instance::InstanceDetail,
     game_version: &rmccc_version::GameVersion,
 ) -> Result<rmccc_launch::JavaInstallation> {
+    use rmccc_instance::JavaType;
+
+    let effective = &instance.effective;
     let required_java = game_version
         .java_version
         .as_ref()
         .map(|j| j.major_version)
-        .unwrap_or_else(|| rmccc_version::java_version_for_mc(&profile.game_version));
+        .unwrap_or_else(|| rmccc_version::java_version_for_mc(&instance.summary.game_version));
 
-    match &profile.java_path {
-        Some(jh) => {
-            let home = std::path::PathBuf::from(jh);
+    match effective.java_type {
+        JavaType::Auto => platform.java.find(required_java),
+        JavaType::Custom => {
+            let raw = effective.custom_java_path.trim();
+            if raw.is_empty() {
+                return Err(RmcccError::JavaNotFound);
+            }
+            let home = std::path::PathBuf::from(raw);
             let bin = if home.is_file() {
                 home
             } else {
@@ -649,7 +627,7 @@ fn detect_launch_java(
                     bin.display()
                 ))
             })?;
-            if probed.major_version != required_java {
+            if !effective.not_check_jvm && probed.major_version != required_java {
                 return Err(RmcccError::JavaVersionMismatch {
                     found: probed.major_version,
                     required: required_java,
@@ -657,7 +635,35 @@ fn detect_launch_java(
             }
             Ok(probed)
         }
-        None => platform.java.find(required_java),
+        JavaType::Version => {
+            let wanted = effective
+                .custom_java_version
+                .trim()
+                .parse::<u32>()
+                .map_err(|_| {
+                    RmcccError::Validation(format!(
+                        "invalid Java version: {:?}",
+                        effective.custom_java_version
+                    ))
+                })?;
+            let all = platform.java.detect_all()?;
+            all.into_iter()
+                .find(|java| java.major_version == wanted)
+                .ok_or(RmcccError::JavaNotFound)
+        }
+        JavaType::Detected => {
+            let wanted = effective.detected_java_version.trim();
+            if wanted.is_empty() {
+                return platform.java.find(required_java);
+            }
+            let all = platform.java.detect_all()?;
+            // Version match is the portable part; the path hash is a
+            // best-effort tiebreaker that we do not recompute here.
+            all.into_iter()
+                .find(|java| java.major_version.to_string() == wanted)
+                .or_else(|| platform.java.find(required_java).ok())
+                .ok_or(RmcccError::JavaNotFound)
+        }
     }
 }
 
@@ -677,14 +683,14 @@ async fn resolve_launch_auth(core: &CoreHandle) -> Result<(String, String, Strin
 }
 
 /// 累计游玩时长记录：包装呈现层监听器，在游戏进程退出时把本次运行秒数写回
-/// profile（HMCL 的"游玩时长"统计）。
+/// 实例设置（HMCL 的"游玩时长"统计）。
 ///
 /// 计时从 `launch()` 返回（进程已 spawn）开始，不含安装/修复/Java 探测时间；
 /// 应用在游戏运行中退出时不会有 `on_exit`，本次时长不记（下次启动重新计时）。
 struct PlaytimeListener {
     inner: Arc<dyn ProcessListener>,
-    store: Arc<rmccc_profile::ProfileStore>,
-    profile_id: String,
+    instances: Arc<std::sync::Mutex<rmccc_instance::InstanceService>>,
+    key: String,
     started: std::sync::Mutex<Option<std::time::Instant>>,
 }
 
@@ -716,42 +722,18 @@ impl ProcessListener for PlaytimeListener {
             .map(|start| start.elapsed().as_secs())
             .unwrap_or(0);
         if seconds > 0 {
-            if let Err(e) = self.store.add_play_time(&self.profile_id, seconds) {
-                tracing::warn!(
-                    profile_id = %self.profile_id,
-                    error = %e,
-                    "Failed to record play time"
-                );
+            if let Ok(mut instances) = self.instances.lock() {
+                if let Err(e) = instances.add_play_time(&self.key, seconds) {
+                    tracing::warn!(
+                        instance = %self.key,
+                        error = %e,
+                        "Failed to record play time"
+                    );
+                }
             }
         }
         self.inner.on_exit(exit_code, exit_type);
     }
-}
-
-/// Resolve the launch view for a profile, honoring an external game root.
-async fn resolve_launch_view(
-    core: &CoreHandle,
-    profile: &rmccc_profile::Profile,
-) -> Result<rmccc_version::GameVersion> {
-    if profile.external_root {
-        let root = rmccc_launch::instance_game_root(&core.config, profile);
-        let id = profile.game_version.clone();
-        return tokio::task::spawn_blocking(move || -> Result<rmccc_version::GameVersion> {
-            let mut repo = rmccc_version::DefaultGameRepository::new(root);
-            repo.refresh()
-                .map_err(|e| RmcccError::Other(e.to_string()))?;
-            repo.get_resolved(&id)
-                .map(|resolved| resolved.launch)
-                .map_err(|e| RmcccError::Other(e.to_string()))
-        })
-        .await
-        .map_err(|e| RmcccError::Other(format!("repository join error: {e}")))?;
-    }
-
-    let repo = core.game_repository.read().map_err(|_| repo_lock_error())?;
-    repo.get_resolved(&profile.game_version)
-        .map(|resolved| resolved.launch)
-        .map_err(|e| RmcccError::Other(e.to_string()))
 }
 
 /// 启动游戏并返回已托管进程（命令行生成、native 解压、log4j 提取、环境变量
@@ -762,53 +744,56 @@ async fn resolve_launch_view(
 /// `last_played`。
 pub async fn launch_game(
     core: &CoreHandle,
-    profile: &rmccc_profile::Profile,
+    instance: &rmccc_instance::InstanceDetail,
     listener: Arc<dyn ProcessListener>,
     progress: Option<&ProgressCb>,
 ) -> Result<Arc<ManagedProcess>> {
-    // 本地解析 launch 视图（HMCL resolved.launch，离线可用）。外置目录的
-    // 版本不在主仓库索引里，按 profile 自己的 game_dir 临时建一份仓库。
-    let game_version = resolve_launch_view(core, profile).await?;
+    // 本地解析 launch 视图（HMCL resolved.launch，离线可用）。实例服务缓存
+    // 每个游戏目录的仓库，外部目录同样走同一入口。
+    let resolved = {
+        let mut instances = core.instances.lock().map_err(|_| repo_lock_error())?;
+        instances
+            .resolved_version(&instance.summary.key)
+            .map(|(_, resolved)| resolved)?
+    };
+    let game_version = resolved.launch;
 
     // Perf audit 1.5: the probe spawns real JVM subprocesses (100-500 ms
     // each) — run it on the blocking pool, not an async worker.
     let java_install = {
         let platform = core.platform.clone();
-        let profile = profile.clone();
+        let instance = instance.clone();
         let game_version = game_version.clone();
-        tokio::task::spawn_blocking(move || detect_launch_java(&platform, &profile, &game_version))
+        tokio::task::spawn_blocking(move || detect_launch_java(&platform, &instance, &game_version))
             .await
             .map_err(|e| RmcccError::Other(format!("java detect join error: {e}")))?
     }?;
     tracing::info!(
-        profile_id = %profile.id,
+        instance = %instance.summary.key,
         java_version = java_install.major_version,
         java_path = %java_install.path.display(),
         "Launching Minecraft"
     );
     let (username, uuid_str, access_token, user_type) = resolve_launch_auth(core).await?;
     let auth = rmccc_launch::AuthInfo::new(username, uuid_str, access_token, user_type);
-    let options = rmccc_launch::LaunchOptions::from_profile(
-        profile,
-        &core.config,
+    let options = rmccc_launch::LaunchOptions::from_instance(
+        instance,
         java_install.clone(),
         core.platform.clone(),
     );
 
     // 计时的起点是进程成功 spawn（`launch()` 返回），因此包装监听器后才交给
-    // launcher；退出时把本次运行时长累加到 profile（GUI/CLI/MCP 同一入口）。
+    // launcher；退出时把本次运行时长累加到实例设置（GUI/CLI/MCP 同一入口）。
     let playtime = Arc::new(PlaytimeListener {
         inner: listener,
-        store: core.profile_store.clone(),
-        profile_id: profile.id.clone(),
+        instances: core.instances.clone(),
+        key: instance.summary.key.clone(),
         started: std::sync::Mutex::new(None),
     });
     let listener: Arc<dyn ProcessListener> = playtime.clone();
 
     let launcher = rmccc_launch::DefaultLauncher::new(
-        // `DefaultLauncher` 的 instance_id 用于定位 `versions/{id}/`（natives 等），
-        // 因此传版本 id 而非 profile id。
-        profile.game_version.clone(),
+        instance.summary.id.clone(),
         game_version,
         auth,
         options,
@@ -819,7 +804,7 @@ pub async fn launch_game(
         progress,
         ProgressMsg::Stage(format!(
             "🚀 启动 Minecraft {} (Java {})",
-            profile.game_version, java_install.major_version
+            instance.summary.game_version, java_install.major_version
         )),
     );
 
@@ -830,9 +815,11 @@ pub async fn launch_game(
     playtime.mark_started();
     emit(progress, ProgressMsg::StageDone("游戏已启动。".into()));
 
-    // last_played 在启动成功处更新（此前 CLI 在 exit 后、Tauri 在 spawn 后各写一遍）。
-    if let Err(e) = core.profile_store.touch(&profile.id) {
-        tracing::warn!(profile_id = %profile.id, error = %e, "Failed to update last_played");
+    // last_played 在启动成功处更新。
+    if let Ok(mut instances) = core.instances.lock() {
+        if let Err(e) = instances.touch(&instance.summary.key) {
+            tracing::warn!(instance = %instance.summary.key, error = %e, "Failed to update last_played");
+        }
     }
 
     Ok(managed)
@@ -842,7 +829,7 @@ pub async fn launch_game(
 mod tests {
     use super::*;
 
-    /// 游玩时长：on_exit 把开始计时后的实际秒数累加进 profile，并继续转发
+    /// 游玩时长：on_exit 把开始计时后的实际秒数累加进实例设置，并继续转发
     /// 内部监听器（呈现层仍能收到退出事件）。
     #[test]
     fn test_playtime_listener_records_elapsed_and_forwards_exit() {
@@ -857,38 +844,38 @@ mod tests {
             }
         }
 
-        let dir = std::env::temp_dir().join(format!(
-            "rmccc-playtime-{}-{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
-        let store = Arc::new(rmccc_profile::ProfileStore::new(dir.clone()));
-        let profile = rmccc_profile::Profile {
-            id: "p1".into(),
-            name: "Playtime".into(),
-            game_version: "1.20.4".into(),
-            play_time_seconds: 30,
-            ..Default::default()
-        };
-        store.save(&profile).unwrap();
+        let (dir, core) = test_env("playtime");
+        seed_version(&core, "1.20.4");
+        {
+            let mut instances = core.instances.lock().unwrap();
+            instances.refresh(Some("default"), true).unwrap();
+            let detail = instances.ensure_instance("default", "1.20.4").unwrap();
+            let mut settings = detail.settings;
+            settings.play_time_seconds = 30;
+            settings
+                .save(&detail.paths.instance_dir, core.platform.fs.as_ref())
+                .unwrap();
+        }
 
         let inner = Arc::new(RecordingListener::default());
         let listener = PlaytimeListener {
             inner: inner.clone(),
-            store: store.clone(),
-            profile_id: "p1".into(),
+            instances: core.instances.clone(),
+            key: "default/1.20.4".into(),
             started: std::sync::Mutex::new(Some(
                 std::time::Instant::now() - std::time::Duration::from_secs(90),
             )),
         };
         listener.on_exit(0, rmccc_launch::ExitType::Normal);
 
+        let detail = core
+            .instances
+            .lock()
+            .unwrap()
+            .get("default/1.20.4")
+            .unwrap();
         assert_eq!(
-            store.get("p1").unwrap().unwrap().play_time_seconds,
-            120,
+            detail.settings.play_time_seconds, 120,
             "90s session must add to the existing 30s"
         );
         assert_eq!(
@@ -923,7 +910,6 @@ mod tests {
     #[test]
     fn test_failure_tally_only_records_final_callback() {
         let tally = FailureTally::default();
-        // 中间进度：失败数还未定稿，不应被记住。
         tally.observe(&rmccc_download::DownloadProgress {
             batch_id: "b".into(),
             completed_files: 1,
@@ -935,7 +921,6 @@ mod tests {
         });
         assert_eq!(tally.get(), 0);
 
-        // 最终进度：current_file == None，失败数定稿。
         tally.observe(&rmccc_download::DownloadProgress {
             batch_id: "b".into(),
             completed_files: 4,
@@ -970,7 +955,6 @@ mod tests {
 
     #[test]
     fn test_inject_candidates_without_mirror_keeps_url() {
-        // 无镜像时 `DownloadProvider` 原样返回，候选列表为空（不 panic）。
         let provider = rmccc_download::provider::MojangDownloadProvider;
         let items = inject_candidates(
             &provider,
@@ -999,7 +983,6 @@ mod tests {
             r#"{"id":"1.20.4"}"#
         );
 
-        // 第二次调用不能覆盖已有内容（patched JSON 必须保留）。
         write_if_absent(&path, r#"{"id":"patched"}"#).expect("second write");
         assert_eq!(
             std::fs::read_to_string(&path).unwrap(),
@@ -1011,13 +994,11 @@ mod tests {
 
     // ── 编排测试（无网络）：覆盖 GUI / CLI 共用的三条链路 ──
 
-    /// 最小可用版本 JSON：无 client 下载、无依赖库、无资源索引，
-    /// 因此 `install_game` / `repair_instance` 都不会触网。
     const MINIMAL_VERSION_JSON: &str = r#"{
         "id": "1.20.4",
         "type": "release",
         "mainClass": "net.minecraft.client.main.Main",
-        "assetIndex": { "id": "", "url": "", "sha1": "", "size": 0, "total_size": 0 },
+        "assetIndex": { "id": "", "url": "", "sha1": "", "size": 0, "totalSize": 0 },
         "downloads": {},
         "libraries": [],
         "javaVersion": null
@@ -1031,37 +1012,25 @@ mod tests {
         (dir, core)
     }
 
+    fn game_root(core: &crate::CoreContext) -> std::path::PathBuf {
+        core.instances
+            .lock()
+            .unwrap()
+            .selected_directory()
+            .path
+            .clone()
+    }
+
     fn seed_version(core: &crate::CoreContext, version_id: &str) {
-        let dir = core
-            .config
-            .resolved_game_root()
-            .join("versions")
-            .join(version_id);
+        let dir = game_root(core).join("versions").join(version_id);
         std::fs::create_dir_all(&dir).expect("version dir");
-        std::fs::write(dir.join(format!("{version_id}.json")), MINIMAL_VERSION_JSON)
-            .expect("version json");
+        let json = MINIMAL_VERSION_JSON.replace("\"1.20.4\"", &format!("\"{version_id}\""));
+        std::fs::write(dir.join(format!("{version_id}.json")), json).expect("version json");
     }
 
-    fn seed_profile(
-        core: &crate::CoreContext,
-        id: &str,
-        version_id: &str,
-    ) -> rmccc_profile::Profile {
-        let profile = rmccc_profile::Profile {
-            id: id.to_string(),
-            name: format!("test-{id}"),
-            game_version: version_id.to_string(),
-            game_dir: core.config.resolved_game_root(),
-            ..Default::default()
-        };
-        core.profile_store.save(&profile).expect("save profile");
-        profile
-    }
-
-    /// 外置目录（HMCL）的版本不在主仓库索引里；launch 视图必须按 profile
-    /// 自己的 game_dir 临时建仓库解析，而不是回落到主游戏根。
-    #[tokio::test]
-    async fn test_external_profile_resolves_from_its_own_root() {
+    /// 外置目录（HMCL）必须能通过实例服务解析，而不是回落到主游戏根。
+    #[test]
+    fn test_external_directory_resolves_from_its_own_root() {
         let (dir, core) = test_env("external-resolve");
         let external_root = dir.join("hmcl/.minecraft");
         let version_id = "1.20.4-Forge";
@@ -1070,17 +1039,24 @@ mod tests {
         let json = MINIMAL_VERSION_JSON.replace("\"1.20.4\"", "\"1.20.4-Forge\"");
         std::fs::write(version_dir.join(format!("{version_id}.json")), json).expect("json");
 
-        let profile = rmccc_profile::Profile {
-            game_version: version_id.to_string(),
-            game_dir: external_root.clone(),
-            external_root: true,
-            ..Default::default()
-        };
-
-        let view = resolve_launch_view(&core.handle(), &profile)
-            .await
-            .expect("external view");
-        assert_eq!(view.id, version_id);
+        let mut instances = core.instances.lock().unwrap();
+        let directory = instances
+            .add_directory(
+                "HMCL",
+                &external_root,
+                rmccc_instance::GameDirectoryKind::External,
+            )
+            .expect("add directory");
+        let resolved = instances
+            .resolved_in_root(&external_root, version_id)
+            .expect("external resolve");
+        assert_eq!(resolved.launch.id, version_id);
+        assert!(instances
+            .list(Some(directory.id.as_str()), false, false)
+            .unwrap()
+            .iter()
+            .any(|i| i.id == version_id));
+        drop(instances);
 
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -1089,21 +1065,15 @@ mod tests {
     async fn test_install_game_noop_when_version_complete() {
         let (dir, core) = test_env("install-noop");
         seed_version(&core, "1.20.4");
-        let profile = seed_profile(&core, "p-install", "1.20.4");
+        let root = game_root(&core);
 
-        let report = install_game(&core.handle(), &profile, "1.20.4", None)
+        let report = install_game(&core.handle(), &root, "1.20.4", None)
             .await
             .expect("install_game");
 
         assert!(report.is_complete(), "no failed files expected");
         assert!(report.is_noop(), "complete version needs no downloads");
-        // 版本 JSON 仍在（不被覆盖）。
-        let json = core
-            .config
-            .resolved_game_root()
-            .join("versions")
-            .join("1.20.4")
-            .join("1.20.4.json");
+        let json = root.join("versions").join("1.20.4").join("1.20.4.json");
         assert!(json.exists());
 
         let _ = std::fs::remove_dir_all(&dir);
@@ -1113,10 +1083,12 @@ mod tests {
     async fn test_repair_instance_noop_when_nothing_downloadable() {
         let (dir, core) = test_env("repair-noop");
         seed_version(&core, "1.20.4");
-        refresh_repository(&core.handle()).expect("refresh");
+        let root = game_root(&core);
+        refresh_repository(&core.handle(), "default").expect("refresh");
 
         let report = repair_instance(
             &core.handle(),
+            &root,
             "1.20.4",
             None,
             rmccc_version::completion::CompletionVerify::Hash,
@@ -1134,10 +1106,15 @@ mod tests {
     async fn test_ensure_launch_ready_delegates_to_repair() {
         let (dir, core) = test_env("ensure-ready");
         seed_version(&core, "1.20.4");
-        refresh_repository(&core.handle()).expect("refresh");
-        let profile = seed_profile(&core, "p-ensure", "1.20.4");
+        refresh_repository(&core.handle(), "default").expect("refresh");
+        let detail = core
+            .instances
+            .lock()
+            .unwrap()
+            .ensure_instance("default", "1.20.4")
+            .expect("ensure");
 
-        let report = ensure_launch_ready(&core.handle(), &profile, None)
+        let report = ensure_launch_ready(&core.handle(), &detail, None)
             .await
             .expect("ensure_launch_ready");
 
@@ -1147,35 +1124,34 @@ mod tests {
     }
 
     #[test]
-    fn test_commit_install_points_profile_at_version_and_refreshes_index() {
+    fn test_commit_install_creates_instance_and_refreshes_index() {
         let (dir, core) = test_env("commit-install");
         seed_version(&core, "1.20.4");
-        let profile = seed_profile(&core, "p-commit", "0.0.0-nonexistent");
 
-        commit_install(&core.handle(), "p-commit", "1.20.4").expect("commit_install");
+        let detail = commit_install(&core.handle(), "default", "1.20.4").expect("commit_install");
+        assert_eq!(detail.summary.id, "1.20.4");
+        assert_eq!(detail.summary.key, "default/1.20.4");
+        assert!(detail.settings_exists);
 
-        let updated = core
-            .profile_store
-            .get(&profile.id)
-            .expect("get profile")
-            .expect("profile exists");
-        assert_eq!(updated.game_version, "1.20.4");
-        // 索引已刷新：新版本可被仓库解析。
-        let repo = core.game_repository.read().expect("repo lock");
-        assert!(repo.get_instance_ids().iter().any(|id| id == "1.20.4"));
+        let mut instances = core.instances.lock().unwrap();
+        assert!(instances
+            .list(None, false, false)
+            .unwrap()
+            .iter()
+            .any(|i| i.id == "1.20.4"));
+        drop(instances);
 
         let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
-    fn test_commit_install_rejects_unknown_profile() {
+    fn test_commit_install_rejects_unknown_directory() {
         let (dir, core) = test_env("commit-missing");
         let err = commit_install(&core.handle(), "nope", "1.20.4").expect_err("must fail");
-        assert!(matches!(err, RmcccError::ProfileNotFound(_)));
+        assert!(matches!(err, RmcccError::Validation(_)));
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    /// 无依赖的唯一后缀（避免引入 uuid 依赖）。
     fn uuid_like() -> String {
         use std::time::{SystemTime, UNIX_EPOCH};
         let nanos = SystemTime::now()

@@ -94,8 +94,8 @@ RMCL/
 │   │   └── src/
 │   │       ├── lib.rs            # ModSource trait + data types
 │   │       └── modrinth.rs       # Modrinth search / versions / download
-│   ├── rmccc-profile/            # Profile/instance management
-│   │   └── src/lib.rs            # ProfileStore JSON CRUD + launch options
+│   ├── rmccc-instance/           # Game directories + version-backed instances
+│   │   └── src/                  # directory registry, settings, service, migration
 │   ├── rmccc-platform/           # 平台适配层（Phase 1，指南 §5.7）
 │   │   └── src/                  # descriptor / fs / process / shell / java
 │   │                             # macOS 后端 + Windows/Linux 占位 + mock
@@ -169,8 +169,8 @@ rmccc-error                     # leaf — 统一错误类型 + ErrorCode
 
 rmccc-version    → error, download, platform
 rmccc-modloader  → error, download, platform, version
-rmccc-profile    → error, config, modloader
-rmccc-launch     → error, config, platform, version, profile
+rmccc-instance   → error, config, platform, version
+rmccc-launch     → error, config, platform, version, instance
 rmccc-core       → 以上全部（编排 + DI 容器）
 src-tauri (rmccc)     → rmccc-core + 全部子 crate
 src-cli   (rmccc-cli) → rmccc-core + 全部子 crate
@@ -298,22 +298,29 @@ pub trait DownloadManager: Send + Sync {
 ### 3.3 Key Data Models
 
 ```rust
-/// A game instance (profile)
-pub struct Profile {
-    pub id: String,                  // UUID
-    pub name: String,
-    pub game_version: String,        // e.g. "1.20.4"
-    pub mod_loader: Option<ModLoaderConfig>,
-    pub java_path: Option<String>,   // auto-detect if None
-    pub jvm_args: Vec<String>,       // extra JVM args
-    pub game_args: Vec<String>,      // extra game args
-    pub memory_mb: u32,              // heap size
-    pub game_dir: PathBuf,           // instance directory
-    pub created_at: DateTime<Utc>,
+// ADR-016: an instance is a version directory. There is no Profile UUID.
+// The on-disk manifest is the identity; `InstanceSettings` is an overlay.
+pub struct InstanceKey {
+    pub directory: GameDirectoryId, // registered game root
+    pub id: InstanceId,             // versions/{id}/{id}.json
+}
+
+pub struct InstanceSettings {       // {instance_root}/.rmccc/instance.json
+    pub display_name: Option<String>,
+    pub icon: InstanceIcon,
+    pub isolation: Option<IsolationPolicy>,
+    pub override_properties: BTreeSet<String>,
+    // Java / JVM / memory / window / process / graphics / env / wrapper /
+    // quick-play / native / diagnostics — full HMCL GameSettings set.
+}
+
+pub struct InstanceSummary {        // list row, no completeness scan
+    pub key: String,
+    pub game_version: String,        // base MC (root of inheritance chain)
+    pub loader: Option<LoaderInfo>,
+    pub path: PathBuf,               // versions/{id}
+    pub run_dir: PathBuf,            // isolation-aware
     pub last_played: Option<DateTime<Utc>>,
-    pub play_time_seconds: u64,      // cumulative play time (0 for legacy profiles)
-    pub external_root: bool,         // true = game_dir is an external HMCL dir
-    pub icon: Option<String>,        // custom icon path
 }
 
 pub struct ModLoaderConfig {
@@ -441,20 +448,18 @@ pub struct ModpackEntry {
 
 | 层 | 类型 | 存储 | 作用 |
 |----|------|------|------|
-| 全局默认值 | `rmccc_config::AppConfig` | `config/launcher-settings.json` | 所有可继承字段的回退值；`config` 是叶子 crate，不依赖 version |
-| 实例值 + 覆盖名单 | `rmccc_profile::Profile` | `profiles/{id}.json` | `override_properties` 列出真正采用实例值的字段；其余字段继承全局 |
-| 启动生效值 | `rmccc_profile::ResolvedInstanceSettings` | 不落盘 | `Profile::resolve(&AppConfig)` 的产物，`LaunchOptions::from_profile` 的唯一输入 |
+| 全局预设 | `rmccc_instance::GlobalGameSettings` | `config/game-settings.json` | 所有可继承字段的回退值（单默认预设，未来可扩展多预设） |
+| 实例值 + 覆盖名单 | `rmccc_instance::InstanceSettings` | `{instance_root}/.rmccc/instance.json` | `override_properties` 列出真正采用实例值的字段；其余字段继承全局 |
+| 启动生效值 | `rmccc_instance::EffectiveGameSettings` | 不落盘 | `InstanceSettings::resolve(&GlobalGameSettings)` 的产物，`LaunchOptions::from_instance` 的唯一输入 |
 
 **关键取舍（照抄 HMCL `overrideProperties`）**：字段的"值"与"是否覆盖"分开存。
 `override_properties` 不含某字段时该字段继承全局，但实例里已填的值**仍然保留在磁盘上**，
 因此用户在实例设置页来回切换"继承/独立"不会丢掉已输入的内容。
-`rmccc_profile::fields::ALL` 用常量列出全部可覆盖字段名，供后端校验、UI 与测试共用，
+`rmccc_instance::fields::ALL` 用常量列出全部可覆盖字段名，供后端校验、UI 与测试共用，
 避免三处各写一份字符串。
 
-> 与 HMCL 的差异：HMCL 把实例这半放在 `{instance_root}/.hmcl/config/instance-game-settings.json`，
-> 且全局侧是**可多套的"游戏设置预设"**（实例用 `parent` 引用其一）。RMCCC 目前只有一套全局默认值，
-> 实例这半存在 `profiles/{id}.json`——因为 RMCCC 的实例注册表就是 ProfileStore，而不是扫描 `versions/`；
-> 设置随实例复制/删除的语义不变。多预设是后续可选扩展。
+> 与 HMCL 对齐：实例设置放在 `{instance_root}/.rmccc/instance.json`（HMCL 是 `.hmcl/config/instance-game-settings.json`），
+> 随 `versions/{id}` 复制/重命名/删除自然移动。全局侧目前是单默认预设，`parent` 字段预留给多预设扩展。
 
 **隔离（"独立实例文件夹"）**：`isolation` 取 `never` / `modded` / `always`（默认 `modded`，同 HMCL）。
 它决定**运行目录**，而共享游戏根不变：
@@ -465,7 +470,7 @@ pub struct ModpackEntry {
 | `run_dir`（运行目录） | `--gameDir`、进程工作目录、`${game_directory}`、`INST_MC_DIR`、`mods/`、`saves/`、`options.txt` | 实例被隔离时 = `versions/{id}` |
 
 `rmccc_launch::instance_run_dir` / `instance_mods_dir` 是唯一的推导入口，
-`LaunchOptions::from_profile` 与模组命令都经它，避免"安装目录与启动目录不一致"这类事故重现。
+`LaunchOptions::from_instance` 与模组命令都经它，避免"安装目录与启动目录不一致"这类事故重现。
 详见 §15.1 的目录布局。
 
 ### 3.5 Rust Dependencies (Size-Optimized)
@@ -1034,7 +1039,7 @@ pub struct AppState {
     /// Active download tasks (handle_id → task state)
     pub downloads: Arc<DashMap<String, DownloadTaskState>>,
 
-    /// Running game processes (profile_id → child process)
+    /// Running game processes (instance key → child process)
     pub running_games: Arc<DashMap<String, tokio::process::Child>>,
 
     /// Token vault for encryption/decryption
@@ -1068,8 +1073,8 @@ impl AppState {
 
 ### 8.2 Multi-Instance Policy
 
-- **允许**：同一时间运行多个 MC 实例（不同 profile）
-- **限制**：同一 profile 不可同时运行两个实例（`running_games` map 检查）
+- **允许**：同一时间运行多个 MC 实例（不同 `directory/id` key）
+- **限制**：同一实例 key 不可同时运行两个进程（`running_games` map 检查）
 - **内存预检**：启动前估算所需内存，超出系统可用内存时警告
 
 ### 8.3 Download Control Granularity
@@ -1137,13 +1142,12 @@ export function createDownloadStore() {
 ```typescript
 // ipc/types.ts — AUTO-GENERATED by ts-rs, do not edit manually
 // Rust structs with #[derive(TS)] produce matching TypeScript interfaces:
-// interface Profile { id: string; name: string; ... }
+// interface InstanceDetail { summary: InstanceSummary; settings: InstanceSettings; ... }
 // interface IpcError { code: ErrorCode; message: string; retryable: boolean; }
-// etc.
 
 // ipc/api.ts — MANUAL API wrapper, imports types from types.ts
 import { invoke } from "@tauri-apps/api/core";
-import type { AuthSession, Profile, VersionInfo, ... } from "./types";
+import type { InstanceDetail, GameDirectory, VersionInfo, ... } from "./types";
 
 // Auth
 export const auth = {
@@ -1153,46 +1157,60 @@ export const auth = {
   getSession: () => invoke<AuthSession | null>("auth_get_session"),
 };
 
-// Profiles
-export const profiles = {
-  list: () => invoke<Profile[]>("profile_list"),
-  create: (opts: CreateProfileOpts) => invoke<Profile>("profile_create", { opts }),
-  delete: (id: string, cleanupGameDir: boolean) => invoke<void>("profile_delete", { id, cleanupGameDir }),
-  update: (id: string, opts: UpdateProfileOpts) => invoke<void>("profile_update", { id, opts }),
-  import: (filePath: string) => invoke<Profile>("profile_import", { filePath }),
-  export: (id: string, destPath: string) => invoke<void>("profile_export", { id, destPath }),
+// Game directories + instances (ADR-016). Every instance command takes a
+// composite `{directory_id}/{instance_id}` key.
+export const gameDirectories = {
+  list: () => invoke<GameDirectory[]>("game_directory_list"),
+  selected: () => invoke<GameDirectory>("game_directory_selected"),
+  add: (path: string, name?: string) => invoke<GameDirectory>("game_directory_add", { path, name }),
+  select: (id: string) => invoke<GameDirectory>("game_directory_select", { id }),
+  remove: (id: string) => invoke<void>("game_directory_remove", { id }),
 };
 
-// Versions
+export const instances = {
+  list: () => invoke<InstanceDetail[]>("instance_list"),
+  get: (key: string) => invoke<InstanceDetail>("instance_get", { key }),
+  install: (directoryId: string, mcVersion: string, instanceId?: string) =>
+    invoke<void>("instance_install", { directoryId, mcVersion, instanceId }),
+  updateSettings: (key: string, opts: InstanceSettingsPatch) =>
+    invoke<InstanceDetail>("instance_update_settings", { key, opts }),
+  paths: (key: string) => invoke<InstancePaths>("instance_paths", { key }),
+  resolvedSettings: (key: string) => invoke<ResolvedInstanceSettings>("instance_resolved_settings", { key }),
+  rename: (key: string, newId: string) => invoke<InstanceDetail>("instance_rename", { key, newId }),
+  duplicate: (key: string, newId: string, copySaves: boolean) =>
+    invoke<InstanceDetail>("instance_duplicate", { key, newId, copySaves }),
+  remove: (key: string, deleteFiles: boolean) => invoke<void>("instance_remove", { key, deleteFiles }),
+  repair: (key: string) => invoke<number>("instance_repair", { key }),
+};
+
+// Versions (remote catalogue only; installation is instance_install)
 export const versions = {
   list: () => invoke<VersionInfo[]>("version_list"),
-  install: (version: string, profileId: string) => invoke<void>("version_install", { version, profileId }),
 };
 
-// Mod Loaders (unified)
+// Mod Loaders (unified): install creates a new version-backed instance.
 export const modloaders = {
   list: (loaderType: string, gameVersion: string) =>
     invoke<LoaderVersion[]>("modloader_list", { loaderType, gameVersion }),
-  install: (profileId: string, loaderType: string, loaderVersion: string) =>
-    invoke<void>("modloader_install", { profileId, loaderType, loaderVersion }),
+  install: (key: string, loaderType: string, loaderVersion: string) =>
+    invoke<string>("modloader_install", { key, loaderType, loaderVersion }),
 };
 
-// Mods
+// Mods (key = directory/instance)
 export const mods = {
   search: (query: string, source: string) => invoke<ModSearchResult>("mod_search", { query, source }),
-  install: (profileId: string, modId: string, versionId: string) =>
-    invoke<void>("mod_install", { profileId, modId, versionId }),
-  remove: (profileId: string, modId: string) => invoke<void>("mod_remove", { profileId, modId }),
-  list: (profileId: string) => invoke<InstalledMod[]>("mod_list", { profileId }),
-  toggle: (profileId: string, modId: string, enabled: boolean) =>
-    invoke<void>("mod_toggle", { profileId, modId, enabled }),
+  install: (key: string, version: ModVersion) => invoke<string>("mod_install", { key, version }),
+  remove: (key: string, modFilename: string) => invoke<void>("mod_remove", { key, modFilename }),
+  list: (key: string) => invoke<ModList>("mod_list", { key }),
+  toggle: (key: string, modFilename: string, enabled: boolean) =>
+    invoke<void>("mod_toggle", { key, modFilename, enabled }),
 };
 
 // Launch
 export const launch = {
-  start: (profileId: string) => invoke<void>("launch_start", { profileId }),
-  getStatus: () => invoke<LaunchStatus>("launch_status"),
-  kill: (profileId: string) => invoke<void>("launch_kill", { profileId }),
+  start: (key: string) => invoke<void>("launch_start", { key }),
+  getStatus: () => invoke<string[]>("launch_status"),
+  kill: (key: string) => invoke<void>("launch_kill", { key }),
 };
 
 // Downloads (all batch-scoped)
@@ -1417,29 +1435,43 @@ ai_* 5 条 + mods 纯逻辑 2 条取代，S4/S5 再加 mcp_* 9 条）。
 | `mcp_status` | `mcp.rs` | MCP 服务器状态（开关/端口/令牌/会话/待确认数） |
 | `mcp_set_enabled` | `mcp.rs` | 启停 MCP 服务器（默认关闭；开启即监听回环） |
 | `mcp_regenerate_token` | `mcp.rs` | 重新生成 Bearer Token 并断开全部会话 |
-| `mcp_tools_list` / `mcp_tools_set` | `mcp.rs` | 31 工具目录与逐工具策略覆盖（allow/confirm/deny） |
+| `mcp_tools_list` / `mcp_tools_set` | `mcp.rs` | 30 工具目录与逐工具策略覆盖（allow/confirm/deny） |
 | `mcp_sessions_disconnect` | `mcp.rs` | 断开指定（或全部）外部会话 |
 | `mcp_confirmations_list` | `mcp.rs` | 待确认的破坏性操作（确认卡数据） |
 | `mcp_confirmation_resolve` | `mcp.rs` | 用户放行/拒绝一次破坏性调用 |
 | `mcp_recent_calls` | `mcp.rs` | 最近 MCP 调用审计（脱敏视图） |
 | `modloader_list` | `modloader.rs` | List loader versions (`loader_type` param) |
-| `modloader_install` | `modloader.rs` | Install mod loader (emits install progress) |
+| `modloader_install` | `modloader.rs` | Install loader; creates a new version-backed instance and returns its key |
 | `mod_search` | `mods.rs` | Search mods (Modrinth) |
 | `mod_get_versions` | `mods.rs` | List versions of a mod |
 | `mod_get_download_url` | `mods.rs` | Resolve a download URL |
 | `mod_list` | `mods.rs` | List installed mods (active + disabled) |
 | `mod_toggle` | `mods.rs` | Enable/disable mod (move to/from `mods/disabled/`) |
 | `mod_install` | `mods.rs` | Download + install mod (remote) |
-| `mod_remove` | `mods.rs` | Remove mod from profile |
+| `mod_remove` | `mods.rs` | Remove mod from an instance run dir |
 | `mod_install_local` | `mods.rs` | Install mod from a local file path |
 | `mod_pick_and_install` | `mods.rs` | System file picker + install (local mod) |
 | `mods_dependency_scan` | `mods.rs` | 纯逻辑依赖扫描（缺失必需/冲突/未解析，ADR-013 §4.4） |
 | `mods_apply_plan` | `mods.rs` | 一键补装缺失前置（Modrinth 匹配 + SHA1 校验，纯逻辑无 AI） |
-| `profile_list` | `profile.rs` | List all profiles |
-| `profile_create` | `profile.rs` | Create new profile |
-| `profile_import_version` | `profile.rs` | Import an external (HMCL) version as a launchable profile |
-| `profile_update` | `profile.rs` | Update profile settings |
-| `profile_delete` | `profile.rs` | Delete profile; `cleanup_game_dir` optionally removes the isolated game dir (guarded against shared roots) |
+| `game_directory_list` | `instance.rs` | List registered game roots |
+| `game_directory_selected` | `instance.rs` | The active game root |
+| `game_directory_add` / `update` / `remove` / `select` | `instance.rs` | Registry CRUD (never deletes files) |
+| `instance_list` | `instance.rs` | Detailed instances for a directory (settings + paths, no completeness scan) |
+| `instance_get` | `instance.rs` | Instance detail by `{directory}/{id}` |
+| `instance_refresh` | `instance.rs` | Rescan a directory, emit `instances://refreshed` |
+| `instance_update_settings` | `instance.rs` | Settings/override/display-name/icon/isolation patch |
+| `instance_resolved_settings` | `instance.rs` | Effective values (global preset + overrides) |
+| `instance_paths` | `instance.rs` | Game root / run dir / mods dir / natives / settings file |
+| `instance_select` | `instance.rs` | Persist the selected instance key |
+| `instance_install` | `instance.rs` | Download + create an instance (optional loader) |
+| `instance_import` | `instance.rs` | Register an already-installed version |
+| `instance_rename` | `instance.rs` | Rename id + manifest + child `inheritsFrom` |
+| `instance_duplicate` | `instance.rs` | Duplicate (optional `saves/`) |
+| `instance_remove` | `instance.rs` | Hide (`delete_files=false`) or delete `versions/{id}` |
+| `instance_check_completion` | `instance.rs` | Report missing files (hash-level) |
+| `instance_repair` | `instance.rs` | Download missing files |
+| `instance_global_settings` | `instance.rs` | Global game-settings preset |
+| `instance_update_global_settings` | `instance.rs` | Replace the global preset |
 | `settings_get` | `settings.rs` | Get global settings |
 | `settings_set` | `settings.rs` | Update global settings (debounced `FileSaver` write) |
 | `settings_get_user` | `settings.rs` | Get user-level settings (UI language, update check) |
@@ -1447,7 +1479,6 @@ ai_* 5 条 + mods 纯逻辑 2 条取代，S4/S5 再加 mcp_* 9 条）。
 | `settings_supported_locales` | `settings.rs` | List shipped UI languages with their native names |
 | `java_detect` | `settings.rs` | Auto-detect Java installations |
 | `version_list` | `version.rs` | List available MC versions (with cache) |
-| `version_install` | `version.rs` | Install MC version; returns a real `batch_id` |
 | `instance_list` | `instance.rs` | List instances from the local repository index |
 | `instance_refresh` | `instance.rs` | Rescan `versions/`, emit `instances://refreshed` |
 | `instance_rename` | `instance.rs` | Rename an instance |
@@ -1620,104 +1651,87 @@ strategy:
 ```
 {data_dir}/                          # Platform data dir (CLI `-d` overrides)
 ├── config/
-│   └── launcher-settings.json       # Global settings ($schema versioned)
+│   ├── launcher-settings.json       # Launcher behavior (paths/download/UI)
+│   ├── game-settings.json           # Global game-settings preset
+│   └── game-directories.json        # Registered game roots + selected instance
 ├── state/
-│   └── launcher-state.json          # Runtime state (loss-tolerant)
+│   ├── launcher-state.json          # Runtime state (loss-tolerant)
+│   └── instance-migration-v2.json   # One-shot legacy profile migration marker
 ├── user-settings.json               # User-level preferences
 ├── .key                             # AES-256 encryption key (600 / icacls)
 ├── accounts.json                    # Plaintext account metadata + selected
-├── private/
-│   ├── account-private-data.json    # AES-256-GCM encrypted private data
-│   ├── agent-credentials.json       # AI 服务凭据 vault（service=`llm`，ADR-013；文件名沿用 agent 时代以无缝迁移）
-│   └── agent.key                    # 上述 vault 的加密 key（600；与账号 .key 隔离）
+├── private/                         # Encrypted account/agent credentials
 ├── .api_keys/                       # API keys (separate from settings)
-│   └── curseforge                   # CurseForge API key
-├── cache/                           # Offline caches
-│   ├── versions.json                # Cached version list (TTL)
-│   └── objects/{sha1[0:2]}/{sha1}   # SHA1-keyed download cache
-├── profiles/                        # Profile definitions
-│   ├── {profile-id-1}.json
-│   └── {profile-id-2}.json
-├── instances/                       # Default game root (.minecraft equivalent)
-│   ├── versions/                    # Local instance index source
+├── cache/                           # Offline caches + SHA1 object cache
+├── profiles/                        # LEGACY read-only profiles (migration only)
+├── instances/                       # Default managed game root (.minecraft equivalent)
+│   ├── versions/                    # Instance source of truth
 │   ├── libraries/  assets/          # Shared across instances
 │   └── launcher_profiles.json       # Created on demand (Forge/LiteLoader need it)
-├── agent/                           # 审计目录（ADR-010；ADR-013 后会话/任务存储已退役）
-│   └── audit.jsonl                  # 工具调用审计（结构保留，MCP 服务器 S4/S5 落地时由宿主写入）
+├── agent/                           # Audit directory (ADR-010; ADR-013)
 └── logs/                            # Launcher logs
-    ├── rmccc-2026-07-29.log         # Daily rolling, 10 kept
-    └── rmccc-2026-07-28.log
 
-{game_dir}/                          # Per-profile game directory
+{game_dir}/                          # Any registered game root (managed or external)
 ├── versions/
-│   └── 1.20.4/
-│       ├── 1.20.4.json              # Version metadata
-│       ├── 1.20.4.jar               # Client JAR
-│       ├── natives-{platform}/      # Extracted natives (HMCL layout)
-│       └── .abnormal                # Crash marker, cleared on normal exit
-├── libraries/                       # Shared libraries
-│   └── com/google/...
-├── assets/                          # Game assets
-│   ├── indexes/
-│   └── objects/
-├── mods/                            # Installed mods
-│   ├── sodium-0.5.5.jar
-│   ├── lithium-0.12.0.jar
-│   └── disabled/                    # Disabled mods (toggled)
-│       └── iris-1.7.0.jar.disabled
+│   └── 1.20.4-fabric/
+│       ├── 1.20.4-fabric.json       # Manifest (also the instance identity)
+│       ├── 1.20.4-fabric.jar        # Optional (inherits parent JAR when absent)
+│       ├── natives-{platform}/      # Extracted natives
+│       ├── .abnormal                # Crash marker, cleared on normal exit
+│       └── .rmccc/
+│           ├── instance.json        # Per-instance settings overlay
+│           └── instance.json.tmp    # Atomic write staging (transient)
+├── libraries/  assets/              # Shared across instances
+├── mods/                            # Run-dir mods (isolated instances use versions/{id}/mods)
+│   └── disabled/
 ├── resourcepacks/
 └── logs/
 ```
 
-### 15.2 Profile JSON Schema
+### 15.2 Instance Settings Schema
 
-> `game_dir` 指向**共享游戏根**（`.minecraft` 等价目录），版本/依赖库/资源在其中只存一份、
-> 跨实例复用；安装、`GameRepository` 索引与启动器一律以该目录为准。
-> 每实例隔离属于 `IsolationType`，只影响运行目录（存档/mods/options.txt）。
+`{instance_root}/.rmccc/instance.json` (instance-local, moves with the version):
 
 ```json
 {
-  "id": "550e8400-e29b-41d4-a716-446655440000",
-  "name": "Survival Pack",
-  "game_version": "1.20.4",
-  "mod_loader": {
-    "loader_type": "fabric",
-    "loader_version": "0.15.6"
-  },
-  "isolation": null,
-  "override_properties": ["java_path", "memory_mb"],
-  "java_path": null,
-  "jvm_args": ["-XX:+UseG1GC", "-XX:+ParallelRefProcEnabled"],
+  "$schema": "https://rmcl.snowebsite.top/json/schema/instance-settings/1.0.0",
+  "display_name": "Survival Pack",
+  "icon": { "type": "auto" },
+  "isolation": "always",
+  "override_properties": ["max_memory_mb", "jvm_args"],
+  "java_type": "custom",
+  "custom_java_path": "/Library/Java/JavaVirtualMachines/jdk-21.jdk/Contents/Home",
+  "jvm_args": ["-XX:+UseG1GC"],
   "game_args": [],
-  "memory_mb": 4096,
-  "game_dir": "/Users/xxx/Library/Application Support/rmccc/instances",
+  "max_memory_mb": 4096,
+  "min_memory_mb": null,
+  "metaspace_mb": null,
+  "process_priority": "normal",
+  "window_type": "windowed",
+  "width": 854,
+  "height": 480,
+  "running_directory": null,
+  "launcher_visibility": "hide",
+  "graphics_backend": "default",
+  "quick_play": "none",
+  "env_vars": {},
   "created_at": "2026-07-29T10:00:00Z",
   "last_played": null,
-  "play_time_seconds": 45240,
-  "external_root": false,
-  "icon": null
+  "play_time_seconds": 45240
 }
 ```
 
-> `isolation`（`never`/`modded`/`always`，`null` = 跟随全局 `default_isolation`）与
-> `override_properties`（覆盖名单，见 §3.4）是继承模型的一部分：名单内的字段取实例值，
-> 其余取全局默认值；**实例里填过的值即使不覆盖也保留在文件中**。
+> `isolation`（`never`/`modded`/`always`，`null` = 跟随全局预设）只决定运行目录；
+> `override_properties`（覆盖名单，见 §3.4）决定哪些字段取实例值，其余取
+> `config/game-settings.json`。**实例里填过的值即使不覆盖也保留在文件中**。
 >
-> `play_time_seconds` 是累计游玩时长（秒）：启动管线在进程实际 spawn 后开始计时，
-> 进程退出时经 `ProfileStore::add_play_time` 累加（不含安装/修复时间）；旧 profile
-> 缺少该字段时按 0 读取，无需迁移。应用在游戏运行中退出则本次时长不记。
+> `running_directory` 是 HMCL `runningDirectory` 的对等物：非空时覆盖隔离推导
+> （绝对路径，或相对 `{game_dir}`）。旧字段 `external_root` 已取消——实例归属由
+> `game-directories.json` 的目录注册表表达。
 >
-> `external_root = true` 的实例来自用户手动添加的外部游戏目录（HMCL 等）：
-> `game_dir` 是该版本的权威根（versions/libraries/assets 都在其中），
-> `rmccc_launch::instance_game_root` 会用它覆盖全局 `game_root_dir`，启动、完整性
-> 检查与修复均按该根执行；删除实例时**永不**清理该目录（只移除 profile 记录）。
->
-> 扩展字段（全部 `#[serde(default)]`，旧 JSON 可无损加载）：`min_memory_mb`、
-> `metaspace_mb`、`process_priority`、`width` / `height` / `fullscreen`、
-> `use_native_glfw` / `use_native_openal` / `use_custom_natives`、
-> `no_generated_jvm_args` / `no_generated_optimizing_jvm_args`、
-> `enable_debug_log_output`、`wrapper`、`java_agents`、`override_jvm_args`、
-> `pre_launch_command`、`post_exit_command`、`env_vars`。
+> 旧 `profiles/{uuid}.json` 仅在首启迁移时读取：根 = `external_root ? game_dir : 默认目录`，
+> 实例 id = `game_version`；版本 JSON 不存在的 profile 跳过并记诊断。迁移完成后旧文件
+> 保留但不再读取。`state/instance-migration-v2.json` 是实现幂等的标记。
 
 ## 16. Testing Strategy
 
@@ -2164,7 +2178,7 @@ stdin/stdout，一行一个 JSON：
 ## 25. AI 服务与外部 Agent 控制（Phase 6 方向重定义，ADR-013）
 
 > 决策记录：[ADR-013](adr/ADR-013-lightweight-ai-and-external-mcp.md)（轻干预 · 轻 AI）。
-> 完整设计（含 MCP 服务器 31 工具目录、确认流、部署方式）见
+> 完整设计（含 MCP 服务器 30 工具目录、确认流、部署方式）见
 > [`AI_AND_MCP_ARCHITECTURE.md`](AI_AND_MCP_ARCHITECTURE.md)；本节只记录已落地形态。
 > 历史：原「内建 Agent 平台」方向（执行循环 / 工具注册表 / 会话存储，ADR-010 的会话部分）
 > 已于 2026-10-23 退役，当时的全景记录见 [`audits/`](audits/)。
@@ -2238,3 +2252,4 @@ stdin/stdout，一行一个 JSON：
   → **deferred / release-blocked**（权限语义与账号 vault 相同）。
 - 旧面清理：`/agent` 路由重定向到 `/settings`；`agent_*` 9 条 IPC 移除，
   前端无引用（`ipc_tests` 计数断言 93）。
+

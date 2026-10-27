@@ -21,9 +21,9 @@ import {
   RmEmptyState,
   RmErrorState,
 } from "../components/rm/surfaces";
-import { profiles, instances, mods, modLoader, settings as settingsApi } from "../ipc/api";
+import { instances, mods, modLoader, settings as settingsApi } from "../ipc/api";
 import type {
-  Profile,
+  InstanceDetail as InstanceDetailData,
   InstancePaths,
   ResolvedInstanceSettings,
   MissingFileInfo,
@@ -32,8 +32,8 @@ import type {
   ModsDependencyScanView,
   AppliedPlanReport,
 } from "../ipc/types";
-import type { ProfileUpdateOpts } from "../ipc/api";
-import { profilesStore } from "../stores/profiles";
+import { instancesStore } from "../stores/instances";
+import { toInstanceView, toSettingsPatch, type InstanceView } from "../lib/instanceView";
 import { launchStore } from "../stores/launch";
 import { modloadersStore } from "../stores/modloaders";
 import { downloadsStore } from "../stores/downloads";
@@ -59,10 +59,36 @@ export default function InstanceDetail(): JSX.Element {
   const navigate = useNavigate();
   const [tab, setTab] = useHashTab("overview", TABS.map((x) => x.id));
 
-  const profileId = () => params.id ?? "";
-  const profile = createMemo(
-    () => profilesStore.items()?.find((p) => p.id === profileId()) ?? null
+  const profileId = () => {
+    const raw = params.id ?? "";
+    try {
+      return decodeURIComponent(raw);
+    } catch {
+      return raw;
+    }
+  };
+  const [loaded, setLoaded] = createSignal<InstanceDetailData | null>(null);
+  const [loadError, setLoadError] = createSignal<string | null>(null);
+  const detail = createMemo(
+    () => instancesStore.get(profileId()) ?? loaded()
   );
+  const profile = createMemo(() => {
+    const data = detail();
+    return data ? toInstanceView(data) : null;
+  });
+
+  async function load(): Promise<void> {
+    const res = await instances.get(profileId());
+    if (res.ok) {
+      setLoaded(res.data);
+      instancesStore.upsert(res.data);
+      setLoadError(null);
+    } else {
+      setLoadError(res.error.message);
+    }
+  }
+
+  onMount(() => void load());
 
   // Unsaved-settings guard (P1-13): SettingsTab reports dirty upward so a tab
   // switch confirms before the Switch unmounts the draft.
@@ -109,7 +135,7 @@ export default function InstanceDetail(): JSX.Element {
               <RmButton size="sm" variant="danger" icon="square" onClick={() => void launchStore.stop(profileId())}>
                 {t("common.stop")}
               </RmButton>
-              <RmButton size="sm" icon="terminal" onClick={() => uiStore.openLogDrawer(params.id)}>
+              <RmButton size="sm" icon="terminal" onClick={() => uiStore.openLogDrawer(profile()?.id ?? null)}>
                 {t("home.viewLog")}
               </RmButton>
             </Show>
@@ -162,7 +188,7 @@ export default function InstanceDetail(): JSX.Element {
 
 // ── Toolbar menus ──
 
-function BrowseMenu(props: { profile: Profile }): JSX.Element {
+function BrowseMenu(props: { profile: InstanceView }): JSX.Element {
   const [paths, setPaths] = createSignal<InstancePaths | null>(null);
   // Key on the profile id, not the object: the store refreshes produce new
   // objects even when nothing changed (perf audit 2.5).
@@ -185,7 +211,7 @@ function BrowseMenu(props: { profile: Profile }): JSX.Element {
     <RmMenu
       side="right"
       items={[
-        { label: `${t("instanceDetail.browse.gameDir")}: ${elidePath(paths()?.game_root ?? "")}`, onSelect: () => paths() && copy(paths()!.game_root) },
+        { label: `${t("instanceDetail.browse.gameDir")}: ${elidePath(paths()?.game_dir ?? "")}`, onSelect: () => paths() && copy(paths()!.game_dir) },
         { label: `${t("instanceDetail.browse.runDir")}: ${elidePath(paths()?.run_dir ?? "")}`, onSelect: () => paths() && copy(paths()!.run_dir) },
         { label: `${t("instanceDetail.browse.mods")}: ${elidePath(paths()?.mods_dir ?? "")}`, onSelect: () => paths() && copy(paths()!.mods_dir) },
       ]}
@@ -195,7 +221,7 @@ function BrowseMenu(props: { profile: Profile }): JSX.Element {
   );
 }
 
-function ManageMenu(props: { profile: Profile }): JSX.Element {
+function ManageMenu(props: { profile: InstanceView }): JSX.Element {
   const navigate = useNavigate();
   const [deleteOpen, setDeleteOpen] = createSignal(false);
   return (
@@ -204,19 +230,19 @@ function ManageMenu(props: { profile: Profile }): JSX.Element {
         // 侧栏底部按钮：向上弹出（红框位置），避免向下遮住按钮本身。
         side="up"
         items={[
-          { label: t("instances.menu.rename"), icon: "edit", onSelect: () => void renameProfile(props.profile) },
+          { label: t("instances.menu.rename"), icon: "edit", onSelect: () => void renameInstanceView(props.profile) },
           { label: t("instances.menu.browseMods"), icon: "package", onSelect: () => navigate(`/download?instance=${props.profile.id}#mods`) },
           { label: t("instanceDetail.manage.delete"), icon: "trash", danger: true, onSelect: () => setDeleteOpen(true) },
         ]}
       >
         <RmButton size="sm" icon="more-horizontal">{t("instanceDetail.manage")}</RmButton>
       </RmMenu>
-      <DeleteInstanceDialog profile={props.profile} open={deleteOpen()} onClose={() => setDeleteOpen(false)} />
+      <DeleteInstanceDialog instance={{ key: props.profile.id, name: props.profile.name, external: props.profile.external_root }} open={deleteOpen()} onClose={() => setDeleteOpen(false)} />
     </>
   );
 }
 
-async function renameProfile(profile: Profile): Promise<void> {
+async function renameInstanceView(profile: InstanceView): Promise<void> {
   // WKWebView 不支持 window.prompt —— 统一走 prompt 对话框。
   const next = await promptText({
     title: t("instances.menu.rename"),
@@ -224,9 +250,9 @@ async function renameProfile(profile: Profile): Promise<void> {
     initial: profile.name,
   });
   if (!next || next === profile.name) return;
-  const res = await profiles.update(profile.id, { name: next });
+  const res = await updateInstance(profile.id, { name: next });
   if (res.ok) {
-    profilesStore.upsert(res.data);
+    instancesStore.upsert(res.data);
     toast({ message: t("instances.renamed"), tone: "success" });
   } else {
     toast({ message: res.error.message, tone: "error" });
@@ -234,9 +260,20 @@ async function renameProfile(profile: Profile): Promise<void> {
 }
 
 
+async function updateInstance(
+  key: string,
+  opts: Record<string, unknown>
+): Promise<{ ok: true; data: InstanceDetailData } | { ok: false; error: { message: string } }> {
+  const res = await instances.updateSettings(key, toSettingsPatch(opts));
+  if (res.ok) instancesStore.upsert(res.data);
+  return res as
+    | { ok: true; data: InstanceDetailData }
+    | { ok: false; error: { message: string } };
+}
+
 // ── Tab 1 · Overview ──
 
-function OverviewTab(props: { profile: Profile; onGoTab: (tab: string) => void }): JSX.Element {
+function OverviewTab(props: { profile: InstanceView; onGoTab: (tab: string) => void }): JSX.Element {
   const navigate = useNavigate();
   const [paths, setPaths] = createSignal<InstancePaths | null>(null);
   const [resolved, setResolved] = createSignal<ResolvedInstanceSettings | null>(null);
@@ -285,7 +322,7 @@ function OverviewTab(props: { profile: Profile; onGoTab: (tab: string) => void }
       <RmCard title={t("instanceDetail.overview.paths")}>
         <For
           each={[
-            { label: t("instanceDetail.browse.gameDir"), value: paths()?.game_root },
+            { label: t("instanceDetail.browse.gameDir"), value: paths()?.game_dir },
             { label: t("instanceDetail.browse.runDir"), value: paths()?.run_dir },
             { label: t("instanceDetail.browse.mods"), value: paths()?.mods_dir },
           ]}
@@ -321,7 +358,7 @@ function OverviewTab(props: { profile: Profile; onGoTab: (tab: string) => void }
 
 // ── Tab 2 · Mods management ──
 
-function ModsTab(props: { profile: Profile }): JSX.Element {
+function ModsTab(props: { profile: InstanceView }): JSX.Element {
   const navigate = useNavigate();
   const [enabled, setEnabled] = createSignal<string[]>([]);
   const [disabled, setDisabled] = createSignal<string[]>([]);
@@ -583,7 +620,8 @@ function incompatibleWith(current: string): string[] {
   return [];
 }
 
-function LoadersTab(props: { profile: Profile }): JSX.Element {
+function LoadersTab(props: { profile: InstanceView }): JSX.Element {
+  const navigate = useNavigate();
   const [versionDialog, setVersionDialog] = createSignal<string | null>(null);
   const [versions_, setVersions_] = createSignal<LoaderVersion[]>([]);
   const [loadingVersions, setLoadingVersions] = createSignal(false);
@@ -628,8 +666,13 @@ function LoadersTab(props: { profile: Profile }): JSX.Element {
     if (!loaderType || !selectedVersion()) return;
     setVersionDialog(null);
     const res = await modLoader.install(props.profile.id, loaderType, selectedVersion());
-    if (!res.ok) toast({ message: res.error.message, tone: "error" });
-    else toast({ message: t("instanceDetail.loader.started"), tone: "info" });
+    if (!res.ok) {
+      toast({ message: res.error.message, tone: "error" });
+      return;
+    }
+    toast({ message: t("instanceDetail.loader.started"), tone: "info" });
+    await instancesStore.refresh(true);
+    navigate(`/instances/${encodeURIComponent(res.data)}#loaders`);
   }
 
   return (
@@ -732,14 +775,14 @@ const OVERRIDABLE_FIELDS = [
 const ICON_MAX_BYTES = 512 * 1024;
 
 /** Instance icon picker (profile.icon; stored as a data URL, "" clears). */
-function InstanceIconCard(props: { profile: Profile }): JSX.Element {
+function InstanceIconCard(props: { profile: InstanceView }): JSX.Element {
   let fileInput: HTMLInputElement | undefined;
   const icon = () => props.profile.icon;
 
   async function saveIcon(dataUrl: string): Promise<void> {
-    const res = await profiles.update(props.profile.id, { icon: dataUrl });
+    const res = await updateInstance(props.profile.id, { icon: dataUrl });
     if (res.ok) {
-      profilesStore.upsert(res.data);
+      instancesStore.upsert(res.data);
       toast({ message: t("common.saved"), tone: "success" });
     } else {
       toast({ message: res.error.message, tone: "error" });
@@ -792,7 +835,7 @@ function InstanceIconCard(props: { profile: Profile }): JSX.Element {
   );
 }
 
-function SettingsTab(props: { profile: Profile; onDirtyChange: (dirty: boolean) => void }): JSX.Element {
+function SettingsTab(props: { profile: InstanceView; onDirtyChange: (dirty: boolean) => void }): JSX.Element {
   const [resolved, setResolved] = createSignal<ResolvedInstanceSettings | null>(null);
   const [javas, setJavas] = createSignal<JavaInfo[]>([]);
   const [draftOverrides, setDraftOverrides] = createSignal<Set<string>>(
@@ -849,7 +892,18 @@ function SettingsTab(props: { profile: Profile; onDirtyChange: (dirty: boolean) 
   const overridden = (field: string): boolean => draftOverrides().has(field);
   const effective = (field: string): unknown => {
     if (overridden(field)) return values()[field];
-    return (resolved() as unknown as Record<string, unknown>)?.[field];
+    const data = resolved() as unknown as Record<string, unknown> | null;
+    if (!data) return undefined;
+    switch (field) {
+      case "memory_mb":
+        return data.max_memory_mb;
+      case "java_path":
+        return data.custom_java_path;
+      case "fullscreen":
+        return data.window_type === "fullscreen";
+      default:
+        return data[field];
+    }
   };
 
   // Resolution is one logical field: the lock covers width+height as a pair
@@ -892,7 +946,7 @@ function SettingsTab(props: { profile: Profile; onDirtyChange: (dirty: boolean) 
         .split("\n")
         .map((l) => l.trim())
         .filter(Boolean);
-    const opts: ProfileUpdateOpts = {
+    const opts: Record<string, unknown> = {
       override_properties: [...draftOverrides()],
     };
     const overrides = new Set(draftOverrides());
@@ -927,9 +981,9 @@ function SettingsTab(props: { profile: Profile; onDirtyChange: (dirty: boolean) 
         case "no_generated_optimizing_jvm_args": opts.no_generated_optimizing_jvm_args = Boolean(v.no_generated_optimizing_jvm_args); break;
       }
     }
-    const res = await profiles.update(props.profile.id, opts);
+    const res = await updateInstance(props.profile.id, opts);
     if (res.ok) {
-      profilesStore.upsert(res.data);
+      instancesStore.upsert(res.data);
       // env_vars is a plain field: follow the textarea, but only when it
       // actually changed (no second IPC on untouched saves).
       if (envText() !== envInitial) {
@@ -939,9 +993,9 @@ function SettingsTab(props: { profile: Profile; onDirtyChange: (dirty: boolean) 
           if (idx <= 0) continue;
           env[line.slice(0, idx).trim()] = line.slice(idx + 1).trim();
         }
-        const envRes = await profiles.update(props.profile.id, { env_vars: env });
+        const envRes = await updateInstance(props.profile.id, { env_vars: env });
         if (envRes.ok) {
-          profilesStore.upsert(envRes.data);
+          instancesStore.upsert(envRes.data);
           envInitial = envText();
         }
       }
@@ -1132,7 +1186,7 @@ function SettingsTab(props: { profile: Profile; onDirtyChange: (dirty: boolean) 
 
 // ── Tab 5 · Maintenance ──
 
-function MaintenanceTab(props: { profile: Profile }): JSX.Element {
+function MaintenanceTab(props: { profile: InstanceView }): JSX.Element {
   const [missing, setMissing] = createSignal<MissingFileInfo[] | null>(null);
   const [checking, setChecking] = createSignal(false);
   const [repairing, setRepairing] = createSignal(false);
@@ -1218,9 +1272,9 @@ function MaintenanceTab(props: { profile: Profile }): JSX.Element {
             size="sm"
             disabled={running() || isolation() === (props.profile.isolation ?? "never")}
             onClick={async () => {
-              const res = await profiles.update(props.profile.id, { isolation: isolation() });
+              const res = await updateInstance(props.profile.id, { isolation: isolation() });
               if (res.ok) {
-                profilesStore.upsert(res.data);
+                instancesStore.upsert(res.data);
                 void instances.paths(props.profile.id).then((r) => r.ok && setPaths(r.data));
                 toast({ message: t("common.saved"), tone: "success" });
               } else toast({ message: res.error.message, tone: "error" });
@@ -1240,7 +1294,7 @@ function MaintenanceTab(props: { profile: Profile }): JSX.Element {
 
       <RmCard title={t("instanceDetail.maintenance.danger")} danger>
         <div class="btn-row">
-          <RmButton icon="edit" onClick={() => void renameProfile(props.profile)}>
+          <RmButton icon="edit" onClick={() => void renameInstanceView(props.profile)}>
             {t("instances.menu.rename")}
           </RmButton>
           <RmButton variant="danger" icon="trash" disabled={running()} onClick={() => setDeleteOpen(true)}>
@@ -1249,7 +1303,7 @@ function MaintenanceTab(props: { profile: Profile }): JSX.Element {
         </div>
       </RmCard>
 
-      <DeleteInstanceDialog profile={props.profile} open={deleteOpen()} onClose={() => setDeleteOpen(false)} />
+      <DeleteInstanceDialog instance={{ key: props.profile.id, name: props.profile.name, external: props.profile.external_root }} open={deleteOpen()} onClose={() => setDeleteOpen(false)} />
     </div>
   );
 }

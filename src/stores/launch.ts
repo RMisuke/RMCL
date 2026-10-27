@@ -6,7 +6,7 @@ import { createRoot, createSignal } from "solid-js";
 import { launch, instances } from "../ipc/api";
 import { EVENTS } from "../ipc/events";
 import { listen } from "@tauri-apps/api/event";
-import { profilesStore } from "./profiles";
+import { instancesStore } from "./instances";
 import { uiStore } from "./ui";
 import { t } from "../i18n";
 
@@ -142,7 +142,7 @@ export const launchStore = createRoot(() => {
    * crash (P1-7).
    */
   async function stop(profileId: string): Promise<void> {
-    const name = profilesStore.items()?.find((p) => p.id === profileId)?.name ?? profileId;
+    const name = instancesStore.items()?.find((p) => p.summary.key === profileId)?.summary.display_name ?? profileId;
     const allowed = await uiStore.confirm({
       title: t("launch.stopConfirm.title"),
       body: t("launch.stopConfirm.body", { name }),

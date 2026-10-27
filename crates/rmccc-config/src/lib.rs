@@ -189,7 +189,7 @@ pub struct AppConfig {
     // ── Global game defaults (HMCL `GameSettings` at the global level) ──
     //
     // Every one of these is a *fallback* for the matching per-instance field in
-    // `rmccc_profile::Profile`: an instance that leaves the field unset
+    // `rmccc_instance::InstanceSettings`: an instance that leaves the field unset
     // (`None`) uses the value here, exactly like HMCL's `InheritableProperty`.
     /// Default JVM arguments, used by instances that override none.
     #[serde(default)]

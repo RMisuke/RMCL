@@ -7,6 +7,7 @@ import { downloadsStore } from "../stores/downloads";
 import { uiStore } from "../stores/ui";
 import { t } from "../i18n";
 import type { TranslationKey } from "../i18n/locales/messages";
+import { themeSkin } from "../theme";
 
 interface DockItem {
   href: string;
@@ -75,6 +76,8 @@ const TitleBar: Component = () => {
 
   const runningCount = () => launchStore.running().size;
   const downloadCount = () => Object.keys(downloadsStore.batches).length;
+  const skin = () => themeSkin();
+  const iconUrl = (name: IconName) => skin()?.navigation?.icons?.[name];
 
   // `data-tauri-drag-region="deep"` makes the whole bar draggable (Tauri walks
   // the composed path); the dock/window buttons are clickable elements and stay
@@ -82,6 +85,19 @@ const TitleBar: Component = () => {
   return (
     <div class="titlebar" data-tauri-drag-region="deep">
       <div class="titlebar-brand">SNGL</div>
+
+      {/* 主题 v2：导航两侧装饰（纯图片，不接管指针） */}
+      <For each={skin()?.navigation?.ornaments ?? []}>
+        {(ornament) => (
+          <img
+            class={`titlebar-ornament is-${ornament.side}`}
+            src={ornament.image}
+            style={{ width: `${ornament.width}px`, opacity: ornament.opacity }}
+            alt=""
+            aria-hidden="true"
+          />
+        )}
+      </For>
 
       {/* 顶部 Dock 导航（图标 + 文字），取代左侧栏（ui/home-hero-dock 试验分支） */}
       <nav class="titlebar-dock" role="navigation">
@@ -92,7 +108,12 @@ const TitleBar: Component = () => {
               onClick={() => navigate(item.href)}
               title={t(item.label)}
             >
-              <Icon name={item.icon} size={16} />
+              <Show
+                when={iconUrl(item.icon)}
+                fallback={<Icon name={item.icon} size={16} />}
+              >
+                <img class="dock-icon" src={iconUrl(item.icon)!} alt="" />
+              </Show>
               <span class="dock-item-label">{t(item.label)}</span>
               <Show when={item.href === "/instances" && runningCount() > 0}>
                 <span class="dock-badge">{runningCount()}</span>

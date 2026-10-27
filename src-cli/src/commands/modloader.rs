@@ -88,7 +88,7 @@ async fn remove(ctx: &CliContext, profile: &str) -> CliResult<Value> {
     Ok(json!({
         "removed": true,
         "profile": profile,
-        "game_version": updated.game_version,
+        "game_version": updated.summary.game_version,
     }))
 }
 

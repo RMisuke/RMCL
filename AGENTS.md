@@ -47,7 +47,7 @@ RMCL/
 │   ├── PROJECT_STATUS.md          # 轮次变更记录
 │   ├── RMCCC_PLUGIN_PLATFORM_ARCHITECTURE_GUIDE.md  # 插件平台目标架构（含 §1.4 当前 macOS-only 约束、§5.7 平台适配层）
 │   ├── README.md                  # docs 分类索引
-│   ├── adr/                       # 架构决策记录（ADR-002–007、009–011、013 accepted；001/008/012/014 proposed）
+│   ├── adr/                       # 架构决策记录（ADR-002–007、009–011、013、014 accepted；001/008/012 proposed）
 │   ├── audits/                    # 全量审计 + 增量台账（AUDIT_2026-10-20 / 10-23，agent 部分已标注 ADR-013 取代）
 │   ├── guides/                    # 运维手册 / 插件编写指南
 │   ├── roadmap/                   # 细化执行计划（Phase 0–7 + 平台适配）

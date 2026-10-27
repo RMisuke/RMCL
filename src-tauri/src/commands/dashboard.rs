@@ -13,11 +13,15 @@ use crate::state::AppState;
 use rmccc_core::rmccc_dashboard::{
     builtin_dark, builtin_ember, builtin_forest, builtin_light, builtin_list, builtin_ocean,
     builtin_paper, builtin_sakura, builtin_sky, extract_tokens, theme_mode, ThemeInfo, ThemeJson,
-    ThemeTokens, WidgetDescriptor, WidgetRegistry, MAX_THEME_BYTES,
+    ThemeSkin, ThemeTokens, WidgetDescriptor, WidgetRegistry, MAX_THEME_BYTES,
 };
+use rmccc_core::rmccc_plugin::theme::ThemeDocument;
+use rmccc_core::rmccc_plugin::theme_assets::{validate_theme_assets, FsAssetReader};
 use rmccc_error::{ErrorCode, IpcError};
+use serde::Serialize;
 use serde_json::{json, Value};
 use std::path::Path;
+use ts_rs::TS;
 
 fn registry(core: &rmccc_core::CoreContext) -> WidgetRegistry {
     let cards = core.plugin_manager.contributions().dashboard_cards;
@@ -208,6 +212,77 @@ async fn validate_theme_choice(
     let theme = ThemeJson::parse(&raw)?;
     extract_tokens(&theme)?;
     Ok(())
+}
+
+/// v2 皮肤的已解析结果（资产已变成 `rmcccplugin://` 只读 URL）。
+#[derive(Debug, Clone, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "types.ts")]
+pub struct ThemeSkinPayload {
+    pub key: String,
+    pub plugin_id: String,
+    /// 主题文档是否包含 v2 皮肤段。
+    pub requires_skin: bool,
+    /// 插件是否持有 `themes.skin`（false 时只应用配色）。
+    pub granted: bool,
+    pub skin: Option<ThemeSkin>,
+}
+
+impl ThemeSkinPayload {
+    fn empty(key: &str) -> Self {
+        Self {
+            key: key.to_string(),
+            plugin_id: String::new(),
+            requires_skin: false,
+            granted: false,
+            skin: None,
+        }
+    }
+}
+
+/// 读取主题 v2 皮肤（字体/形状/间距/背景/组件/特效/导航）。
+///
+/// 纯配色主题（v1）或未授权 `themes.skin` 时返回 `skin: None`，前端只应用颜色。
+/// 资产在运行期再校验一次（存在性/大小/魔数/SVG 内容），防止安装后被手改。
+#[tauri::command]
+#[tracing::instrument(skip(state))]
+pub async fn dashboard_get_theme_skin(
+    state: tauri::State<'_, AppState>,
+    key: String,
+) -> Result<ThemeSkinPayload, IpcError> {
+    if builtin_tokens(&key).is_some() {
+        return Ok(ThemeSkinPayload::empty(&key));
+    }
+    let core = state.core.read().await;
+    let contributions = core.plugin_manager.contributions();
+    let Some(view) = contributions.themes.iter().find(|t| t.key == key) else {
+        return Ok(ThemeSkinPayload::empty(&key));
+    };
+    let Some(dir) = core.plugin_manager.installed_dir(&view.plugin_id) else {
+        return Ok(ThemeSkinPayload::empty(&key));
+    };
+    let raw = read_theme_text(&dir, &view.theme.path)?;
+    let document = ThemeDocument::parse(&raw)?;
+    let requires_skin = document.requires_skin();
+    let granted = core
+        .plugin_manager
+        .authorize(&view.plugin_id, "themes.skin", None, None)
+        .is_ok();
+
+    let mut payload = ThemeSkinPayload {
+        key: key.clone(),
+        plugin_id: view.plugin_id.clone(),
+        requires_skin,
+        granted,
+        skin: None,
+    };
+    if !requires_skin || !granted {
+        return Ok(payload);
+    }
+
+    validate_theme_assets(&document, &mut FsAssetReader::new(&dir))?;
+    payload.skin = Some(ThemeSkin::from_document(&document, &view.plugin_id));
+    Ok(payload)
 }
 
 #[tauri::command]

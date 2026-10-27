@@ -14,6 +14,7 @@ path = "src/lib.rs"
 
 [dependencies]
 rmccc-core = { workspace = true }
+rmccc-instance = { workspace = true }
 rmccc-auth = { workspace = true }
 rmccc-config = { workspace = true }
 rmccc-download = { workspace = true }
@@ -21,7 +22,6 @@ rmccc-version = { workspace = true }
 rmccc-launch = { workspace = true }
 rmccc-modloader = { workspace = true }
 rmccc-mods = { workspace = true }
-rmccc-profile = { workspace = true }
 rmccc-error = { workspace = true }
 rmccc-plugin = { workspace = true }
 

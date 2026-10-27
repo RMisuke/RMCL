@@ -14,6 +14,7 @@ use std::borrow::Cow;
 use std::net::{IpAddr, SocketAddr};
 use std::time::Duration;
 
+use rmccc_core::rmccc_plugin::theme_assets;
 use rmccc_core::rmccc_plugin::ui::{self, BridgeError, BridgeErrorCode};
 use rmccc_error::{IpcError, RmcccError};
 use serde::Serialize;
@@ -32,6 +33,11 @@ const MAX_NETWORK_REQUEST_BODY: usize = 64 * 1024;
 
 /// `rmcccplugin://` 方案处理器：校验来源/路径/授权后返回文件内容。
 ///
+/// 两条路由：
+/// - `ui/...`：插件隔离 UI（需要 `dashboard.cards` 或 `ui.pages`）；
+/// - `assets/...`：主题皮肤资产（需要 `themes.apply` + `themes.skin`），
+///   支持图片/字体/视频，视频带 Range；字体带 CORS（`@font-face` 需要）。
+///
 /// 拒绝路径一律返回 403/404 + 纯文本体，不回显包内目录结构。
 pub async fn serve_asset(
     app: &tauri::AppHandle,
@@ -42,13 +48,28 @@ pub async fn serve_asset(
     let uri = request.uri();
     let plugin_id = uri.host().unwrap_or_default();
     let path = uri.path();
+    let range_header = request
+        .headers()
+        .get("range")
+        .and_then(|value| value.to_str().ok())
+        .map(str::to_string);
 
-    let Ok(asset_path) = ui::validate_asset_path(path) else {
-        return text_response(403, "forbidden: asset path");
-    };
     if rmccc_plugin_id_is_invalid(plugin_id) {
         return text_response(403, "forbidden: plugin id");
     }
+
+    enum Route {
+        Ui(String),
+        Theme(String),
+    }
+
+    let route = match ui::validate_asset_path(path) {
+        Ok(path) => Route::Ui(path),
+        Err(_) => match ui::validate_theme_asset_path(path) {
+            Ok(path) => Route::Theme(path),
+            Err(_) => return text_response(403, "forbidden: asset path"),
+        },
+    };
 
     let state = app.state::<AppState>();
     // 异步协议处理器：await 读锁（绝不阻塞 WKWebView 主线程）。
@@ -56,23 +77,35 @@ pub async fn serve_asset(
     let Some(dir) = core.plugin_manager.installed_dir(plugin_id) else {
         return text_response(404, "plugin not installed");
     };
-    // UI 资源只对"已启用且持有 UI 能力"的插件开放；撤销能力后 iframe 立即失效。
-    if core
-        .plugin_manager
-        .ensure_enabled(plugin_id)
-        .and_then(|()| {
-            core.plugin_manager
+    let allowed = core.plugin_manager.ensure_enabled(plugin_id).is_ok()
+        && match &route {
+            Route::Ui(_) => core
+                .plugin_manager
                 .authorize(plugin_id, "dashboard.cards", None, None)
                 .or_else(|_| {
                     core.plugin_manager
                         .authorize(plugin_id, "ui.pages", None, None)
                 })
-        })
-        .is_err()
-    {
-        return text_response(403, "forbidden: plugin is not allowed to render UI");
+                .is_ok(),
+            Route::Theme(_) => {
+                core.plugin_manager
+                    .authorize(plugin_id, "themes.apply", None, None)
+                    .is_ok()
+                    && core
+                        .plugin_manager
+                        .authorize(plugin_id, "themes.skin", None, None)
+                        .is_ok()
+            }
+        };
+    if !allowed {
+        return text_response(403, "forbidden: plugin is not allowed to serve this asset");
     }
     drop(core);
+
+    let (asset_path, is_theme) = match route {
+        Route::Ui(path) => (path, false),
+        Route::Theme(path) => (path, true),
+    };
 
     let file = dir.join(&asset_path);
     let Ok(metadata) = std::fs::metadata(&file) else {
@@ -81,7 +114,12 @@ pub async fn serve_asset(
     if !metadata.is_file() {
         return text_response(404, "asset not found");
     }
-    if metadata.len() > ui::MAX_ASSET_BYTES {
+    let max_bytes = if is_theme {
+        theme_assets::max_bytes(&asset_path)
+    } else {
+        ui::MAX_ASSET_BYTES
+    };
+    if metadata.len() > max_bytes {
         return text_response(413, "asset too large");
     }
     let Ok(bytes) = std::fs::read(&file) else {
@@ -89,19 +127,83 @@ pub async fn serve_asset(
     };
 
     let content_type = ui::content_type(&asset_path);
+    let total = bytes.len();
+    let (status, body, content_range) =
+        if is_theme && content_type.starts_with("video/") && total > 0 {
+            match range_header
+                .as_deref()
+                .and_then(|raw| parse_byte_range(raw, total))
+            {
+                Some((start, end)) => (
+                    206,
+                    bytes[start..=end].to_vec(),
+                    Some(format!("bytes {start}-{end}/{total}")),
+                ),
+                None => (200, bytes, None),
+            }
+        } else {
+            (200, bytes, None)
+        };
+
     let mut builder = tauri::http::Response::builder()
-        .status(200)
+        .status(status)
         .header("Content-Type", content_type)
         .header("X-Content-Type-Options", "nosniff")
         .header("Cache-Control", "no-store")
-        .header("Content-Length", bytes.len().to_string());
+        .header("Content-Length", body.len().to_string());
+    if let Some(content_range) = content_range {
+        builder = builder
+            .header("Content-Range", content_range)
+            .header("Accept-Ranges", "bytes");
+    }
+    if is_theme {
+        // 主题资产是包内公开资源；字体需要 CORS 才能被 @font-face 使用。
+        builder = builder.header("Access-Control-Allow-Origin", "*");
+        if content_type.starts_with("image/svg") {
+            // 即使有人直接打开 SVG，也不允许脚本/外部资源。
+            builder = builder.header(
+                "Content-Security-Policy",
+                "default-src 'none'; style-src 'unsafe-inline'",
+            );
+        }
+        if content_type.starts_with("video/") {
+            builder = builder.header("Accept-Ranges", "bytes");
+        }
+    }
     if content_type.starts_with("text/html") {
         // 只在文档上带 CSP：子资源不需要，但带上也无害。
         builder = builder.header("Content-Security-Policy", ui::CSP);
     }
     builder
-        .body(Cow::<'static, [u8]>::Owned(bytes))
+        .body(Cow::<'static, [u8]>::Owned(body))
         .unwrap_or_else(|_| text_response(500, "response error"))
+}
+
+/// 解析单段 `Range: bytes=start-end`；不合法时返回 `None`（退回 200 全量）。
+fn parse_byte_range(raw: &str, total: usize) -> Option<(usize, usize)> {
+    let spec = raw.strip_prefix("bytes=")?;
+    if spec.contains(',') || total == 0 {
+        return None;
+    }
+    let (start, end) = spec.split_once('-')?;
+    if start.is_empty() {
+        let suffix: usize = end.parse().ok()?;
+        if suffix == 0 {
+            return None;
+        }
+        let start = total.saturating_sub(suffix);
+        return Some((start, total - 1));
+    }
+    let start: usize = start.parse().ok()?;
+    if start >= total {
+        return None;
+    }
+    let end = if end.is_empty() {
+        total - 1
+    } else {
+        end.parse::<usize>().ok()?.min(total - 1)
+    };
+    (end >= start).then_some((start, end))
 }
 
 fn rmccc_plugin_id_is_invalid(plugin_id: &str) -> bool {
@@ -282,21 +384,33 @@ pub async fn plugin_ui_invoke(
         }
         "instances.list" => {
             let core = state.core.read().await;
-            match core.profile_store.list() {
-                Ok(profiles) => {
-                    let items: Vec<Value> = profiles
+            let result = {
+                let mut service = match core.instances.lock() {
+                    Ok(service) => service,
+                    Err(_) => {
+                        return Ok(BridgeReply::err(
+                            BridgeErrorCode::Internal,
+                            "instance service lock poisoned",
+                        ))
+                    }
+                };
+                service.list(None, false, false)
+            };
+            match result {
+                Ok(instances) => {
+                    let items: Vec<Value> = instances
                         .iter()
-                        .map(|p| {
+                        .map(|i| {
                             json!({
-                                "id": p.id,
-                                "name": p.name,
-                                "gameVersion": p.game_version,
-                                "loader": p.mod_loader.as_ref().map(|l| json!({
-                                    "type": serde_json::to_value(&l.loader_type).unwrap_or(Value::Null),
-                                    "version": l.loader_version,
+                                "key": i.key,
+                                "id": i.id,
+                                "name": i.display_name,
+                                "gameVersion": i.game_version,
+                                "loader": i.loader.as_ref().map(|l| json!({
+                                    "type": l.kind,
+                                    "version": l.version,
                                 })),
-                                "memoryMb": p.memory_mb,
-                                "lastPlayed": p.last_played,
+                                "lastPlayed": i.last_played,
                             })
                         })
                         .collect();
@@ -744,6 +858,18 @@ fn consume_stream(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn parses_single_byte_ranges() {
+        assert_eq!(parse_byte_range("bytes=0-99", 1000), Some((0, 99)));
+        assert_eq!(parse_byte_range("bytes=900-", 1000), Some((900, 999)));
+        assert_eq!(parse_byte_range("bytes=-100", 1000), Some((900, 999)));
+        assert_eq!(parse_byte_range("bytes=0-5000", 1000), Some((0, 999)));
+        assert_eq!(parse_byte_range("bytes=1000-", 1000), None);
+        assert_eq!(parse_byte_range("bytes=5-1", 1000), None);
+        assert_eq!(parse_byte_range("bytes=0-1,2-3", 1000), None);
+        assert_eq!(parse_byte_range("items=0-1", 1000), None);
+    }
 
     #[test]
     fn blocks_local_and_private_addresses() {

@@ -48,7 +48,7 @@ RMCL/
 │   ├── rmccc-launch/       # Java 检测、响应文件、进程管理
 │   ├── rmccc-modloader/    # Mod 加载器安装
 │   ├── rmccc-mods/         # Mods 相关 API
-│   ├── rmccc-profile/      # 实例（Profile）管理
+│   ├── rmccc-instance/     # 游戏目录 + 版本实例 + 设置
 │   ├── rmccc-platform/     # 平台适配层
 │   ├── rmccc-plugin/       # 声明式插件系统
 │   ├── rmccc-dashboard/    # Dashboard 布局与主题

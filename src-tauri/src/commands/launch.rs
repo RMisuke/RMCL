@@ -34,7 +34,7 @@ const LOG_FLUSH_WINDOW_MS: u64 = 100;
 /// `running_games`.
 struct TauriProcessListener {
     app_handle: tauri::AppHandle,
-    profile_id: String,
+    key: String,
     running_games: Arc<dashmap::DashMap<String, u32>>,
     /// 每实例输出环形缓冲（AI 日志分析 / MCP game_logs 的 latest.log 回退源）。
     game_output: Arc<dashmap::DashMap<String, Arc<std::sync::Mutex<Vec<String>>>>>,
@@ -50,7 +50,7 @@ impl TauriProcessListener {
     fn emit_lines(&self, lines: Vec<String>) {
         let _ = self.app_handle.emit(
             crate::events::LAUNCH_OUTPUT,
-            serde_json::json!({ "profile_id": self.profile_id, "lines": lines }),
+            serde_json::json!({ "key": self.key, "profile_id": self.key, "lines": lines }),
         );
     }
 
@@ -69,7 +69,7 @@ impl TauriProcessListener {
 
 impl rmccc_launch::ProcessListener for TauriProcessListener {
     fn on_log(&self, line: String, _is_stderr: bool) {
-        if let Some(buf) = self.game_output.get(&self.profile_id) {
+        if let Some(buf) = self.game_output.get(&self.key) {
             let mut lines = buf.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
             lines.push(line.clone());
             let excess = lines.len().saturating_sub(GAME_OUTPUT_CAP);
@@ -91,20 +91,21 @@ impl rmccc_launch::ProcessListener for TauriProcessListener {
     }
 
     fn on_exit(&self, exit_code: i32, exit_type: rmccc_launch::ExitType) {
-        self.running_games.remove(&self.profile_id);
+        self.running_games.remove(&self.key);
         // Emit whatever the coalescer still holds so the UI sees the final
         // lines before the exit banner.
         self.flush_pending();
         let _ = self.app_handle.emit(
             crate::events::LAUNCH_EXITED,
             serde_json::json!({
-                "profile_id": self.profile_id,
+                "key": self.key,
+                "profile_id": self.key,
                 "exit_code": exit_code,
                 "exit_type": format!("{:?}", exit_type),
             }),
         );
         tracing::info!(
-            profile_id = %self.profile_id,
+            key = %self.key,
             exit_code = exit_code,
             exit_type = ?exit_type,
             "Game process exited"
@@ -114,15 +115,12 @@ impl rmccc_launch::ProcessListener for TauriProcessListener {
 
 #[tauri::command]
 #[tracing::instrument(skip(state), fields(request_id = %uuid::Uuid::new_v4()))]
-pub async fn launch_start(
-    state: tauri::State<'_, AppState>,
-    profile_id: String,
-) -> Result<(), IpcError> {
+pub async fn launch_start(state: tauri::State<'_, AppState>, key: String) -> Result<(), IpcError> {
     // ── Guard: prevent duplicate launch ──
-    if state.running_games.contains_key(&profile_id) {
+    if state.running_games.contains_key(&key) {
         return Err(IpcError {
             code: rmccc_error::ErrorCode::AlreadyRunning,
-            message: format!("Profile '{profile_id}' is already running"),
+            message: format!("Instance '{key}' is already running"),
             retryable: false,
         });
     }
@@ -143,7 +141,7 @@ pub async fn launch_start(
 
     let listener: Arc<dyn rmccc_launch::ProcessListener> = Arc::new(TauriProcessListener {
         app_handle: state.app_handle.clone(),
-        profile_id: profile_id.clone(),
+        key: key.clone(),
         running_games: state.running_games.clone(),
         game_output: state.game_output.clone(),
         pending: std::sync::Mutex::new(Vec::new()),
@@ -155,7 +153,7 @@ pub async fn launch_start(
     // 必须在 spawn 之前建好，on_log 才有地方落行。
     let output_buf = state
         .game_output
-        .entry(profile_id.clone())
+        .entry(key.clone())
         .or_insert_with(|| Arc::new(std::sync::Mutex::new(Vec::new())));
     output_buf
         .lock()
@@ -163,7 +161,7 @@ pub async fn launch_start(
         .clear();
     drop(output_buf);
 
-    // ── 解析 profile → 启动前修复 → 启动（编排全在 pipeline）──
+    // ── 解析实例 → 启动前修复 → 启动（编排全在 pipeline）──
     // A2：ensure_launch_ready 可能触发修复下载、launch_game 含 Java 探测与
     // 进程 spawn——handle 快照后立即释放读锁，全程不持 core 锁。
     let core = {
@@ -171,34 +169,34 @@ pub async fn launch_start(
         core.handle()
     };
     let pid = {
-        let profile = core
-            .profile_store
-            .get(&profile_id)?
-            .ok_or_else(|| IpcError {
-                code: rmccc_error::ErrorCode::ProfileNotFound,
-                message: format!("Profile not found: {profile_id}"),
+        let instance = {
+            let mut service = core.instances.lock().map_err(|_| IpcError {
+                code: rmccc_error::ErrorCode::InternalError,
+                message: "Instance service lock poisoned".into(),
                 retryable: false,
             })?;
+            service.get(&key)?
+        };
 
         // 启动前完整性检查与自动补齐（HMCL checkGameCompletionAsync）。
-        let repaired = rmccc_core::pipeline::ensure_launch_ready(&core, &profile, None).await?;
+        let repaired = rmccc_core::pipeline::ensure_launch_ready(&core, &instance, None).await?;
         if !repaired.is_noop() {
             tracing::info!(
-                profile_id = %profile_id,
+                key = %key,
                 files = repaired.total_files,
                 "Pre-launch resources repaired"
             );
         }
 
-        rmccc_core::pipeline::launch_game(&core, &profile, listener, None)
+        rmccc_core::pipeline::launch_game(&core, &instance, listener, None)
             .await?
             .pid()
     };
 
-    state.running_games.insert(profile_id.clone(), pid);
+    state.running_games.insert(key.clone(), pid);
     let _ = state.app_handle.emit(
         crate::events::LAUNCH_STARTED,
-        serde_json::json!({ "profile_id": profile_id, "pid": pid }),
+        serde_json::json!({ "key": key, "profile_id": key, "pid": pid }),
     );
 
     Ok(())
@@ -206,16 +204,13 @@ pub async fn launch_start(
 
 #[tauri::command]
 #[tracing::instrument(skip(state))]
-pub async fn launch_kill(
-    state: tauri::State<'_, AppState>,
-    profile_id: String,
-) -> Result<(), IpcError> {
+pub async fn launch_kill(state: tauri::State<'_, AppState>, key: String) -> Result<(), IpcError> {
     // 注意：dashmap 的 get() 读守卫绝不能活到 remove() —— 同分片写锁会被
     // 自己的读守卫挡住（自死锁），命令会永久挂起、表项删不掉（曾导致
     // "游戏已退出但界面仍显示运行中"）。先拷贝 pid 让守卫立即释放。
-    let pid = state.running_games.get(&profile_id).map(|p| *p);
+    let pid = state.running_games.get(&key).map(|p| *p);
     if let Some(pid) = pid {
-        tracing::info!(profile_id = %profile_id, pid = pid, "Killing game process");
+        tracing::info!(key = %key, pid = pid, "Killing game process");
 
         // 终止方式由平台后端决定（Unix 进程组 SIGKILL；Windows 待 Job Object）。
         // 本层不再出现 `#[cfg(unix)]` / `taskkill`（指南 §5.7，P2-17）。
@@ -223,9 +218,9 @@ pub async fn launch_kill(
         if let Err(e) = core.platform.process.terminate_tree(pid) {
             // 终止失败也不能挂住表项：进程可能已自行退出（ESRCH 已按成功处理），
             // 其余错误记日志后仍移除，交给前端 launch_status 对账兜底。
-            tracing::warn!(profile_id = %profile_id, pid = pid, error = ?e, "terminate_tree failed; removing entry anyway");
+            tracing::warn!(key = %key, pid = pid, error = ?e, "terminate_tree failed; removing entry anyway");
         }
-        state.running_games.remove(&profile_id);
+        state.running_games.remove(&key);
     }
     Ok(())
 }

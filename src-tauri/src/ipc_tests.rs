@@ -20,7 +20,6 @@
 #![allow(clippy::unwrap_used, clippy::panic)]
 
 use rmccc_error::{ErrorCode, IpcError, RmcccError};
-use rmccc_version::GameRepository as _;
 use std::path::PathBuf;
 
 // ────────────────────────── 测试脚手架 ──────────────────────────
@@ -112,10 +111,7 @@ fn ipc_registry_is_covered_by_the_frontend_api() {
         "mod_install_local",
         // ADR-002：这几个命令是**版本仓库维护**（id = 版本 id），不对应 UI 概念。
         // 前端只消费 profile 视角的 paths / check_completion / repair。
-        "instance_list",
-        "instance_rename",
-        "instance_duplicate",
-        "instance_remove",
+        "game_directory_selected",
         // ADR-013 S4/S5：MCP 管理面（ui-design 07 §2）。服务器与命令已落地，
         // 设置页分区随整体前端重构接线。
         "mcp_status",
@@ -152,8 +148,9 @@ fn ipc_command_count_is_stable() {
     // → 100：settings_app_info（关于页：SNGL 启动器版本 / RMCCC 内核版本）。
     // → 97：dashboard_get/save/reset_layout 三条随 HomeDashboard 网格下线
     // → 98：profile_import_version（外置目录版本导入为可启动实例）
+    // → 99：dashboard_get_theme_skin（主题 v2 皮肤，ADR-014）
     //        （前端审计 B3-1；hero 主页布局改走 localStorage）。
-    assert_eq!(crate::handlers::IPC_COMMANDS.len(), 98);
+    assert_eq!(crate::handlers::IPC_COMMANDS.len(), 106);
 }
 
 // ────────────────────────── 2. 错误码契约 ──────────────────────────
@@ -449,84 +446,88 @@ fn incomplete_installers_are_not_installable() {
     }
 }
 
-// ────────────────────────── 5. 正向契约：profile ──────────────────────────
+// ────────────────────────── 5. 正向契约：instance service ──────────────────────────
+
+fn selected_root(core: &rmccc_core::CoreContext) -> PathBuf {
+    core.instances
+        .lock()
+        .unwrap()
+        .selected_directory()
+        .path
+        .clone()
+}
+
+fn write_minimal_version(core: &rmccc_core::CoreContext, id: &str) {
+    let dir = selected_root(core).join("versions").join(id);
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(
+        dir.join(format!("{id}.json")),
+        format!(
+            r#"{{"id":"{id}","type":"release","mainClass":"net.minecraft.client.main.Main","assetIndex":{{"id":"","url":"","sha1":"","size":0,"totalSize":0}},"downloads":{{}},"libraries":[],"javaVersion":null}}"#
+        ),
+    )
+    .unwrap();
+}
 
 #[test]
-fn profile_list_is_empty_on_a_fresh_data_dir() {
-    let (dir, core) = temp_core("profiles-empty");
-    assert!(core.profile_store.list().unwrap().is_empty());
+fn instance_service_starts_with_one_directory_and_no_instances() {
+    let (dir, core) = temp_core("instances-empty");
+    let mut service = core.instances.lock().unwrap();
+    assert_eq!(service.directories().len(), 1);
+    assert!(service.list(None, false, false).unwrap().is_empty());
     let _ = std::fs::remove_dir_all(&dir);
 }
 
 #[test]
-fn profile_lifecycle_round_trips() {
-    let (dir, core) = temp_core("profiles-crud");
-    let profile = rmccc_profile::Profile {
-        id: "p1".into(),
-        name: "survival".into(),
-        game_version: "1.20.4".into(),
-        game_dir: core.config.resolved_game_root(),
-        ..Default::default()
-    };
-    core.profile_store.save(&profile).unwrap();
+fn instance_lifecycle_round_trips() {
+    let (dir, core) = temp_core("instances-crud");
+    write_minimal_version(&core, "1.20.4");
+    {
+        let mut service = core.instances.lock().unwrap();
+        service.refresh(Some("default"), true).unwrap();
+        let detail = service.ensure_instance("default", "1.20.4").unwrap();
+        assert_eq!(detail.summary.game_version, "1.20.4");
 
-    let listed = core.profile_store.list().unwrap();
-    assert_eq!(listed.len(), 1);
-    assert_eq!(listed[0].name, "survival");
+        let updated = service
+            .update_settings(
+                "default/1.20.4",
+                rmccc_instance::InstanceSettingsPatch {
+                    display_name: Some("Survival".into()),
+                    max_memory_mb: Some(8192),
+                    override_properties: Some(vec![
+                        rmccc_instance::fields::MAX_MEMORY_MB.into(),
+                        "not_a_field".into(),
+                    ]),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        assert_eq!(updated.settings.display_name.as_deref(), Some("Survival"));
+        assert_eq!(updated.effective.max_memory_mb, 8192);
+        assert_eq!(updated.settings.override_properties.len(), 1);
 
-    // update
-    let mut updated = listed[0].clone();
-    updated.memory_mb = 8192;
-    core.profile_store.save(&updated).unwrap();
-    assert_eq!(
-        core.profile_store.get("p1").unwrap().unwrap().memory_mb,
-        8192
-    );
-
-    // delete
-    core.profile_store.delete("p1", false).unwrap();
-    assert!(core.profile_store.get("p1").unwrap().is_none());
+        assert!(service.get("default/does-not-exist").is_err());
+        assert!(service.get("nope/1.20.4").is_err());
+    }
     let _ = std::fs::remove_dir_all(&dir);
 }
 
 #[test]
-fn profile_delete_of_unknown_id_reports_profile_not_found() {
-    let (dir, core) = temp_core("profiles-missing");
-    let err = core.profile_store.delete("nope", false).unwrap_err();
-    assert!(matches!(err, RmcccError::ProfileNotFound(_)));
-    assert_eq!(IpcError::from(err).code, ErrorCode::ProfileNotFound);
-    let _ = std::fs::remove_dir_all(&dir);
-}
-
-#[test]
-fn profile_update_rejects_unknown_override_fields() {
-    // 过滤发生在命令层（`profile_update`）：只保留 `fields::ALL` 里的名字，
-    // 这样拼错的名字不会让字段"静默变成不可继承"。
-    use rmccc_profile::fields;
-    let filtered: Vec<String> = vec![
-        "memory_mb".to_string(),
-        "definitely_not_a_field".to_string(),
-    ]
-    .into_iter()
-    .filter(|name| fields::ALL.contains(&name.as_str()))
-    .collect();
-    assert_eq!(filtered, vec!["memory_mb".to_string()]);
-
-    // 命令层过滤后写回的 profile 只带合法字段。
-    let (dir, core) = temp_core("profiles-override");
-    let mut profile = rmccc_profile::Profile {
-        id: "p2".into(),
-        name: "x".into(),
-        game_version: "1.20.4".into(),
-        game_dir: core.config.resolved_game_root(),
-        ..Default::default()
-    };
-    profile.override_properties = filtered.into_iter().collect();
-    core.profile_store.save(&profile).unwrap();
-
-    let stored = core.profile_store.get("p2").unwrap().unwrap();
-    assert!(stored.is_overridden("memory_mb"));
-    assert!(!stored.is_overridden("definitely_not_a_field"));
+fn instance_resolved_settings_inherit_global_preset() {
+    let (dir, core) = temp_core("instance-resolved");
+    write_minimal_version(&core, "1.20.4");
+    {
+        let mut service = core.instances.lock().unwrap();
+        service.refresh(Some("default"), true).unwrap();
+        service.ensure_instance("default", "1.20.4").unwrap();
+        let mut global = service.global_settings().clone();
+        global.max_memory_mb = 3072;
+        global.jvm_args = vec!["-Dglobal=1".into()];
+        service.update_global_settings(global).unwrap();
+        let resolved = service.resolved_settings("default/1.20.4").unwrap();
+        assert_eq!(resolved.max_memory_mb, 3072);
+        assert_eq!(resolved.jvm_args, vec!["-Dglobal=1"]);
+    }
     let _ = std::fs::remove_dir_all(&dir);
 }
 
@@ -640,109 +641,47 @@ fn log_clear_leaves_directory_intact() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-// ────────────────────────── 9. 正向契约：instance ──────────────────────────
+// ────────────────────────── 9. 正向契约：instance paths ──────────────────────────
 
 #[test]
-fn instance_list_is_empty_without_installed_versions() {
-    let (dir, core) = temp_core("instance-empty");
-    let repo = core.game_repository.read().unwrap();
-    assert!(repo.get_instance_ids().is_empty());
-    drop(repo);
-    let _ = std::fs::remove_dir_all(&dir);
-}
-
-#[test]
-fn instance_check_completion_on_unknown_id_reports_profile_not_found() {
-    let (dir, core) = temp_core("instance-unknown");
-    // ADR-002：profile 优先、版本 id 回落；两者都没有 → ProfileNotFound。
-    let result = resolve_version_id_for_test(&core, "does-not-exist");
-    let err = expect_code(result, ErrorCode::ProfileNotFound);
-    assert!(err.message.contains("does-not-exist"));
-    let _ = std::fs::remove_dir_all(&dir);
-}
-
-#[test]
-fn instance_check_completion_accepts_a_profile_id() {
-    // 这是 ADR-002 修复的真实 bug：UI 传 profile id，命令必须能解析出 game_version。
-    let (dir, core) = temp_core("instance-profile-id");
-    if core
-        .platform
-        .java
-        .detect_all()
-        .unwrap_or_default()
-        .is_empty()
-    {
-        // 没装 Java 的机器上跳过（与命令层同样的前置条件）。
-        let _ = std::fs::remove_dir_all(&dir);
-        return;
-    }
-    let profile = rmccc_profile::Profile {
-        id: "p-instance".into(),
-        name: "i".into(),
-        game_version: "1.20.4".into(),
-        game_dir: core.config.resolved_game_root(),
-        ..Default::default()
-    };
-    core.profile_store.save(&profile).unwrap();
-    // profile 存在 → 解析成版本 id（即便该版本尚未安装，也应是 Ok）。
-    assert_eq!(
-        resolve_version_id_for_test(&core, "p-instance").unwrap(),
-        "1.20.4"
-    );
-    let _ = std::fs::remove_dir_all(&dir);
-}
-
-#[test]
-fn instance_paths_requires_a_profile() {
+fn instance_paths_and_isolation_use_the_instance_id() {
     let (dir, core) = temp_core("instance-paths");
-    // instance_paths 只接受 profile id（返回值含 java_path/isolation 等 profile 字段）。
-    assert!(core.profile_store.get("nope").unwrap().is_none());
-    let _ = std::fs::remove_dir_all(&dir);
-}
-
-#[test]
-fn resolved_settings_reflect_inheritance() {
-    // 1.8 的契约：继承字段取全局默认，覆盖字段取实例值，且只由后端决定。
-    let (dir, mut core) = temp_core("instance-resolved");
-    core.config.default_max_memory_mb = 3072;
-    core.config.default_jvm_args = vec!["-Dglobal=1".to_string()];
-
-    let mut profile = rmccc_profile::Profile {
-        id: "p-resolved".into(),
-        name: "r".into(),
-        game_version: "1.20.4".into(),
-        game_dir: core.config.resolved_game_root(),
-        memory_mb: 8192,
-        ..Default::default()
-    };
-    // 只覆盖 memory_mb → jvm_args 应继承全局。
-    profile.set_overridden("memory_mb", true);
-
-    let resolved = profile.resolve(&core.config);
-    assert_eq!(resolved.max_memory_mb, 8192, "覆盖字段取实例值");
-    assert_eq!(
-        resolved.jvm_args,
-        vec!["-Dglobal=1".to_string()],
-        "未覆盖字段继承全局默认"
-    );
+    write_minimal_version(&core, "1.20.4-fabric");
+    {
+        let root = selected_root(&core);
+        let dir = root.join("versions").join("1.20.4-fabric");
+        std::fs::write(
+            dir.join("1.20.4-fabric.json"),
+            r#"{"id":"1.20.4-fabric","type":"release","mainClass":"net.fabricmc.loader.impl.launch.knot.KnotClient","assetIndex":{"id":"","url":"","sha1":"","size":0,"totalSize":0},"downloads":{},"libraries":[],"javaVersion":null,"patches":[{"id":"fabric","version":"0.16.9"}]}"#,
+        )
+        .unwrap();
+        let mut service = core.instances.lock().unwrap();
+        service.refresh(Some("default"), true).unwrap();
+        let detail = service.ensure_instance("default", "1.20.4-fabric").unwrap();
+        let paths = service.paths("default/1.20.4-fabric").unwrap();
+        assert_eq!(
+            paths.run_dir, paths.instance_dir,
+            "modded isolation should use versions/1.20.4-fabric"
+        );
+        assert_eq!(paths.mods_dir, paths.run_dir.join("mods"));
+        assert!(detail.summary.isolated);
+        assert!(paths.instance_dir.ends_with("1.20.4-fabric"));
+    }
     let _ = std::fs::remove_dir_all(&dir);
 }
 
 // ────────────────────────── 10. 拒绝契约：launch ──────────────────────────
 
 #[test]
-fn launch_start_of_unknown_profile_reports_profile_not_found() {
+fn launch_start_of_unknown_instance_reports_profile_not_found() {
     let (dir, core) = temp_core("launch-unknown");
-    let result = core
-        .profile_store
-        .get("no-such-profile")
-        .unwrap()
-        .ok_or_else(|| IpcError {
-            code: ErrorCode::ProfileNotFound,
-            message: "Profile not found: no-such-profile".into(),
-            retryable: false,
-        });
-    expect_code(result, ErrorCode::ProfileNotFound);
+    let mut service = core.instances.lock().unwrap();
+    let err = service.get("default/no-such-instance").unwrap_err();
+    drop(service);
+    expect_code(
+        Err::<(), _>(IpcError::from(err)),
+        ErrorCode::ProfileNotFound,
+    );
     let _ = std::fs::remove_dir_all(&dir);
 }
 
@@ -757,26 +696,17 @@ fn launch_status_is_empty_on_a_fresh_process() {
 // ────────────────────────── 11. 拒绝契约：version / download ──────────────────────────
 
 #[test]
-fn version_install_of_unknown_profile_reports_profile_not_found() {
-    // version_install 在起后台任务前先做 profile 预检查（快速失败）。
+fn instance_install_precheck_rejects_existing_json() {
     let (dir, core) = temp_core("version-install");
-    let missing = core.profile_store.get("ghost").unwrap();
-    assert!(missing.is_none());
-    expect_code(
-        Err::<(), _>(IpcError {
-            code: ErrorCode::ProfileNotFound,
-            message: "Profile not found: ghost".into(),
-            retryable: false,
-        }),
-        ErrorCode::ProfileNotFound,
-    );
+    write_minimal_version(&core, "1.20.4");
+    let root = selected_root(&core);
+    assert!(rmccc_version::file_layout::instance_json(&root, "1.20.4").exists());
     let _ = std::fs::remove_dir_all(&dir);
 }
 
 #[test]
 fn download_pause_on_unknown_batch_is_a_noop() {
     let (dir, core) = temp_core("download-pause");
-    // 未知 batch id 不得 panic（前端在竞态下会传过期 id）。
     core.download_manager.pause("no-such-batch");
     core.download_manager.cancel_batch("no-such-batch");
     core.download_manager.resume("no-such-batch");
@@ -786,34 +716,28 @@ fn download_pause_on_unknown_batch_is_a_noop() {
 // ────────────────────────── 12. mods 列表契约 ──────────────────────────
 
 #[test]
-fn mod_list_of_profile_without_mods_dir_is_empty() {
+fn mod_list_of_instance_without_mods_dir_is_empty() {
     let (dir, core) = temp_core("mods-list");
-    let profile = rmccc_profile::Profile {
-        id: "p-mods".into(),
-        name: "m".into(),
-        game_version: "1.20.4".into(),
-        game_dir: core.config.resolved_game_root(),
-        ..Default::default()
-    };
-    core.profile_store.save(&profile).unwrap();
-    let mods_dir = rmccc_launch::instance_mods_dir(&core.config, &profile);
-    assert!(!mods_dir.exists(), "全新实例还没有 mods 目录");
+    write_minimal_version(&core, "1.20.4");
+    {
+        let mut service = core.instances.lock().unwrap();
+        service.refresh(Some("default"), true).unwrap();
+        let detail = service.ensure_instance("default", "1.20.4").unwrap();
+        assert!(!detail.paths.mods_dir.exists(), "全新实例还没有 mods 目录");
+    }
     let _ = std::fs::remove_dir_all(&dir);
 }
 
 #[test]
 fn mod_toggle_on_unknown_file_reports_an_error() {
     let (dir, core) = temp_core("mods-toggle");
-    let profile = rmccc_profile::Profile {
-        id: "p-toggle".into(),
-        name: "t".into(),
-        game_version: "1.20.4".into(),
-        game_dir: core.config.resolved_game_root(),
-        ..Default::default()
-    };
-    core.profile_store.save(&profile).unwrap();
-    let mods_dir = rmccc_launch::instance_mods_dir(&core.config, &profile);
-    assert!(!mods_dir.join("missing.jar").exists());
+    write_minimal_version(&core, "1.20.4");
+    {
+        let mut service = core.instances.lock().unwrap();
+        service.refresh(Some("default"), true).unwrap();
+        let detail = service.ensure_instance("default", "1.20.4").unwrap();
+        assert!(!detail.paths.mods_dir.join("missing.jar").exists());
+    }
     let _ = std::fs::remove_dir_all(&dir);
 }
 
@@ -985,32 +909,6 @@ fn logic_plugins_must_declare_the_logic_capability() {
 }
 
 // ────────────────────────── 测试辅助 ──────────────────────────
-
-/// 复刻 `instance_*` 的 id 解析（命令层是私有 fn，这里保持同样的语义做契约断言）。
-fn resolve_version_id_for_test(
-    core: &rmccc_core::CoreContext,
-    id: &str,
-) -> Result<String, IpcError> {
-    if let Some(profile) = core.profile_store.get(id).map_err(IpcError::from)? {
-        return Ok(profile.game_version);
-    }
-    let known = {
-        let repo = core.game_repository.read().map_err(|_| IpcError {
-            code: ErrorCode::InternalError,
-            message: "repo lock".into(),
-            retryable: false,
-        })?;
-        repo.get_resolved(id).is_ok()
-    };
-    if known {
-        return Ok(id.to_string());
-    }
-    Err(IpcError {
-        code: ErrorCode::ProfileNotFound,
-        message: format!("No profile or installed version with id '{id}'"),
-        retryable: false,
-    })
-}
 
 // ────────────────────────── 12. 逻辑插件端到端（Phase 5，ADR-007）──────────────────────────
 

@@ -194,6 +194,19 @@
 
 ---
 
+## 4.1 主题 v2 实施后的新增资产面（2026-10-27）
+
+ADR-014 已落地核心切片，新增面与处置：
+
+- 包内 `assets/` 图片/字体/视频：扩展名 + 魔数 + 大小上限 + SVG 文本扫描（script/DOCTYPE/
+  ENTITY/外部 href 拒绝）；未通过则安装失败。
+- 资源路由：`assets/` 需要 `themes.apply` + `themes.skin`；字体加 CORS、视频支持 Range、
+  SVG 带 `default-src 'none'` CSP；不服务 HTML/JS/JSON。
+- `themes.skin` 为 medium：包含字体/背景/组件/特效的主题必须显式授权；撤销后只保留配色。
+- 字体仍可做视觉欺骗（字形重映射）——已通过显式授权 + 用户可关闭字体/背景/特效缓解；
+  主题仍不能改文案、行为、安全语义色。
+- 用户覆盖 UI（密度/圆角/逐项开关/自定义背景）尚未实现，属后续切片。
+
 ## 5. 残余风险与后续工作
 
 1. **F-02（Windows）**：在 Tauri/wry 修复或改独立 Webview 容器前，Windows 不开放插件 UI。

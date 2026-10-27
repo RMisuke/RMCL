@@ -7,10 +7,9 @@
 > [ADR-003](../adr/ADR-003-plugin-package-and-install-transaction.md)（包格式）。
 > 通用插件流程见 [PLUGIN_AUTHORING.md](PLUGIN_AUTHORING.md)；本文只讲"主题"这一形态。
 
-> **v2 预览（proposed）**：字体/圆角/间距/背景图/组件级外观正在
-> [ADR-014](../adr/ADR-014-theme-v2-appearance-skin.md) 中设计（`schemaVersion: 2` +
-> 新能力 `themes.skin`），**尚未实现**。在 ADR accepted 并发布实现前，请按本指南的 v1
-> 规则（仅 `colors`）编写主题；v2 字段现在会被拒绝。
+> **v2 已实现（ADR-014 accepted）**：`schemaVersion: 2` 支持字体/圆角/间距/背景图/
+> 循环视频/组件贴图/主界面特效/Tab 装饰，需要额外能力 `themes.skin`（medium，安装后
+> 由用户显式授予）。字段与示例见 §10；`schemaVersion: 1` 仍完全兼容。
 
 ## 0. 先明确边界
 
@@ -260,3 +259,55 @@ rmcli plugin inspect --id dev.example.my-theme
 | 点选主题报"主题不存在，或所属插件未启用" | 插件被禁用/卸载；重新启用后重选 |
 | 明暗判断不对 | 显式写 `"mode": "dark"` 或 `"light"` |
 | 界面某处仍是旧配色 | 宿主 CSS 变量没覆盖到的组件属于视觉系统 bug，请附主题 JSON + 截图反馈 |
+
+## 10. v2 外观皮肤（ADR-014，已实现）
+
+```json
+{
+  "schemaVersion": 2,
+  "mode": "dark",
+  "colors": { "background": "#06111b", "surface": "#0c1b28", "text": "#e7f4f2", "accent": "#6fe7d2", "border": "#22394c" },
+  "typography": { "ui": { "family": "Avenir Next", "fallback": "sans-serif" } },
+  "shape": { "tag": 9, "control": 14, "card": 22, "modal": 26, "pill": true },
+  "spacing": { "unit": 5, "density": "comfortable" },
+  "background": { "video": "assets/bg/loop.mp4", "poster": "assets/bg/poster.jpg", "fit": "cover", "position": "center", "dim": 0.42, "scope": "both" },
+  "components": {
+    "card": { "background": "#0a18268c", "border": "#96f0e624", "radius": 22, "shadow": "soft", "blur": 18, "padding": 20 },
+    "button": { "radius": 24, "primaryBackground": "#6fe7d2", "primaryText": "#04130f" }
+  },
+  "effects": [
+    { "type": "aurora", "intensity": 0.6, "speed": 26, "area": "app" },
+    { "type": "rotating-blocks", "texture": "assets/tex/cube.png", "count": 7, "size": 54, "speed": 20, "area": "hero" },
+    { "type": "particles", "kind": "star", "color": "#9fe8ff", "count": 18, "area": "hero" }
+  ],
+  "navigation": {
+    "icons": { "home": "assets/icons/home.svg" },
+    "ornaments": [{ "image": "assets/ui/ornament.png", "side": "right", "width": 120 }]
+  }
+}
+```
+
+- **能力**：v2 任一非 `colors` 段出现 → Manifest 必须声明 `themes.skin`（medium）。
+  未授予时只应用配色；授权后可启用。`themes.apply` 仍是主题列表的门槛。
+- **字体**：`typography.ui/display/mono`，可只给系统字体族，或用 `files` 指向包内
+  `.woff2/.woff/.ttf/.otf`（≤2 MiB/个、≤4 个/槽）。宿主注入 `@font-face`，中文缺字回退。
+- **形状/间距**：`shape` 0–32px；`spacing.unit` 3–6px（派生 6 档间距），`density` 仅作语义标记。
+- **背景**：`image` 或 `video`（mp4/webm），可选 `poster`。只允许包内 `assets/`；
+  文件 ≤8 MiB（图片）/16 MiB（视频）；`dim` 0–0.9、`blur` 0–40、`scope` app/hero/both。
+- **组件槽**：`card/button/input/menu/dialog/tag/hero/titlebar`，可设 background/border/text/
+  radius/shadow/blur/padding，以及 `image` + `imageSlice` + `imageMode`
+  （`background` 拉伸 / `border` 九宫格）。按钮九宫格用伪元素绘制，不会挤压文字。
+- **特效**（宿主预设，主题只给参数，最多 3 条）：
+  `rotating-blocks`（包内贴图、count 1–24、size 24–160、speed 4–60、area）、
+  `aurora`（intensity 0–1、speed）、`particles`（dot/star/square、hex 颜色、count 1–80）。
+  动效受宿主“减少动态效果”开关约束；视频在关闭动效时只显示 poster。
+- **导航**：`icons` 覆盖六个 Dock 图标（home/gamepad/download/person/extension/settings），
+  `ornaments` 最多 2 个（left/right、width 24–240、opacity 0–1），纯装饰、不接管点击。
+- **安全**：资产只从包内 `assets/` 读取；SVG 拒绝 script/DOCTYPE/ENTITY 与外部 href；
+  图片/字体/视频做魔数校验。资源路由 `rmcccplugin://<id>/assets/...` 需要
+  `themes.apply` + `themes.skin`，字体带 CORS、视频支持 Range。
+- **示例**：`examples/plugins/theme-aurora`（视频 + 玻璃 + 极光/方块/粒子）与
+  `examples/plugins/theme-grass`（KenPixel 字体 + MC 九宫格 + 草方块 + 全景图）。
+
+验收：`rmcli plugin pack/install` → 授予 `themes.skin` → 启用 → 设置→外观选择；
+切换主题后字体/背景/组件/特效应完整生效，切回内置主题应完全恢复。

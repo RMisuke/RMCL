@@ -8,7 +8,7 @@ members = [
     "crates/rmccc-version",
     "crates/rmccc-modloader",
     "crates/rmccc-mods",
-    "crates/rmccc-profile",
+    "crates/rmccc-instance",
     "crates/rmccc-config",
     "crates/rmccc-platform",
     "crates/rmccc-plugin",
@@ -102,7 +102,7 @@ rmccc-launch = { path = "crates/rmccc-launch" }
 rmccc-version = { path = "crates/rmccc-version" }
 rmccc-modloader = { path = "crates/rmccc-modloader" }
 rmccc-mods = { path = "crates/rmccc-mods" }
-rmccc-profile = { path = "crates/rmccc-profile" }
+rmccc-instance = { path = "crates/rmccc-instance" }
 rmccc-config = { path = "crates/rmccc-config" }
 rmccc-platform = { path = "crates/rmccc-platform" }
 rmccc-plugin = { path = "crates/rmccc-plugin" }

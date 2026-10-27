@@ -58,7 +58,17 @@ impl CliContext {
 
     pub async fn state_get(&self, key: Option<&str>) -> Result<Value> {
         let core = self.core.read().await;
-        let v = serde_json::to_value(&core.launcher_state)?;
+        let mut v = serde_json::to_value(&core.launcher_state)?;
+        let selected_key = {
+            let service = core
+                .instances
+                .lock()
+                .map_err(|_| RmcccError::Other("instance service lock poisoned".to_string()))?;
+            service.selected_instance().map(str::to_string)
+        };
+        if let Some(object) = v.as_object_mut() {
+            object.insert("selected_key".to_string(), json!(selected_key));
+        }
         match key {
             Some(k) => Ok(v.get(k).cloned().unwrap_or(Value::Null)),
             None => Ok(v),
@@ -68,6 +78,16 @@ impl CliContext {
     pub async fn state_set(&self, field: &str, value: &str) -> Result<Value> {
         let mut core = self.core.write().await;
         match field {
+            "selected_key" | "selected_instance" => {
+                let key = parse_optional_str(value)?;
+                {
+                    let mut service = core.instances.lock().map_err(|_| {
+                        RmcccError::Other("instance service lock poisoned".to_string())
+                    })?;
+                    service.select_instance(key.as_deref())?;
+                }
+                core.launcher_state.selected_profile_id = key;
+            }
             "selected_profile_id" => {
                 core.launcher_state.selected_profile_id = parse_optional_str(value)?
             }

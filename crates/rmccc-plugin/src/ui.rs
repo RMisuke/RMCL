@@ -373,7 +373,26 @@ pub fn validate_asset_path(raw: &str) -> Result<String> {
     Ok(trimmed.to_string())
 }
 
-/// 按扩展名给出 Content-Type（未知类型在 [`validate_asset_path`] 阶段已被拒绝）。
+/// 校验主题资产路径：包内 `assets/` 下的图片/字体/视频（ADR-014）。
+///
+/// 资源处理器用它区分 `ui/`（插件 UI）与 `assets/`（主题皮肤）两条路由；
+/// 主题路由要求 `themes.apply` + `themes.skin` 两个能力。
+pub fn validate_theme_asset_path(raw: &str) -> Result<String> {
+    if raw.is_empty() {
+        return Err(asset_error(raw, "路径为空"));
+    }
+    if raw.contains('%') {
+        return Err(asset_error(raw, "不允许百分号编码（请使用 ASCII 文件名）"));
+    }
+    if raw.contains('\\') || raw.contains('?') || raw.contains('#') {
+        return Err(asset_error(raw, "路径包含非法字符"));
+    }
+    let trimmed = raw.strip_prefix('/').unwrap_or(raw);
+    crate::theme::validate_asset_path(trimmed, "主题资产")?;
+    Ok(trimmed.to_string())
+}
+
+/// 按扩展名给出 Content-Type（未知类型在校验阶段已被拒绝）。
 pub fn content_type(path: &str) -> &'static str {
     let lowered = path.to_ascii_lowercase();
     let ext = lowered.rsplit_once('.').map(|(_, e)| e).unwrap_or("");
@@ -392,6 +411,8 @@ pub fn content_type(path: &str) -> &'static str {
         "otf" => "font/otf",
         "woff" => "font/woff",
         "woff2" => "font/woff2",
+        "mp4" => "video/mp4",
+        "webm" => "video/webm",
         _ => "application/octet-stream",
     }
 }

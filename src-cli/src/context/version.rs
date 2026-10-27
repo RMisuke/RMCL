@@ -44,14 +44,15 @@ impl CliContext {
     /// update the profile and refresh the local repository.
     pub async fn version_install(
         &self,
-        profile_id: &str,
+        key: &str,
         version: &str,
         progress: Option<&ProgressCb>,
     ) -> Result<()> {
-        let profile = self.get_profile(profile_id).await?;
+        let instance = self.get_instance(key).await?;
         let core = self.core.read().await;
         let handle = core.handle();
-        let report = pipeline::install_game(&handle, &profile, version, progress).await?;
+        let report =
+            pipeline::install_game(&handle, &instance.paths.game_dir, version, progress).await?;
         if !report.is_complete() {
             return Err(RmcccError::DownloadFailed {
                 url: version.to_string(),
@@ -61,52 +62,55 @@ impl CliContext {
                 ),
             });
         }
-        // 提交（写 game_version + 刷新索引）与 GUI 共用同一路径。
-        pipeline::commit_install(&handle, profile_id, version)?;
-        tracing::info!(profile_id = %profile_id, version = %version, "Version installed");
+        // 提交（创建实例设置 + 固定隔离 + 刷新索引）与 GUI 共用同一路径。
+        pipeline::commit_install(&handle, &instance.summary.directory_id, version)?;
+        tracing::info!(key = %key, version = %version, "Version installed");
         Ok(())
     }
 
-    /// List locally installed versions (from the local repository index).
+    /// List locally installed instances in the selected directory.
     pub async fn version_local_list(&self) -> Result<Vec<Value>> {
         let core = self.core.read().await;
-        let repo = core
-            .game_repository
-            .read()
-            .map_err(|_| RmcccError::Other("game repository lock poisoned".to_string()))?;
-        let ids = repo.get_instance_ids();
-        let mut out = Vec::new();
-        for id in ids {
-            let manifest = repo.get_manifest(&id).cloned().unwrap_or_default();
-            let base = repo.get_game_version(&id);
-            out.push(json!({
-                "id": id,
-                "base_version": base,
-                "main_class": manifest.main_class,
-                "inherits_from": manifest.inherits_from,
-                "library_count": manifest.libraries.len(),
-            }));
-        }
-        Ok(out)
+        let mut service = core
+            .instances
+            .lock()
+            .map_err(|_| RmcccError::Other("instance service lock poisoned".to_string()))?;
+        let summaries = service.list(None, false, true)?;
+        Ok(summaries
+            .into_iter()
+            .map(|item| {
+                json!({
+                    "key": item.key,
+                    "id": item.id,
+                    "base_version": item.game_version,
+                    "loader": item.loader,
+                    "inherits_from": null,
+                    "library_count": null,
+                })
+            })
+            .collect())
     }
 
     pub async fn version_local_get(&self, id: &str) -> Result<rmccc_version::GameVersion> {
         let core = self.core.read().await;
-        let repo = core
-            .game_repository
-            .read()
-            .map_err(|_| RmcccError::Other("game repository lock poisoned".to_string()))?;
-        repo.get_manifest(id)
-            .cloned()
-            .ok_or_else(|| RmcccError::Other(format!("Local version '{id}' is not installed")))
+        let mut service = core
+            .instances
+            .lock()
+            .map_err(|_| RmcccError::Other("instance service lock poisoned".to_string()))?;
+        let directory = service.selected_directory().id.clone();
+        let key = rmccc_instance::InstanceService::key(directory.as_str(), id)?;
+        let (_, resolved) = service.resolved_version(&key)?;
+        Ok(resolved.standalone)
     }
 
     pub async fn version_local_delete(&self, id: &str) -> Result<()> {
         let core = self.core.read().await;
-        let mut repo = core
-            .game_repository
-            .write()
-            .map_err(|_| RmcccError::Other("game repository lock poisoned".to_string()))?;
-        repo.remove_instance(id)
+        let mut service = core
+            .instances
+            .lock()
+            .map_err(|_| RmcccError::Other("instance service lock poisoned".to_string()))?;
+        let directory = service.selected_directory().id.clone();
+        let key = rmccc_instance::InstanceService::key(directory.as_str(), id)?;
+        service.remove(&key, true)
     }
 }

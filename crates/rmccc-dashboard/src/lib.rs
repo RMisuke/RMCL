@@ -12,6 +12,7 @@
 //! 前端消费归一化后的布局和主题令牌，CSS Grid 渲染。
 
 pub mod layout;
+pub mod skin;
 pub mod store;
 pub mod theme;
 pub mod widget;
@@ -23,6 +24,10 @@ pub use layout::{
 };
 pub use layout::{ConstraintMap, DEFAULT_COLUMNS, DEFAULT_GAP};
 
+pub use skin::{
+    SkinBackground, SkinComponent, SkinEffect, SkinFontFace, SkinFontSource, SkinNavigation,
+    SkinOrnament, SkinShape, SkinSpacing, SkinTypography, ThemeSkin,
+};
 pub use store::{load_layout, save_layout, LayoutStore};
 pub use theme::{
     builtin_dark, builtin_ember, builtin_forest, builtin_light, builtin_list, builtin_ocean,

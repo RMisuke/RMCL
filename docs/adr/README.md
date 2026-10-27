@@ -12,7 +12,7 @@
 | ADR | 标题 | 状态 | 触发阶段 | 关联 |
 |-----|------|------|---------|------|
 | [ADR-001](ADR-001-supported-platforms.md) | 支持的 OS 最低版本与架构 | proposed | Phase 0 | 指南 §5.1；ARCHITECTURE §13.1 |
-| [ADR-002](ADR-002-profile-instance-semantics.md) | Profile / Instance 语义分界 + Core Service 门面 | **accepted**（2026-10-21） | Phase 1 | 审计 P2-10、§7.4 |
+| [ADR-002](ADR-002-profile-instance-semantics.md) | Profile / Instance 语义分界 + Core Service 门面 | **superseded by ADR-016**（2026-10-27） | Phase 1 | 审计 P2-10、§7.4 |
 | [ADR-003](ADR-003-plugin-package-and-install-transaction.md) | 插件包归档、目录布局与安装事务 | **accepted**（2026-10-21） | Phase 2 | 指南 §7/§11/§12/§14.4；ADR-004 |
 | [ADR-004](ADR-004-plugin-manifest-and-versioning.md) | 插件 Manifest Schema、ID 与版本兼容 | **accepted**（2026-10-21） | Phase 2 | 指南 §6.4/§7/§8.1；ADR-003 |
 | [ADR-005](ADR-005-dashboard-layout-and-theme.md) | Dashboard 布局 Schema/归一化/断点/主题令牌 | **accepted**（2026-10-21） | Phase 3 | 指南 §9；ADR-003/004 |
@@ -24,7 +24,8 @@
 | [ADR-011](ADR-011-binary-size-metric.md) | 主可执行体积门禁：度量对象与阈值（2026-10-24 起 < 20 MiB） | **accepted** | Phase 0 | AGENTS.md 体积红线；审计 §15.5 |
 | [ADR-012](ADR-012-macos-intel-build.md) | macOS Intel 的 runner、打包和最低系统版本 | proposed | Phase 0 | 指南 §5.1、§16.3 |
 | [ADR-013](ADR-013-lightweight-ai-and-external-mcp.md) | 轻干预 AI 架构：内部 LLM 服务 + 外部 MCP 控制（内建 Agent 退役） | **accepted**（2026-10-23） | Phase 6→AI/MCP | `../AI_AND_MCP_ARCHITECTURE.md`；ADR-009/010（修订）/011；`../ui-design/07_AI_AND_MCP.md` |
-| [ADR-014](ADR-014-theme-v2-appearance-skin.md) | 主题 v2：外观皮肤（字体/形状/间距/背景图/组件槽）+ 用户覆盖 | **proposed**（2026-10-27 草案） | Phase 3+ | ADR-003/004/005/006；`../audits/PLUGIN_SECURITY_AUDIT_2026-10-27.md`；`../guides/THEME_PLUGIN_AUTHORING.md` |
+| [ADR-014](ADR-014-theme-v2-appearance-skin.md) | 主题 v2：外观皮肤（字体/形状/间距/背景/视频/组件槽/特效）+ 用户覆盖 | **accepted**（2026-10-27 核心切片） | Phase 3+ | ADR-003/004/005/006；`../audits/PLUGIN_SECURITY_AUDIT_2026-10-27.md`；`../guides/THEME_PLUGIN_AUTHORING.md` |
+| [ADR-016](ADR-016-instance-management-v2.md) | 实例管理 v2：目录注册表 + 版本即实例 + `.rmccc` 设置覆盖 | **accepted**（2026-10-27） | Phase 2+ | ADR-002（取代）/011；`ARCHITECTURE.md` §3.3/§3.4/§15；`ui-design/03`/`04` |
 
 > ADR-008 已于 2026-10-26 建立草案（proposed）；ADR-014 于 2026-10-27 建立主题 v2 草案；
 > accepted 前均不得据此改协议。

@@ -9,7 +9,7 @@ use super::*;
 
 /// Process listener that syncs CLI state (running games + exit signals).
 pub(super) struct CliProcessListener {
-    pub(super) profile_id: String,
+    pub(super) key: String,
     pub(super) running_games: Arc<dashmap::DashMap<String, u32>>,
     pub(super) exit_tx: tokio::sync::watch::Sender<Option<i32>>,
     pub(super) output: Option<GameOutputCb>,
@@ -23,7 +23,7 @@ impl rmccc_launch::ProcessListener for CliProcessListener {
         }
     }
     fn on_exit(&self, exit_code: i32, exit_type: rmccc_launch::ExitType) {
-        self.running_games.remove(&self.profile_id);
+        self.running_games.remove(&self.key);
         let _ = self.exit_tx.send(Some(exit_code));
         if let Some(cb) = &self.on_exit {
             cb(exit_code, exit_type);
@@ -142,25 +142,44 @@ mod tests {
         dir
     }
 
+    async fn seed_installed_version(ctx: &CliContext, version: &str) {
+        let root = {
+            let core = ctx.core.read().await;
+            let service = core.instances.lock().unwrap();
+            let path = service.selected_directory().path.clone();
+            drop(service);
+            path
+        };
+        let dir = root.join("versions").join(version);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join(format!("{version}.json")),
+            format!(
+                r#"{{"id":"{version}","type":"release","mainClass":"net.minecraft.client.main.Main","assetIndex":{{"id":"","url":"","sha1":"","size":0,"totalSize":0}},"downloads":{{}},"libraries":[],"javaVersion":null}}"#
+            ),
+        )
+        .unwrap();
+    }
+
     #[tokio::test]
     async fn profile_crud_roundtrip() {
         let dir = temp_dir("profile");
         let ctx = CliContext::new(&dir).unwrap();
 
+        seed_installed_version(&ctx, "1.21").await;
         let created = ctx
             .profile_create("My Instance", "1.21", Some("fabric"), Some(2048))
             .await
             .unwrap();
-        assert_eq!(created.name, "My Instance");
-        assert_eq!(created.memory_mb, 2048);
-        assert!(created.mod_loader.is_some());
+        assert_eq!(created.summary.display_name, "My Instance");
+        assert_eq!(created.effective.max_memory_mb, 2048);
 
         let listed = ctx.profile_list().await.unwrap();
         assert_eq!(listed.len(), 1);
 
         let updated = ctx
             .profile_update(
-                &created.id,
+                &created.summary.key,
                 Some("Renamed"),
                 None,
                 None,
@@ -171,10 +190,12 @@ mod tests {
             )
             .await
             .unwrap();
-        assert_eq!(updated.name, "Renamed");
-        assert_eq!(updated.memory_mb, 4096);
+        assert_eq!(updated.summary.display_name, "Renamed");
+        assert_eq!(updated.effective.max_memory_mb, 4096);
 
-        ctx.profile_delete(&created.id, false).await.unwrap();
+        ctx.profile_delete(&created.summary.key, false)
+            .await
+            .unwrap();
         assert!(ctx.profile_list().await.unwrap().is_empty());
 
         let _ = std::fs::remove_dir_all(&dir);
@@ -233,10 +254,11 @@ mod tests {
     async fn state_and_user_settings() {
         let dir = temp_dir("state");
         let ctx = CliContext::new(&dir).unwrap();
-        let profile = ctx.profile_create("p", "1.21", None, None).await.unwrap();
-        ctx.profile_select(&profile.id).await.unwrap();
+        seed_installed_version(&ctx, "1.21").await;
+        let instance = ctx.profile_create("p", "1.21", None, None).await.unwrap();
+        ctx.profile_select(&instance.summary.key).await.unwrap();
         let state = ctx.state_get(None).await.unwrap();
-        assert_eq!(state["selected_profile_id"], profile.id);
+        assert_eq!(state["selected_key"], instance.summary.key);
 
         ctx.user_set("locale", "zh-CN").await.unwrap();
         let user = ctx.user_get(Some("locale")).await.unwrap();

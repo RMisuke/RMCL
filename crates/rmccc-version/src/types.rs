@@ -292,6 +292,7 @@ pub struct AssetIndex {
     pub url: String,
     pub sha1: String,
     pub size: u64,
+    #[serde(rename = "totalSize", alias = "total_size")]
     pub total_size: u64,
 }
 

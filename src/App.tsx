@@ -18,6 +18,7 @@ import { initStores } from "./stores/init";
 import { initI18n } from "./i18n";
 import { initTheme } from "./theme";
 import { reportFrontendMessage } from "./ipc/api";
+import { ThemeBackdrop } from "./components/ThemeSurface";
 
 type AppWindow = Awaited<ReturnType<typeof getCurrentWindow>>;
 
@@ -61,6 +62,7 @@ const App: ParentComponent = (props) => {
 
   return (
     <div class="app-root">
+      <ThemeBackdrop />
       <TitleBar />
       <div class="app-body">
         {/* 导航已上移到标题栏中央 Dock，左侧不再有 Rail */}

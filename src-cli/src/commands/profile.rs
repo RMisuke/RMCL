@@ -1,4 +1,4 @@
-//! `profile` command handlers — game instance management.
+//! `profile` command handlers — instance management over version-backed keys.
 
 use crate::app::ProfileAction;
 use crate::context::CliContext;
@@ -26,7 +26,7 @@ pub async fn handle(ctx: &CliContext, out: &Output, action: ProfileAction) -> Cl
             jvm_args,
             game_args,
         } => {
-            let profile = ctx
+            let detail = ctx
                 .profile_update(
                     &id,
                     name.as_deref(),
@@ -38,7 +38,7 @@ pub async fn handle(ctx: &CliContext, out: &Output, action: ProfileAction) -> Cl
                     icon.as_deref(),
                 )
                 .await?;
-            Ok(profile_to_json(&profile))
+            Ok(detail_to_json(&detail))
         }
         ProfileAction::Delete { id, cleanup } => {
             ctx.profile_delete(&id, cleanup).await?;
@@ -49,33 +49,44 @@ pub async fn handle(ctx: &CliContext, out: &Output, action: ProfileAction) -> Cl
             Ok(json!({ "selected": id }))
         }
         ProfileAction::Active => match ctx.profile_active().await? {
-            Some(p) => Ok(profile_to_json(&p)),
+            Some(detail) => Ok(detail_to_json(&detail)),
             None => Ok(json!({ "active": Value::Null })),
         },
     }
 }
 
 async fn list(ctx: &CliContext) -> CliResult<Value> {
-    let profiles = ctx.profile_list().await?;
+    let instances = ctx.profile_list().await?;
     let active = ctx
         .profile_active()
         .await?
-        .map(|p| p.id)
+        .map(|detail| detail.summary.key)
         .unwrap_or_default();
-    let items: Vec<Value> = profiles
+    let items: Vec<Value> = instances
         .iter()
-        .map(|p| {
-            let mut v = profile_to_json(p);
-            v["active"] = json!(p.id == active);
-            v
+        .map(|item| {
+            let mut value = json!({
+                "key": item.key,
+                "id": item.id,
+                "directory_id": item.directory_id,
+                "name": item.display_name,
+                "game_version": item.game_version,
+                "loader": item.loader,
+                "game_dir": item.path.parent().and_then(|p| p.parent()).map(|p| p.display().to_string()),
+                "run_dir": item.run_dir.display().to_string(),
+                "last_played": item.last_played,
+                "play_time_seconds": item.play_time_seconds,
+            });
+            value["active"] = json!(item.key == active);
+            value
         })
         .collect();
-    Ok(json!({ "profiles": items, "count": items.len() }))
+    Ok(json!({ "instances": items, "count": items.len() }))
 }
 
-async fn get(ctx: &CliContext, id: &str) -> CliResult<Value> {
-    let profile = ctx.get_profile(id).await?;
-    Ok(profile_to_json(&profile))
+async fn get(ctx: &CliContext, key: &str) -> CliResult<Value> {
+    let detail = ctx.get_instance(key).await?;
+    Ok(detail_to_json(&detail))
 }
 
 async fn create(
@@ -83,53 +94,35 @@ async fn create(
     out: &Output,
     name: &str,
     version: &str,
-    loader: Option<&str>,
+    _loader: Option<&str>,
     memory: Option<u32>,
 ) -> CliResult<Value> {
-    let profile = ctx.profile_create(name, version, loader, memory).await?;
+    let detail = ctx.profile_create(name, version, None, memory).await?;
     out.note(&format!(
-        "Created instance '{}' (id: {})",
-        profile.name, profile.id
+        "Created instance '{}' from installed version '{}'",
+        detail.summary.display_name, detail.summary.id
     ));
-    Ok(profile_to_json(&profile))
+    Ok(detail_to_json(&detail))
 }
 
-/// Convert a profile into the stable CLI JSON shape (the same fields the
-/// frontend `Profile` TS type exposes, minus secrets).
-pub fn profile_to_json(p: &rmccc_profile::Profile) -> Value {
+fn detail_to_json(detail: &rmccc_instance::InstanceDetail) -> Value {
+    let summary = &detail.summary;
     json!({
-        "id": p.id,
-        "name": p.name,
-        "game_version": p.game_version,
-        "mod_loader": p.mod_loader.as_ref().map(|ml| json!({
-            "loader_type": ml.loader_type.library_id(),
-            "loader_version": ml.loader_version,
-        })),
-        "java_path": p.java_path,
-        "jvm_args": p.jvm_args,
-        "game_args": p.game_args,
-        "memory_mb": p.memory_mb,
-        "min_memory_mb": p.min_memory_mb,
-        "metaspace_mb": p.metaspace_mb,
-        "process_priority": p.process_priority,
-        "width": p.width,
-        "height": p.height,
-        "fullscreen": p.fullscreen,
-        "use_native_glfw": p.use_native_glfw,
-        "use_native_openal": p.use_native_openal,
-        "use_custom_natives": p.use_custom_natives,
-        "no_generated_jvm_args": p.no_generated_jvm_args,
-        "no_generated_optimizing_jvm_args": p.no_generated_optimizing_jvm_args,
-        "enable_debug_log_output": p.enable_debug_log_output,
-        "wrapper": p.wrapper,
-        "java_agents": p.java_agents,
-        "override_jvm_args": p.override_jvm_args,
-        "pre_launch_command": p.pre_launch_command,
-        "post_exit_command": p.post_exit_command,
-        "env_vars": p.env_vars,
-        "game_dir": p.game_dir.display().to_string(),
-        "created_at": p.created_at,
-        "last_played": p.last_played,
-        "icon": p.icon,
+        "key": summary.key,
+        "id": summary.id,
+        "directory_id": summary.directory_id,
+        "name": summary.display_name,
+        "game_version": summary.game_version,
+        "loader": summary.loader,
+        "game_dir": detail.paths.game_dir.display().to_string(),
+        "instance_dir": detail.paths.instance_dir.display().to_string(),
+        "run_dir": detail.paths.run_dir.display().to_string(),
+        "mods_dir": detail.paths.mods_dir.display().to_string(),
+        "created_at": summary.created_at,
+        "last_played": summary.last_played,
+        "play_time_seconds": summary.play_time_seconds,
+        "settings": detail.settings,
+        "effective": detail.effective,
+        "manifest": detail.manifest,
     })
 }

@@ -120,7 +120,7 @@ pub fn ensure_dirs() -> std::io::Result<()> {
 /// （如 `../../etc/passwd`）。
 ///
 /// 注意（B2 审计结论）：这是一个**通用工具**，不是全工程的防穿越统一入口——
-/// 全工程的 id/路径防护点在各 IPC 边界（`rmccc-profile::validate_profile_id`、
+/// 全工程的 id/路径防护点在各 IPC 边界（`rmccc-instance::validate_instance_id`、
 /// `rmccc-version` 的 `validate_instance_id`、`rmccc-dashboard` 的
 /// `validate_layout_id` 等），那些防护不经过本函数。
 pub fn safe_join(root: &Path, sub: &str) -> std::io::Result<PathBuf> {

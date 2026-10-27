@@ -14,12 +14,12 @@ pub const CORE_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 pub use rmccc_dashboard;
 pub use rmccc_download;
+pub use rmccc_instance;
 pub use rmccc_launch;
 pub use rmccc_modloader;
 pub use rmccc_mods;
 pub use rmccc_platform;
 pub use rmccc_plugin;
-pub use rmccc_profile;
 pub use rmccc_version;
 
 // 游戏安装/修复/启动编排（P1-01 抽取自 CLI，进度经回调传递）。
@@ -28,7 +28,6 @@ pub mod pipeline;
 // Mod loader 安装编排（P1-4 收敛：Tauri/CLI 共用这一份）。
 pub mod modloader;
 
-use rmccc_version::GameRepository as _;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -65,19 +64,13 @@ pub struct CoreContext {
     /// 以 `dyn` trait 持有（P2-05），便于 mock 与替换实现。
     pub download_manager: Arc<dyn rmccc_download::DownloadManager>,
 
-    /// Profile / game instance store (JSON file-based).
+    /// Game directories + version-backed instances + per-instance settings.
     ///
-    /// Held as `Arc` so [`CoreHandle`] snapshots (see [`CoreContext::handle`])
-    /// can outlive the IPC read guard — every method is `&self` (file-backed).
-    pub profile_store: std::sync::Arc<rmccc_profile::ProfileStore>,
-
-    /// Local game repository (HMCL `GameRepository`).
-    ///
-    /// Indexes `versions/` under the resolved game root and resolves manifests
-    /// **offline** (dual-view: launch / standalone). Launch, modloader install,
-    /// and completeness checks all read from here — the network
-    /// `version_provider` is only the metadata source during installation.
-    pub game_repository: std::sync::Arc<std::sync::RwLock<rmccc_version::DefaultGameRepository>>,
+    /// This is the **only** owner of instance state (ADR-016): the old
+    /// `ProfileStore` and single `GameRepository` are gone. `std::sync::Mutex`
+    /// is deliberate — every method is synchronous and callers must never hold
+    /// the guard across an `.await`.
+    pub instances: Arc<std::sync::Mutex<rmccc_instance::InstanceService>>,
 
     /// Version provider — resolves Mojang version manifests and fetches version JSON.
     /// Defaults to [`rmccc_version::MojangVersionProvider`].
@@ -141,8 +134,8 @@ pub struct CoreHandle {
     pub http_client: reqwest::Client,
     /// 下载引擎。
     pub download_manager: Arc<dyn rmccc_download::DownloadManager>,
-    /// 本地版本仓库（自带内部 RwLock）。
-    pub game_repository: Arc<std::sync::RwLock<rmccc_version::DefaultGameRepository>>,
+    /// 实例服务（目录注册表 + 版本仓库 + 设置）。
+    pub instances: Arc<std::sync::Mutex<rmccc_instance::InstanceService>>,
     /// 版本元数据 provider。
     pub version_provider: Arc<dyn rmccc_version::VersionProvider>,
     /// 镜像 provider。
@@ -151,8 +144,6 @@ pub struct CoreHandle {
     pub auth_provider: Arc<dyn rmccc_auth::AuthProvider>,
     /// 账户仓库（凭据唯一持有者）。
     pub account_repo: Arc<rmccc_auth::AccountRepository>,
-    /// Profile 仓库。
-    pub profile_store: Arc<rmccc_profile::ProfileStore>,
     /// 平台适配层（进程终止 / Java 探测 / 描述符）。
     pub platform: Arc<rmccc_platform::Platform>,
 }
@@ -168,12 +159,11 @@ impl CoreContext {
             data_dir: self.data_dir.clone(),
             http_client: self.http_client.clone(),
             download_manager: self.download_manager.clone(),
-            game_repository: self.game_repository.clone(),
             version_provider: self.version_provider.clone(),
             download_provider: self.download_provider.clone(),
             auth_provider: self.auth_provider.clone(),
             account_repo: self.account_repo.clone(),
-            profile_store: self.profile_store.clone(),
+            instances: self.instances.clone(),
             platform: self.platform.clone(),
         }
     }
@@ -199,6 +189,17 @@ impl CoreContext {
         // so that resolved_data_dir() and resolved_game_root() respect
         // CLI `-d` overrides (Bug #4).
         config.data_dir = Some(data_dir.to_path_buf());
+
+        // 平台适配层在组装层构造一次，实例仓库/启动/账户全部复用。
+        let platform = Arc::new(rmccc_platform::Platform::current());
+
+        // Game-directory registry + instance service + legacy migration.
+        let instances = Arc::new(std::sync::Mutex::new(rmccc_instance::InstanceService::new(
+            data_dir,
+            &config,
+            platform.clone(),
+            launcher_state.selected_profile_id.as_deref(),
+        )?));
 
         // P2-20：显式设置 connect/timeout，弱网下避免长时间挂起。
         // 不再设置"总超时"（`.timeout`）：慢速 CDN 上的大 jar 会在 body 读到一半时被
@@ -258,16 +259,6 @@ impl CoreContext {
             .with_cache(cache_repo.clone()),
         );
 
-        let profiles_dir = data_dir.join("profiles");
-        std::fs::create_dir_all(&profiles_dir)?;
-        let profile_store = std::sync::Arc::new(rmccc_profile::ProfileStore::new(profiles_dir));
-
-        // Local game repository rooted at the resolved game root (the `.minecraft`
-        // equivalent). A failed initial scan must not block startup — it is
-        // re-run after every install via `refresh()`.
-        let game_root = config.resolved_game_root();
-        std::fs::create_dir_all(&game_root)?;
-
         /// TCP connection latency probe for auto source selection.
         /// Returns `None` on failure or after the 2s `connect_timeout` —
         /// without the timeout a SYN-blackholed host would stall startup for
@@ -295,18 +286,6 @@ impl CoreContext {
                 )
             })
         }
-
-        // Adopt instance data written by the pre-shared-root layout *before*
-        // indexing, so the repository sees the migrated versions immediately.
-        if let Err(e) = migrate_instance_layout(&config, &profile_store) {
-            tracing::warn!(error = %e, "Instance layout migration failed");
-        }
-
-        let mut game_repository = rmccc_version::DefaultGameRepository::new(game_root.clone());
-        if let Err(e) = game_repository.refresh() {
-            tracing::warn!(error = %e, game_root = %game_root.display(), "Initial game repository refresh failed");
-        }
-        let game_repository = std::sync::Arc::new(std::sync::RwLock::new(game_repository));
 
         let version_provider = std::sync::Arc::new(
             rmccc_version::MojangVersionProvider::new(http_client.clone())
@@ -338,8 +317,7 @@ impl CoreContext {
             Arc::new(rmccc_auth::MicrosoftAuthProvider::new(http_client.clone()));
 
         // Account repository — plaintext metadata + encrypted private data.
-        // 平台适配层在组装层构造一次，下游（vault / launcher / repository）都复用它。
-        let platform = Arc::new(rmccc_platform::Platform::current());
+        // 平台适配层在上方构造一次，下游（vault / launcher / repository）都复用它。
         let auth_vault = Arc::new(rmccc_auth::TokenVault::init(
             &data_dir.join(".key"),
             platform.fs.as_ref(),
@@ -400,8 +378,7 @@ impl CoreContext {
             data_dir: data_dir.to_path_buf(),
             http_client,
             download_manager,
-            profile_store,
-            game_repository,
+            instances,
             version_provider,
             download_provider,
             auth_provider,
@@ -506,138 +483,6 @@ async fn log_in_active_account(
     Ok(Some(info))
 }
 
-/// Moves instance data written by the pre-shared-root layout into the shared
-/// game root, and repoints the owning profile at it.
-///
-/// Earlier builds created a nested directory per profile
-/// (`{game_root}/{profile_id}/versions|assets|libraries`) while
-/// `GameRepository` indexes `{game_root}`. Those installs were therefore
-/// invisible to the launch path, which resolves versions through the repository
-/// (`get_resolved()`), so launching failed even though the download succeeded.
-///
-/// Only a direct child of the game root that actually contains `versions/` is
-/// touched, so a user-chosen custom `game_dir` (possibly on another volume) is
-/// never moved. Trees are moved with same-filesystem renames where possible,
-/// which keeps this cheap even for several hundred MB.
-fn migrate_instance_layout(
-    config: &rmccc_config::AppConfig,
-    profile_store: &rmccc_profile::ProfileStore,
-) -> rmccc_error::Result<usize> {
-    let game_root = config.resolved_game_root();
-    if !game_root.is_dir() {
-        return Ok(0);
-    }
-
-    let profiles = profile_store.list()?;
-    let mut migrated = 0usize;
-
-    for mut profile in profiles.iter().cloned() {
-        if profile.game_dir == game_root {
-            continue;
-        }
-        // Only handle the legacy shape; anything else is a deliberate choice.
-        if profile.game_dir.parent() != Some(game_root.as_path()) {
-            continue;
-        }
-
-        if profile.game_dir.is_dir() {
-            adopt_instance_tree(&game_root, &profile.game_dir)?;
-        }
-
-        let legacy = profile.game_dir.clone();
-        profile.game_dir = game_root.clone();
-        profile_store.save(&profile)?;
-        migrated += 1;
-        tracing::info!(
-            profile_id = %profile.id,
-            from = %legacy.display(),
-            to = %game_root.display(),
-            "Migrated instance to the shared game root"
-        );
-    }
-
-    // Leftover legacy directories no longer referenced by any profile are only
-    // reported: silently adopting them would keep disk usage the user may have
-    // intended to reclaim by deleting a profile.
-    let referenced: Vec<&std::path::Path> = profiles
-        .iter()
-        .map(|p| p.game_dir.as_path())
-        .chain(std::iter::once(game_root.as_path()))
-        .collect();
-    if let Ok(entries) = std::fs::read_dir(&game_root) {
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if !path.is_dir()
-                || !path.join("versions").is_dir()
-                || referenced.contains(&path.as_path())
-            {
-                continue;
-            }
-            tracing::warn!(
-                path = %path.display(),
-                "Orphaned pre-migration instance directory; delete it to reclaim space"
-            );
-        }
-    }
-
-    Ok(migrated)
-}
-
-/// Merges the game trees of a legacy instance directory into `game_root`.
-fn adopt_instance_tree(
-    game_root: &std::path::Path,
-    legacy: &std::path::Path,
-) -> rmccc_error::Result<()> {
-    for sub in ["versions", "libraries", "assets"] {
-        let from = legacy.join(sub);
-        if from.is_dir() {
-            merge_tree(&from, &game_root.join(sub))?;
-        }
-    }
-
-    // Anything left over is run-directory data (saves, mods, options.txt, ...)
-    // that we deliberately do not move; the non-empty removal simply reports it.
-    match std::fs::remove_dir(legacy) {
-        Ok(()) => {}
-        Err(_) => tracing::warn!(
-            path = %legacy.display(),
-            "Pre-migration instance directory still holds non-game files; left in place"
-        ),
-    }
-    Ok(())
-}
-
-/// Moves the contents of `from` into `to`, keeping files that already exist
-/// (identical versions produce identical, SHA1-verified content).
-fn merge_tree(from: &std::path::Path, to: &std::path::Path) -> rmccc_error::Result<()> {
-    std::fs::create_dir_all(to)?;
-    for entry in std::fs::read_dir(from)? {
-        let entry = entry?;
-        let source = entry.path();
-        let target = to.join(entry.file_name());
-
-        if entry.file_type()?.is_dir() {
-            merge_tree(&source, &target)?;
-            continue;
-        }
-
-        if target.exists() {
-            let _ = std::fs::remove_file(&source);
-            continue;
-        }
-
-        if std::fs::rename(&source, &target).is_err() {
-            // Different filesystem: fall back to a copy.
-            std::fs::copy(&source, &target)?;
-            let _ = std::fs::remove_file(&source);
-        }
-    }
-
-    // Best effort: drop the source once it is empty.
-    let _ = std::fs::remove_dir(from);
-    Ok(())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -659,99 +504,16 @@ mod tests {
 
         let core = CoreContext::new(&dir).unwrap();
 
-        // 关键 Provider 均注入
-        assert!(core.profile_store.list().unwrap().is_empty());
+        // 关键 Provider 均注入；实例服务保证至少一个游戏目录。
+        {
+            let instances = core.instances.lock().unwrap();
+            assert_eq!(instances.directories().len(), 1);
+            assert!(instances.selected_directory().path.is_dir());
+        }
         // Mod loader 安装入口已收敛为 `modloader::install_loader`（无 provider 表）
         assert_eq!(core.mod_sources.len(), 1); // Modrinth
         assert_eq!(core.auth_provider.provider_id(), "microsoft");
 
         let _ = std::fs::remove_dir_all(&dir);
-    }
-    fn temp_dir(tag: &str) -> std::path::PathBuf {
-        let dir = std::env::temp_dir().join(format!(
-            "rmccc-core-{tag}-{}-{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
-        dir
-    }
-
-    /// 旧布局（`{game_root}/{profile_id}/versions`）必须被并入共享根，否则
-    /// `GameRepository` 索引不到版本，启动必定失败。
-    #[test]
-    fn test_migrate_instance_layout_adopts_nested_instances() {
-        let data_dir = temp_dir("migrate");
-        let config = rmccc_config::AppConfig {
-            data_dir: Some(data_dir.clone()),
-            ..Default::default()
-        };
-        let game_root = config.resolved_game_root();
-        let profile_store = rmccc_profile::ProfileStore::new(data_dir.join("profiles"));
-
-        let profile_id = "11111111-1111-1111-1111-111111111111";
-        let legacy_dir = game_root.join(profile_id);
-        let version_dir = legacy_dir.join("versions").join("1.20.4");
-        std::fs::create_dir_all(&version_dir).unwrap();
-        std::fs::write(version_dir.join("1.20.4.json"), b"{}").unwrap();
-        std::fs::create_dir_all(legacy_dir.join("libraries")).unwrap();
-        std::fs::write(legacy_dir.join("libraries/lib.jar"), b"x").unwrap();
-        // 运行目录残留：不应被搬走
-        std::fs::write(legacy_dir.join("options.txt"), b"fov:70").unwrap();
-
-        profile_store
-            .save(&rmccc_profile::Profile {
-                id: profile_id.to_string(),
-                name: "Old".into(),
-                game_version: "1.20.4".into(),
-                game_dir: legacy_dir.clone(),
-                ..Default::default()
-            })
-            .unwrap();
-
-        assert_eq!(migrate_instance_layout(&config, &profile_store).unwrap(), 1);
-
-        assert!(game_root.join("versions/1.20.4/1.20.4.json").exists());
-        assert!(game_root.join("libraries/lib.jar").exists());
-        assert_eq!(
-            profile_store.get(profile_id).unwrap().unwrap().game_dir,
-            game_root
-        );
-        // 非游戏文件留在原处，且目录未被误删
-        assert!(legacy_dir.join("options.txt").exists());
-
-        let _ = std::fs::remove_dir_all(&data_dir);
-    }
-
-    /// 用户自定义的 `game_dir`（不在共享根之下）绝不能被迁移。
-    #[test]
-    fn test_migrate_leaves_custom_game_dir_alone() {
-        let data_dir = temp_dir("migrate-custom");
-        let config = rmccc_config::AppConfig {
-            data_dir: Some(data_dir.clone()),
-            ..Default::default()
-        };
-        let custom = data_dir.join("elsewhere");
-        std::fs::create_dir_all(custom.join("versions")).unwrap();
-
-        let store = rmccc_profile::ProfileStore::new(data_dir.join("profiles"));
-        store
-            .save(&rmccc_profile::Profile {
-                id: "p1".into(),
-                name: "Custom".into(),
-                game_version: "1.20.4".into(),
-                game_dir: custom.clone(),
-                ..Default::default()
-            })
-            .unwrap();
-
-        assert_eq!(migrate_instance_layout(&config, &store).unwrap(), 0);
-        assert_eq!(store.get("p1").unwrap().unwrap().game_dir, custom);
-
-        let _ = std::fs::remove_dir_all(&data_dir);
     }
 }

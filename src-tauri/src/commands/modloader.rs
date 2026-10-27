@@ -11,7 +11,7 @@ use tauri::Emitter;
 /// 前端可据此展示安装中/完成/失败状态。
 fn emit_modloader_progress(
     app_handle: &tauri::AppHandle,
-    profile_id: &str,
+    key: &str,
     loader_type: &str,
     game_version: &str,
     stage: &str,
@@ -21,7 +21,7 @@ fn emit_modloader_progress(
     let _ = app_handle.emit(
         crate::events::MODLOADER_INSTALL_PROGRESS,
         serde_json::json!({
-            "profile_id": profile_id,
+            "key": key,
             "loader_type": loader_type,
             "game_version": game_version,
             "stage": stage,
@@ -65,10 +65,10 @@ pub async fn modloader_list(
 #[tracing::instrument(skip(state), fields(request_id = %uuid::Uuid::new_v4()))]
 pub async fn modloader_install(
     state: tauri::State<'_, AppState>,
-    profile_id: String,
+    key: String,
     loader_type: String,
     loader_version: String,
-) -> Result<(), IpcError> {
+) -> Result<String, IpcError> {
     let lt = ModLoaderType::from_str(&loader_type).ok_or_else(|| IpcError {
         code: rmccc_error::ErrorCode::Unknown,
         message: format!("Unknown mod loader type: {loader_type}"),
@@ -77,24 +77,23 @@ pub async fn modloader_install(
 
     let app_handle = state.app_handle.clone();
 
-    // 只读一次 profile：Java 探测、基础版本解析、安装、profile 提交、索引刷新
+    // 只读一次实例：Java 探测、基础版本解析、安装、新实例提交、索引刷新
     // 全部由 core 的编排完成。
-    let profile = {
+    let instance = {
         let core = state.core.read().await;
-        core.profile_store
-            .get(&profile_id)?
-            .ok_or_else(|| IpcError {
-                code: rmccc_error::ErrorCode::ProfileNotFound,
-                message: format!("Profile not found: {profile_id}"),
-                retryable: false,
-            })?
+        let mut service = core.instances.lock().map_err(|_| IpcError {
+            code: rmccc_error::ErrorCode::InternalError,
+            message: "Instance service lock poisoned".into(),
+            retryable: false,
+        })?;
+        service.get(&key)?
     };
-    let base_game_version = profile.game_version.clone();
+    let base_game_version = instance.summary.game_version.clone();
     let base_game_version_for_progress = base_game_version.clone();
 
     emit_modloader_progress(
         &app_handle,
-        &profile_id,
+        &key,
         &loader_type,
         &base_game_version,
         "started",
@@ -108,7 +107,7 @@ pub async fn modloader_install(
     // 阶段/百分比里程碑事件不受限流影响（perf audit 2.2）。
     let progress: rmccc_modloader::InstallProgressCallback = {
         let app_handle = app_handle.clone();
-        let profile_id = profile_id.clone();
+        let key = key.clone();
         let loader_type = loader_type.clone();
         let progress_created = std::time::Instant::now();
         let last_detail_ms = std::sync::atomic::AtomicU64::new(0);
@@ -125,7 +124,7 @@ pub async fn modloader_install(
             }
             emit_modloader_progress(
                 &app_handle,
-                &profile_id,
+                &key,
                 &loader_type,
                 &base_game_version_for_progress,
                 event.stage,
@@ -145,7 +144,7 @@ pub async fn modloader_install(
     };
     let installed = match rmccc_core::modloader::install_loader(
         &core,
-        &profile,
+        &instance,
         &lt,
         &loader_version,
         Some(progress),
@@ -157,7 +156,7 @@ pub async fn modloader_install(
             // 失败也要落地：否则 Task Center 的安装行永远悬着。
             emit_modloader_progress(
                 &app_handle,
-                &profile_id,
+                &key,
                 &loader_type,
                 &base_game_version,
                 "failed",
@@ -168,17 +167,21 @@ pub async fn modloader_install(
         }
     };
     tracing::info!(
-        profile_id = %profile_id,
+        key = %key,
         loader = %loader_type,
         version_id = %installed.version_id,
         via_installer_jar = installed.via_installer_jar,
         "Mod loader installed"
     );
 
-    // ── profile 提交与索引刷新已由 core 完成，这里只上报事件 ──
+    if let Ok(mut service) = core.instances.lock() {
+        let _ = service.select_instance(Some(&installed.instance_key));
+    }
+
+    // ── 新实例提交与索引刷新已由 core 完成，这里只上报事件 ──
     emit_modloader_progress(
         &app_handle,
-        &profile_id,
+        &key,
         &loader_type,
         &installed.version_id,
         "completed",
@@ -186,10 +189,11 @@ pub async fn modloader_install(
         "安装完成",
     );
 
+    let installed_key = installed.instance_key.clone();
     let _ = app_handle.emit(
         crate::events::INSTANCES_REFRESHED,
         serde_json::json!({ "version": installed.version_id }),
     );
 
-    Ok(())
+    Ok(installed_key)
 }

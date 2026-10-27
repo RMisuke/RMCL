@@ -11,7 +11,7 @@ import { RmButton, RmIconButton, RmInput, RmSelect, RmTag, RmProgress } from "..
 import { RmDialog } from "../components/rm/overlays";
 import { RmSideTabs, RmListRow, RmEmptyState, RmErrorState, RmCard, RmFieldRow } from "../components/rm/surfaces";
 import { VirtualList } from "../components/rm/VirtualList";
-import { versions, profiles, instances, modLoader, mods, external } from "../ipc/api";
+import { versions, instances, gameDirectories, modLoader, mods, external } from "../ipc/api";
 import type {
   VersionInfo,
   ReleaseType,
@@ -19,10 +19,9 @@ import type {
   ModInfo,
   ModVersion,
   ModSearchResult,
-  InstanceInfo,
-  Profile,
+  InstanceDetail,
 } from "../ipc/types";
-import { profilesStore } from "../stores/profiles";
+import { instancesStore } from "../stores/instances";
 import * as versionCache from "../stores/versionCache";
 import { cacheStore } from "../stores/cache";
 import { downloadsStore } from "../stores/downloads";
@@ -78,7 +77,7 @@ function InstallWizard(): JSX.Element {
   const [step, setStep] = createSignal(1);
   const [versions_, setVersions_] = createSignal<VersionInfo[] | null>(null);
   // Offline fallback: versions already on disk, picked via the advanced dialog.
-  const [localVersions, setLocalVersions] = createSignal<InstanceInfo[]>([]);
+  const [localVersions, setLocalVersions] = createSignal<InstanceDetail[]>([]);
   const [bindLocalOpen, setBindLocalOpen] = createSignal(false);
   const [typeFilter, setTypeFilter] = createSignal<"release" | "snapshot" | "old" | "all">("release");
   type VersionTypeFilter = "release" | "snapshot" | "old" | "all";
@@ -141,7 +140,7 @@ function InstallWizard(): JSX.Element {
   });
 
   const knownVersionIds = createMemo(
-    () => new Set((profilesStore.items() ?? []).map((p) => p.game_version))
+    () => new Set((instancesStore.items() ?? []).map((p) => p.summary.game_version))
   );
 
   // 游戏版本变化时，已选 loader 的版本列表同步重载（缓存 + 代际保护防错乱）。
@@ -182,7 +181,7 @@ function InstallWizard(): JSX.Element {
       setNameError(t("download.wizard.nameTooLong"));
       return false;
     }
-    if ((profilesStore.items() ?? []).some((p) => p.name === value)) {
+    if ((instancesStore.items() ?? []).some((p) => p.summary.display_name === value)) {
       setNameError(t("download.wizard.nameTaken"));
       return false;
     }
@@ -193,22 +192,28 @@ function InstallWizard(): JSX.Element {
   async function execute(): Promise<void> {
     if (!selectedVersion()) return;
     setInstalling(true);
-    const created = await profiles.create(name().trim(), selectedVersion()!);
-    if (!created.ok) {
+    const directory = await gameDirectories.selected();
+    if (!directory.ok) {
       setInstalling(false);
-      toast({ message: created.error.message, tone: "error" });
+      toast({ message: directory.error.message, tone: "error" });
       return;
     }
-    const profile = created.data;
-    profilesStore.upsert(profile);
-    const batchId = `wizard-${profile.id}`;
+    const instanceId = name().trim() || selectedVersion()!;
+    const key = `${directory.data.id}/${instanceId}`;
+    const batchId = `wizard-${key}`;
     downloadsStore.beginInstall({
       batchId,
-      profileId: profile.id,
+      profileId: key,
       version: selectedVersion()!,
-      label: `${selectedVersion()} · ${profile.name}`,
+      label: `${selectedVersion()} · ${instanceId}`,
     });
-    const res = await versions.install(selectedVersion()!, profile.id);
+    const res = await instances.install(
+      directory.data.id,
+      selectedVersion()!,
+      instanceId,
+      loaderType() ?? undefined,
+      loaderVersion() || undefined,
+    );
     if (!res.ok) {
       downloadsStore.finishBatch(batchId, false, res.error.message);
       setInstalling(false);
@@ -217,18 +222,13 @@ function InstallWizard(): JSX.Element {
     }
     toast({ message: t("tasks.download.started", { name: selectedVersion() ?? "" }), tone: "info" });
     uiStore.setTaskCenterOpen(true);
-    if (loaderType() && loaderVersion()) {
-      const loaderRes = await modLoader.install(profile.id, loaderType()!, loaderVersion());
-      if (!loaderRes.ok) toast({ message: loaderRes.error.message, tone: "error" });
-    }
-    if (fabricApi()) void installFabricApi(profile.id, selectedVersion()!);
     setInstalling(false);
     setStep(5);
-    void profilesStore.refresh(true);
+    void instancesStore.refresh(true);
   }
 
   /** 从 Modrinth 拉取与游戏版本匹配的 Fabric API 并装入实例（附加选项）。 */
-  async function installFabricApi(profileId: string, gameVersion: string): Promise<void> {
+  async function installFabricApi(key: string, gameVersion: string): Promise<void> {
     const loader = loaderType();
     if (loader !== "fabric" && loader !== "quilt") {
       toast({ message: t("download.wizard.fabricApi.skipped"), tone: "info" });
@@ -251,7 +251,7 @@ function InstallWizard(): JSX.Element {
       toast({ message: t("download.wizard.fabricApi.notFound"), tone: "error" });
       return;
     }
-    const inst = await mods.install(profileId, mv);
+    const inst = await mods.install(key, mv);
     toast({
       message: inst.ok
         ? t("download.wizard.fabricApi.installed", { version: mv.version_number })
@@ -337,17 +337,15 @@ function InstallWizard(): JSX.Element {
               <For each={localVersions()}>
                 {(local) => (
                   <RmListRow
-                    title={local.id}
-                    subtitle={`${local.game_version}${local.loader_type ? ` · ${loaderLabel(local.loader_type)} ${local.loader_version ?? ""}` : ""}`}
+                    title={local.summary.display_name}
+                    subtitle={`${local.summary.game_version}${local.summary.loader ? ` · ${loaderLabel(local.summary.loader.kind)} ${local.summary.loader.version ?? ""}` : ""}`}
                     trailing={
-                      <RmTag tone={local.missing_count === 0 ? "success" : "warning"}>
-                        {local.missing_count === 0
-                          ? t("download.wizard.localComplete")
-                          : t("download.wizard.localMissing", { count: String(local.missing_count) })}
+                      <RmTag tone={local.directory.kind === "external" ? "success" : "neutral"}>
+                        {local.directory.kind === "external" ? t("instances.root.external") : t("instances.root.primary")}
                       </RmTag>
                     }
                     onClick={() => {
-                      setSelectedVersion(local.id);
+                      setSelectedVersion(local.summary.id);
                       setBindLocalOpen(false);
                     }}
                   />
@@ -519,14 +517,14 @@ function ModStore(): JSX.Element {
   // context without remounting the page.
   const contextProfile = createMemo(() => {
     const id = searchParams.instance ? String(searchParams.instance) : null;
-    return id ? (profilesStore.items() ?? []).find((p) => p.id === id) ?? null : null;
+    return id ? (instancesStore.items() ?? []).find((p) => p.summary.key === id) ?? null : null;
   });
 
   const [source, setSource] = createSignal<"modrinth" | "curseforge">("modrinth");
   const [query, setQuery] = createSignal("");
-  const [gameVersion, setGameVersion] = createSignal(contextProfile()?.game_version ?? "");
+  const [gameVersion, setGameVersion] = createSignal(contextProfile()?.summary.game_version ?? "");
   const [loader, setLoader] = createSignal(
-    contextProfile()?.mod_loader ? String(contextProfile()!.mod_loader!.loader_type) : ""
+    contextProfile()?.summary.loader ? String(contextProfile()!.summary.loader!.kind) : ""
   );
   const [result, setResult] = createSignal<ModSearchResult | null>(null);
   const [page, setPage] = createSignal(1);
@@ -585,29 +583,29 @@ function ModStore(): JSX.Element {
     return (
       detailVersions().find(
         (v) =>
-          v.game_versions.includes(profile.game_version) &&
-          (profile.mod_loader
-            ? v.loaders.some((l) => l.toLowerCase() === String(profile.mod_loader!.loader_type).toLowerCase())
+          v.game_versions.includes(profile.summary.game_version) &&
+          (profile.summary.loader
+            ? v.loaders.some((l) => l.toLowerCase() === String(profile.summary.loader!.kind).toLowerCase())
             : true)
       ) ?? null
     );
   });
 
-  async function installVersion(version: ModVersion, profile: Profile): Promise<void> {
+  async function installVersion(version: ModVersion, profile: InstanceDetail): Promise<void> {
     // 即时反馈（用户要求）：点击即弹提示 + 任务中心入列（合成任务，完成转结果）
     setInstallDialog(null);
     toast({ message: t("tasks.download.started", { name: version.filename ?? version.version_number }), tone: "info" });
     const taskKey = downloadsStore.beginTask(
-      t("tasks.modInstall.label", { mod: version.filename ?? version.version_number, instance: profile.name })
+      t("tasks.modInstall.label", { mod: version.filename ?? version.version_number, instance: profile.summary.display_name })
     );
-    const res = await mods.install(profile.id, version);
+    const res = await mods.install(profile.summary.key, version);
     if (res.ok) {
-      downloadsStore.finishTask(taskKey, true, profile.name);
+      downloadsStore.finishTask(taskKey, true, profile.summary.display_name);
       toast({
-        message: t("modStore.installedTo", { file: res.data, name: profile.name }),
+        message: t("modStore.installedTo", { file: res.data, name: profile.summary.display_name }),
         tone: "success",
         actionLabel: t("modStore.viewInstance"),
-        onAction: () => navigate(`/instances/${profile.id}`),
+        onAction: () => navigate(`/instances/${profile.summary.key}`),
       });
     } else {
       downloadsStore.finishTask(taskKey, false, res.error.message);
@@ -628,7 +626,7 @@ function ModStore(): JSX.Element {
       <Show when={contextProfile()}>
         {(profile) => (
           <div class="context-bar">
-            ⚓ {t("modStore.contextBar", { name: profile().name })}
+            ⚓ {t("modStore.contextBar", { name: profile().summary.display_name })}
             <button
               class="rm-chip"
               onClick={() => {
@@ -677,7 +675,7 @@ function ModStore(): JSX.Element {
           onChange={setGameVersion}
           options={[
             { value: "", label: t("modStore.filter.anyVersion") },
-            ...[...new Set((profilesStore.items() ?? []).map((p) => p.game_version))].map(
+            ...[...new Set((instancesStore.items() ?? []).map((p) => p.summary.game_version))].map(
               (v) => ({ value: v, label: v })
             ),
           ]}
@@ -768,19 +766,19 @@ function ModStore(): JSX.Element {
         onClose={() => setInstallDialog(null)}
       >
         <div class="rm-list">
-          <For each={profilesStore.items() ?? []}>
+          <For each={instancesStore.items() ?? []}>
             {(profile) => {
               const version = installDialog()?.version;
               if (!version) return null;
               const compatible =
                 version.loaders.length === 0 ||
-                (profile.mod_loader
-                  ? version.loaders.some((l) => l.toLowerCase() === String(profile.mod_loader!.loader_type).toLowerCase())
-                  : version.game_versions.includes(profile.game_version));
+                (profile.summary.loader
+                  ? version.loaders.some((l) => l.toLowerCase() === String(profile.summary.loader!.kind).toLowerCase())
+                  : version.game_versions.includes(profile.summary.game_version));
               return (
                 <RmListRow
-                  title={profile.name}
-                  subtitle={profile.game_version}
+                  title={profile.summary.display_name}
+                  subtitle={profile.summary.game_version}
                   onClick={() => void installVersion(version, profile)}
                   trailing={
                     <Show when={!compatible}>

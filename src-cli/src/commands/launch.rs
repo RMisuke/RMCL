@@ -76,7 +76,7 @@ async fn status(ctx: &CliContext) -> CliResult<Value> {
     let running = ctx.launch_status().await?;
     let items: Vec<Value> = running
         .iter()
-        .map(|g| json!({ "profile_id": g.profile_id, "pid": g.pid }))
+        .map(|g| json!({ "key": g.key, "pid": g.pid }))
         .collect();
     Ok(json!({ "running": items, "count": items.len() }))
 }

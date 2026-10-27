@@ -2,7 +2,7 @@
 //! the unified JSON envelope contract end to end (parse → context → handler →
 //! output), with no network involved.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
 const BIN: &str = env!("CARGO_BIN_EXE_rmcli");
@@ -37,6 +37,21 @@ fn temp_dir(tag: &str) -> PathBuf {
     dir
 }
 
+/// Seed a minimal installed version in the default game root, so
+/// `profile create` (which only registers an existing version) can succeed
+/// without network access.
+fn seed_version(data_dir: &Path, version: &str) {
+    let dir = data_dir.join("instances").join("versions").join(version);
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(
+        dir.join(format!("{version}.json")),
+        format!(
+            r#"{{"id":"{version}","type":"release","mainClass":"net.minecraft.client.main.Main","assetIndex":{{"id":"","url":"","sha1":"","size":0,"totalSize":0}},"downloads":{{}},"libraries":[],"javaVersion":null}}"#
+        ),
+    )
+    .unwrap();
+}
+
 /// Parse the final JSON line (envelope) from stdout.
 fn last_json(r: &RunResult) -> serde_json::Value {
     let line = r.stdout.lines().last().unwrap_or_default();
@@ -59,20 +74,22 @@ fn e2e_profile_create_list_json_contract() {
     let dir = temp_dir("profile");
     let d = dir.to_str().unwrap();
 
+    seed_version(&dir, "1.21");
     let create = run(&[
         "-d", d, "--output", "json", "profile", "create", "-n", "E2E", "-v", "1.21",
     ]);
     assert_eq!(create.status, 0);
     let envelope = last_json(&create);
     assert_eq!(envelope["ok"], true);
-    let id = envelope["data"]["id"].as_str().unwrap().to_string();
+    let key = envelope["data"]["key"].as_str().unwrap().to_string();
+    assert_eq!(key, "default/1.21");
 
     let list = run(&["-d", d, "--output", "json", "profile", "list"]);
     assert_eq!(list.status, 0);
     let envelope = last_json(&list);
     assert_eq!(envelope["ok"], true);
     assert_eq!(envelope["data"]["count"], 1);
-    assert_eq!(envelope["data"]["profiles"][0]["id"], id);
+    assert_eq!(envelope["data"]["instances"][0]["key"], key);
 
     let _ = std::fs::remove_dir_all(&dir);
 }
@@ -92,7 +109,14 @@ fn e2e_error_exit_codes() {
 
     // ProfileNotFound → 4.
     let r = run(&[
-        "-d", d, "--output", "json", "profile", "get", "--id", "nope",
+        "-d",
+        d,
+        "--output",
+        "json",
+        "profile",
+        "get",
+        "--id",
+        "default/nope",
     ]);
     assert_eq!(r.status, 4);
     assert_eq!(last_json(&r)["error"]["code"], "profile_not_found");
@@ -160,6 +184,7 @@ fn e2e_json_auto_mode_when_piped() {
     // JSON. We simulate this by NOT passing --output; CI runs stdout as a pipe.
     let dir = temp_dir("auto");
     let d = dir.to_str().unwrap();
+    seed_version(&dir, "1.21");
     let r = run(&["-d", d, "profile", "create", "-n", "Auto", "-v", "1.21"]);
     assert_eq!(r.status, 0);
     // Accept either JSON envelope (pipe) or plain text (interactive) — both

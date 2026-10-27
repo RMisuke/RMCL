@@ -72,6 +72,14 @@ pub const CAPABILITIES: &[CapabilitySpec] = &[
         executable: false,
     },
     CapabilitySpec {
+        name: "themes.skin",
+        description: "替换字体/圆角/间距/背景图/背景视频/组件外观/主界面特效（ADR-014）",
+        risk: CapabilityRisk::Medium,
+        requires_hosts: false,
+        instance_scoped: false,
+        executable: false,
+    },
+    CapabilitySpec {
         name: "settings.read",
         description: "读取公开的应用/实例设置子集",
         risk: CapabilityRisk::Low,

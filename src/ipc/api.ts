@@ -11,8 +11,6 @@ import { invoke } from "@tauri-apps/api/core";
 export type {
   AuthSession,
   AccountMetadata,
-  Profile,
-  ModLoaderConfig,
   ModLoaderType,
   ModVersion,
   VersionInfo,
@@ -25,9 +23,18 @@ export type {
   ErrorCode,
   ResolvedInstanceSettings,
   JavaInfo,
-  InstanceInfo,
   MissingFileInfo,
+  InstanceSummary,
+  InstanceDetail,
+  InstanceSettings,
+  InstanceSettingsPatch,
   InstancePaths,
+  InstanceIcon,
+  GameDirectory,
+  GameDirectoryKind,
+  GlobalGameSettings,
+  EffectiveGameSettings,
+  IsolationPolicy,
   DownloadProgressPayload,
   PluginList,
   PluginDetail,
@@ -40,6 +47,7 @@ export type {
   WidgetDescriptor,
   ThemeInfo,
   ThemeTokens,
+  ThemeSkinPayload,
   BridgeReply,
   AiConfigView,
   AiAnalysisHandle,
@@ -53,14 +61,22 @@ export type {
 
 import type { AppInfoView,
   SettingsUpdate as GeneratedSettingsUpdate,
-  ProfileUpdateOpts as GeneratedProfileUpdateOpts,
+  InstanceSettingsPatch as GeneratedInstanceSettingsPatch,
   AuthSession,
   AccountMetadata,
-  Profile,
   ModVersion,
   ModInfo,
   ModSearchResult,
-  InstanceInfo,
+  InstanceSummary,
+  InstanceDetail,
+  InstanceSettingsPatch,
+  InstancePaths,
+  InstanceIcon,
+  GameDirectory,
+  GameDirectoryKind,
+  GlobalGameSettings,
+  EffectiveGameSettings,
+  IsolationPolicy,
   VersionInfo,
   AppConfig,
   UserSettings,
@@ -69,7 +85,6 @@ import type { AppInfoView,
   IpcError,
   JavaInfo,
   MissingFileInfo,
-  InstancePaths,
   ModList,
   LoaderVersion,
   ResolvedInstanceSettings,
@@ -84,6 +99,7 @@ import type { AppInfoView,
   WidgetDescriptor,
   ThemeInfo,
   ThemeTokens,
+  ThemeSkinPayload,
   BridgeReply,
   AiConfigView,
   AiAnalysisHandle,
@@ -99,7 +115,7 @@ import type { AppInfoView,
 // (so they can never drift from the Rust structs), wrapped in `Partial` because
 // the backend treats an omitted field as "leave unchanged".
 export type SettingsUpdate = Partial<GeneratedSettingsUpdate>;
-export type ProfileUpdateOpts = Partial<GeneratedProfileUpdateOpts>;
+export type InstanceSettingsPatchInput = Partial<GeneratedInstanceSettingsPatch>;
 
 // ── Safe invoke wrapper ──
 
@@ -143,34 +159,77 @@ export const auth = {
     safeInvoke<import("./types").SkinTextures | null>("auth_skin_url", { uuid }),
 };
 
-// ── Profiles ──
+// ── Instances (ADR-016: version-backed instances) ──
 
-export const profiles = {
-  list: () => safeInvoke<Profile[]>("profile_list"),
-  create: (name: string, gameVersion: string) =>
-    safeInvoke<Profile>("profile_create", { name, gameVersion }),
-  /** Import a version from an external game directory as a launchable profile. */
-  importVersion: (root: string, versionId: string) =>
-    safeInvoke<Profile>("profile_import_version", { root, versionId }),
-  update: (id: string, opts: ProfileUpdateOpts) =>
-    safeInvoke<Profile>("profile_update", { id, opts }),
-  delete: (id: string, cleanupGameDir: boolean) =>
-    safeInvoke<void>("profile_delete", { id, cleanupGameDir }),
+export const instances = {
+  /** Full details (settings + effective + paths) for the selected directory,
+   *  or all registered directories. `key` = `{directory_id}/{instance_id}`. */
+  list: (directoryId?: string, all = false, includeHidden = false) =>
+    safeInvoke<InstanceDetail[]>("instance_list", { directoryId, all, includeHidden }),
+  get: (key: string) => safeInvoke<InstanceDetail>("instance_get", { key }),
+  refresh: (directoryId?: string, includeHidden = false) =>
+    safeInvoke<InstanceDetail[]>("instance_refresh", { directoryId, includeHidden }),
+  updateSettings: (key: string, opts: InstanceSettingsPatchInput) =>
+    safeInvoke<InstanceDetail>("instance_update_settings", { key, opts }),
+  resolvedSettings: (key: string) =>
+    safeInvoke<ResolvedInstanceSettings>("instance_resolved_settings", { key }),
+  paths: (key: string) => safeInvoke<InstancePaths>("instance_paths", { key }),
+  select: (key: string | null) => safeInvoke<void>("instance_select", { key }),
+  rename: (key: string, newId: string) =>
+    safeInvoke<InstanceDetail>("instance_rename", { key, newId }),
+  duplicate: (key: string, newId: string, copySaves = false) =>
+    safeInvoke<InstanceDetail>("instance_duplicate", { key, newId, copySaves }),
+  /** `deleteFiles=false` hides the instance and keeps `versions/{id}`. */
+  remove: (key: string, deleteFiles = false) =>
+    safeInvoke<void>("instance_remove", { key, deleteFiles }),
+  /** Register an already-installed version as a first-class instance. */
+  import: (directoryId: string, id: string) =>
+    safeInvoke<InstanceDetail>("instance_import", { directoryId, id }),
+  /** Download + create a new version-backed instance (background). */
+  install: (
+    directoryId: string,
+    mcVersion: string,
+    instanceId?: string,
+    loaderType?: string,
+    loaderVersion?: string
+  ) =>
+    safeInvoke<void>("instance_install", {
+      directoryId,
+      mcVersion,
+      instanceId,
+      loaderType,
+      loaderVersion,
+    }),
+  checkCompletion: (key: string) =>
+    safeInvoke<MissingFileInfo[]>("instance_check_completion", { key }),
+  repair: (key: string) => safeInvoke<number>("instance_repair", { key }),
+  globalSettings: () => safeInvoke<GlobalGameSettings>("instance_global_settings"),
+  updateGlobalSettings: (settings: GlobalGameSettings) =>
+    safeInvoke<GlobalGameSettings>("instance_update_global_settings", { settings }),
+};
+
+export const gameDirectories = {
+  list: () => safeInvoke<GameDirectory[]>("game_directory_list"),
+  selected: () => safeInvoke<GameDirectory>("game_directory_selected"),
+  add: (path: string, name?: string, external = true) =>
+    safeInvoke<GameDirectory>("game_directory_add", { path, name, external }),
+  update: (id: string, name?: string, path?: string) =>
+    safeInvoke<GameDirectory>("game_directory_update", { id, name, path }),
+  remove: (id: string) => safeInvoke<void>("game_directory_remove", { id }),
+  select: (id: string) => safeInvoke<GameDirectory>("game_directory_select", { id }),
 };
 
 // ── Versions ──
 
 export const versions = {
   list: () => safeInvoke<VersionInfo[]>("version_list"),
-  install: (version: string, profileId: string) =>
-    safeInvoke<void>("version_install", { version, profileId }),
 };
 
 // ── Launch ──
 
 export const launch = {
-  start: (profileId: string) => safeInvoke<void>("launch_start", { profileId }),
-  kill: (profileId: string) => safeInvoke<void>("launch_kill", { profileId }),
+  start: (key: string) => safeInvoke<void>("launch_start", { key }),
+  kill: (key: string) => safeInvoke<void>("launch_kill", { key }),
   status: () => safeInvoke<string[]>("launch_status"),
 };
 
@@ -190,22 +249,21 @@ export const mods = {
     safeInvoke<ModVersion[]>("mod_get_versions", { modId }),
   getDownloadUrl: (versionId: string) =>
     safeInvoke<string>("mod_get_download_url", { versionId }),
-  list: (profileId: string) =>
-    safeInvoke<ModList>("mod_list", { profileId }),
-  toggle: (profileId: string, modFilename: string, enabled: boolean) =>
-    safeInvoke<void>("mod_toggle", { profileId, modFilename, enabled }),
-  install: (profileId: string, version: ModVersion) =>
-    safeInvoke<string>("mod_install", { profileId, version }),
-  remove: (profileId: string, modFilename: string) =>
-    safeInvoke<void>("mod_remove", { profileId, modFilename }),
-  pickAndInstall: (profileId: string) =>
-    safeInvoke<string | null>("mod_pick_and_install", { profileId }),
+  list: (key: string) => safeInvoke<ModList>("mod_list", { key }),
+  toggle: (key: string, modFilename: string, enabled: boolean) =>
+    safeInvoke<void>("mod_toggle", { key, modFilename, enabled }),
+  install: (key: string, version: ModVersion) =>
+    safeInvoke<string>("mod_install", { key, version }),
+  remove: (key: string, modFilename: string) =>
+    safeInvoke<void>("mod_remove", { key, modFilename }),
+  pickAndInstall: (key: string) =>
+    safeInvoke<string | null>("mod_pick_and_install", { key }),
   /** 检查缺失前置（ADR-013 S3，纯逻辑无 AI）：扫描报告 + dry-run 补装计划。 */
-  dependencyScan: (profileId: string) =>
-    safeInvoke<ModsDependencyScanView>("mods_dependency_scan", { profileId }),
+  dependencyScan: (key: string) =>
+    safeInvoke<ModsDependencyScanView>("mods_dependency_scan", { key }),
   /** 一键补装：执行前后端会重新扫描（Core 再校验），只装仍缺失项。 */
-  applyPlan: (profileId: string) =>
-    safeInvoke<AppliedPlanReport>("mods_apply_plan", { profileId }),
+  applyPlan: (key: string) =>
+    safeInvoke<AppliedPlanReport>("mods_apply_plan", { key }),
 };
 
 // ── Mod loaders ──
@@ -213,8 +271,8 @@ export const mods = {
 export const modLoader = {
   list: (loaderType: string, gameVersion: string) =>
     safeInvoke<LoaderVersion[]>("modloader_list", { loaderType, gameVersion }),
-  install: (profileId: string, loaderType: string, loaderVersion: string) =>
-    safeInvoke<void>("modloader_install", { profileId, loaderType, loaderVersion }),
+  install: (key: string, loaderType: string, loaderVersion: string) =>
+    safeInvoke<string>("modloader_install", { key, loaderType, loaderVersion }),
 };
 
 // ── Downloads ──
@@ -223,35 +281,6 @@ export const downloads = {
   cancel: (batchId: string) => safeInvoke<void>("download_cancel", { batchId }),
   pause: (batchId: string) => safeInvoke<void>("download_pause", { batchId }),
   resume: (batchId: string) => safeInvoke<void>("download_resume", { batchId }),
-};
-
-// ── Instances（本地实例仓库 / 路径）──
-
-export const instances = {
-  /** Local version repository entries (disk `versions/` — NOT profiles).
-   *  `root` selects an extra game root; omit for the primary root. */
-  list: (root?: string) =>
-    safeInvoke<InstanceInfo[]>("instance_list", { root }),
-  /** Effective on-disk locations; the run dir depends on the isolation setting. */
-  paths: (id: string) => safeInvoke<InstancePaths>("instance_paths", { id }),
-  refresh: () => safeInvoke<InstanceInfo[]>("instance_refresh"),
-  checkCompletion: (id: string) =>
-    safeInvoke<MissingFileInfo[]>("instance_check_completion", { id }),
-  /** Returns the number of repaired files. */
-  repair: (id: string) => safeInvoke<number>("instance_repair", { id }),
-  /** Version-repository maintenance (ids are VERSION ids, not profile ids). */
-  rename: (id: string, newId: string) =>
-    safeInvoke<void>("instance_rename", { id, newId }),
-  duplicate: (id: string, newId: string) =>
-    safeInvoke<void>("instance_duplicate", { id, newId }),
-  remove: (id: string) => safeInvoke<void>("instance_remove", { id }),
-  /**
-   * Effective launch values (instance overrides merged with launcher defaults).
-   * Single source of truth for "what will actually be used" — the settings page
-   * must not re-derive inheritance in TypeScript (audit P2-8).
-   */
-  resolvedSettings: (id: string) =>
-    safeInvoke<ResolvedInstanceSettings>("instance_resolved_settings", { id }),
 };
 
 // ── Settings ──
@@ -344,6 +373,8 @@ export const dashboard = {
   listThemes: () => safeInvoke<ThemeInfo[]>("dashboard_list_themes"),
   getThemeTokens: (key: string) =>
     safeInvoke<ThemeTokens>("dashboard_get_theme_tokens", { key }),
+  getThemeSkin: (key: string) =>
+    safeInvoke<ThemeSkinPayload>("dashboard_get_theme_skin", { key }),
   setTheme: (theme: string) =>
     safeInvoke<UserSettings>("dashboard_set_theme_preference", { theme }),
   getThemePreference: () =>
@@ -387,8 +418,8 @@ export const ai = {
   probeModels: (baseUrl?: string, apiKey?: string) =>
     safeInvoke<string[]>("ai_models_probe", { baseUrl, apiKey }),
   /** 游戏日志一键分析：返回 analysis_id，增量经 `ai://delta/done/error` 事件回传。 */
-  analyzeLog: (profileId?: string) =>
-    safeInvoke<AiAnalysisHandle>("ai_analyze_log", { profileId }),
+  analyzeLog: (key?: string) =>
+    safeInvoke<AiAnalysisHandle>("ai_analyze_log", { key }),
   cancelAnalysis: (analysisId: string) =>
     safeInvoke<boolean>("ai_analyze_cancel", { analysisId }),
 };

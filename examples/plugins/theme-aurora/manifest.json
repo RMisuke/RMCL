@@ -1,0 +1,22 @@
+{
+  "manifestVersion": 1,
+  "id": "dev.rmccc.theme-aurora",
+  "name": "Aurora Glass",
+  "version": "1.0.0",
+  "description": "Aurora Glass：流动极光视频背景、玻璃卡片、自定义字体与主界面特效。",
+  "publisher": { "id": "dev.rmccc", "name": "RMCCC Examples" },
+  "compatibility": {
+    "pluginApi": "1.x",
+    "core": ">=0.1.0 <0.2.0",
+    "platforms": []
+  },
+  "permissions": [
+    { "capability": "themes.apply", "reason": "提供极光配色" },
+    { "capability": "themes.skin", "reason": "替换字体、圆角、间距、背景视频、组件外观与主界面特效" }
+  ],
+  "contributes": {
+    "themes": [
+      { "id": "aurora", "name": "Aurora Glass", "path": "themes/aurora.json" }
+    ]
+  }
+}

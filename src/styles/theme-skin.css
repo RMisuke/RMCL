@@ -1,0 +1,535 @@
+/* ==========================================================================
+   Theme v2 skin layer (ADR-014) — host-owned.
+
+   Themes only supply typed values; this file consumes them through
+   `--rmccc-skin-*` variables. Every fallback below is the current Visual Voxel
+   default, so with no v2 theme installed nothing changes.
+   ========================================================================== */
+
+:root {
+  --font-display: var(--font-stack);
+  --rmccc-shadow-none: none;
+  --rmccc-shadow-soft: 0 1px 1px color-mix(in srgb, var(--rmccc-text) 4%, transparent),
+    0 12px 32px color-mix(in srgb, var(--rmccc-background) 38%, transparent),
+    inset 0 1px 0 color-mix(in srgb, var(--rmccc-text) 7%, transparent);
+  --rmccc-shadow-strong: 0 2px 4px color-mix(in srgb, var(--rmccc-text) 6%, transparent),
+    0 30px 80px color-mix(in srgb, var(--rmccc-background) 55%, transparent),
+    inset 0 1px 0 color-mix(in srgb, var(--rmccc-text) 10%, transparent);
+}
+
+/* ── Backdrop / media ─────────────────────────────────────────────────── */
+
+.theme-backdrop {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  overflow: hidden;
+  border-radius: inherit;
+  pointer-events: none;
+}
+
+.app-root > .app-body {
+  position: relative;
+  z-index: 1;
+}
+
+/* `both`/`app` 背景由 App 层承担；Hero 透明让同一份视频透过来。 */
+html[data-skin-background="app"] .hero,
+html[data-skin-background="both"] .hero {
+  background: transparent;
+}
+
+.theme-hero-layer {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  overflow: hidden;
+  pointer-events: none;
+}
+
+.theme-media {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+}
+
+.theme-media > img,
+.theme-media > video {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: var(--media-fit, cover);
+  object-position: var(--media-position, center);
+  transform: scale(1.02);
+  filter: blur(var(--media-blur, 0));
+}
+
+.theme-media-poster {
+  z-index: 0;
+}
+
+.theme-media-video {
+  z-index: 1;
+}
+
+.theme-media-image {
+  z-index: 1;
+}
+
+.theme-media-dim {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+}
+
+.theme-effects {
+  position: absolute;
+  inset: 0;
+  z-index: 3; /* 高于背景媒体（video=1 / dim=2），否则特效会被视频整层盖住 */
+  overflow: hidden;
+  pointer-events: none;
+}
+
+/* ── Effect preset: aurora ────────────────────────────────────────────── */
+
+.theme-aurora {
+  position: absolute;
+  inset: -22%;
+  opacity: calc(0.25 + var(--aurora-intensity, 0.5) * 0.55);
+  filter: blur(46px) saturate(125%);
+}
+
+.theme-aurora i {
+  position: absolute;
+  display: block;
+  width: 58%;
+  aspect-ratio: 1;
+  border-radius: 50%;
+  mix-blend-mode: screen;
+  background: radial-gradient(
+    circle,
+    color-mix(in srgb, var(--rmccc-accent) 62%, transparent),
+    transparent 68%
+  );
+  animation: theme-aurora-drift var(--aurora-speed, 22s) ease-in-out infinite alternate;
+}
+
+.theme-aurora i:nth-child(1) {
+  left: 4%;
+  top: 6%;
+}
+
+.theme-aurora i:nth-child(2) {
+  right: 2%;
+  top: 18%;
+  background: radial-gradient(
+    circle,
+    color-mix(in srgb, var(--rmccc-accent-secondary) 58%, transparent),
+    transparent 70%
+  );
+  animation-delay: -7s;
+}
+
+.theme-aurora i:nth-child(3) {
+  left: 26%;
+  bottom: -12%;
+  background: radial-gradient(
+    circle,
+    color-mix(in srgb, var(--rmccc-accent-tertiary) 46%, transparent),
+    transparent 70%
+  );
+  animation-delay: -14s;
+}
+
+@keyframes theme-aurora-drift {
+  from {
+    transform: translate3d(-5%, -3%, 0) scale(1);
+  }
+  to {
+    transform: translate3d(7%, 5%, 0) scale(1.18);
+  }
+}
+
+/* ── Effect preset: rotating blocks ───────────────────────────────────── */
+
+.theme-block {
+  position: absolute;
+  width: var(--size, 56px);
+  height: var(--size, 56px);
+  perspective: 720px;
+  animation: theme-block-float calc(var(--speed, 18s) * 1.7) ease-in-out infinite alternate;
+  animation-delay: var(--delay, 0s);
+}
+
+.theme-block-spin {
+  display: block;
+  width: 100%;
+  height: 100%;
+  transform-style: preserve-3d;
+  animation: theme-block-spin var(--speed, 18s) linear infinite;
+  animation-delay: var(--delay, 0s);
+}
+
+.theme-block .face {
+  position: absolute;
+  inset: 0;
+  background-size: 100% 100%;
+  background-repeat: no-repeat;
+  image-rendering: pixelated;
+  border-radius: calc(var(--size, 56px) * 0.12);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--rmccc-text) 12%, transparent);
+}
+
+.theme-block .front {
+  transform: translateZ(calc(var(--size, 56px) / 2));
+}
+
+.theme-block .back {
+  transform: rotateY(180deg) translateZ(calc(var(--size, 56px) / 2));
+}
+
+.theme-block .right {
+  transform: rotateY(90deg) translateZ(calc(var(--size, 56px) / 2));
+}
+
+.theme-block .left {
+  transform: rotateY(-90deg) translateZ(calc(var(--size, 56px) / 2));
+}
+
+.theme-block .top {
+  transform: rotateX(90deg) translateZ(calc(var(--size, 56px) / 2));
+  filter: brightness(1.18);
+}
+
+@keyframes theme-block-spin {
+  from {
+    transform: rotateX(-14deg) rotateY(0deg);
+  }
+  to {
+    transform: rotateX(-14deg) rotateY(360deg);
+  }
+}
+
+@keyframes theme-block-float {
+  from {
+    transform: translateY(-8px);
+  }
+  to {
+    transform: translateY(10px);
+  }
+}
+
+/* ── Effect preset: particles ─────────────────────────────────────────── */
+
+.theme-particle {
+  position: absolute;
+  width: var(--particle-size, 3px);
+  height: var(--particle-size, 3px);
+  border-radius: 50%;
+  background: var(--particle-color, var(--rmccc-accent));
+  box-shadow: 0 0 10px var(--particle-color, var(--rmccc-accent));
+  opacity: 0;
+  animation: theme-particle-drift var(--particle-duration, 18s) linear infinite;
+  animation-delay: var(--particle-delay, 0s);
+}
+
+.theme-particle.is-square {
+  border-radius: 1px;
+}
+
+.theme-particle.is-star {
+  border-radius: 0;
+  clip-path: polygon(
+    50% 0%,
+    61% 35%,
+    98% 35%,
+    68% 57%,
+    79% 91%,
+    50% 70%,
+    21% 91%,
+    32% 57%,
+    2% 35%,
+    39% 35%
+  );
+}
+
+@keyframes theme-particle-drift {
+  0% {
+    transform: translate3d(0, 20px, 0) scale(0.7);
+    opacity: 0;
+  }
+  12% {
+    opacity: 0.85;
+  }
+  85% {
+    opacity: 0.5;
+  }
+  100% {
+    transform: translate3d(var(--particle-drift, 0px), -140px, 0) scale(1.05);
+    opacity: 0;
+  }
+}
+
+/* ── Motion gates ─────────────────────────────────────────────────────── */
+
+html[data-motion="off"] .theme-block,
+html[data-motion="off"] .theme-block-spin,
+html[data-motion="off"] .theme-aurora i,
+html[data-motion="off"] .theme-particle {
+  animation: none;
+}
+
+html[data-motion="off"] .theme-media-video {
+  display: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .theme-block,
+  .theme-block-spin,
+  .theme-aurora i,
+  .theme-particle {
+    animation: none;
+  }
+
+  .theme-media-video {
+    display: none;
+  }
+}
+
+/* ── Navigation icons / ornaments ─────────────────────────────────────── */
+
+.dock-icon {
+  width: 16px;
+  height: 16px;
+  object-fit: contain;
+}
+
+.titlebar-ornament {
+  position: absolute;
+  top: 50%;
+  z-index: 1;
+  max-height: 44px;
+  object-fit: contain;
+  transform: translateY(-50%);
+  pointer-events: none;
+}
+
+.titlebar-ornament.is-left {
+  left: 132px;
+}
+
+.titlebar-ornament.is-right {
+  right: 190px;
+}
+
+/* ── Typography ───────────────────────────────────────────────────────── */
+
+h1,
+h2,
+h3,
+.page-title,
+.rm-card-title,
+.hero-card-title,
+.hero-module-heading,
+.hero-signature-mark {
+  font-family: var(--font-display, var(--font-stack));
+}
+
+/* ── Component slots ──────────────────────────────────────────────────── */
+
+.rm-card {
+  background: var(--rmccc-skin-card-bg, var(--rmccc-surface));
+  border-color: var(--rmccc-skin-card-border, var(--rmccc-border));
+  border-radius: var(--rmccc-skin-card-radius, var(--rmccc-radius-card));
+  box-shadow: var(--rmccc-skin-card-shadow, var(--rmccc-shadow-card));
+  backdrop-filter: var(--rmccc-skin-card-blur, none);
+}
+
+.rm-card {
+  color: var(--rmccc-skin-card-text, var(--rmccc-text));
+}
+
+.rm-card-body {
+  padding: var(--rmccc-skin-card-padding, var(--rmccc-space-4));
+}
+
+.hero-card,
+.hero-module {
+  border-color: var(
+    --rmccc-skin-hero-border,
+    color-mix(in srgb, var(--rmccc-text) 9%, transparent)
+  );
+  border-radius: var(--rmccc-skin-hero-radius, 18px);
+  background: var(
+    --rmccc-skin-hero-bg,
+    linear-gradient(
+      145deg,
+      color-mix(in srgb, var(--rmccc-surface-elevated) 76%, transparent),
+      color-mix(in srgb, var(--rmccc-surface) 66%, transparent)
+    )
+  );
+  box-shadow: var(--rmccc-skin-hero-shadow, var(--rmccc-shadow-card));
+  backdrop-filter: var(--rmccc-skin-hero-blur, blur(24px) saturate(135%));
+  color: var(--rmccc-skin-hero-text, var(--rmccc-text));
+}
+
+.instance-card {
+  border-color: var(--rmccc-skin-card-border, var(--rmccc-border));
+  border-radius: var(--rmccc-skin-card-radius, 18px);
+  background: var(--rmccc-skin-card-bg, var(--rmccc-surface));
+  box-shadow: var(--rmccc-skin-card-shadow, var(--rmccc-shadow-card));
+  backdrop-filter: var(--rmccc-skin-card-blur, none);
+}
+
+.rm-btn {
+  border-radius: var(--rmccc-skin-button-radius, var(--rmccc-radius-control));
+}
+
+html[data-skin-pill="on"] .rm-btn {
+  border-radius: 999px;
+}
+
+.rm-btn-primary {
+  background: var(--rmccc-skin-button-primary-bg, var(--rmccc-accent-gradient));
+  color: var(--rmccc-skin-button-primary-text, var(--rmccc-accent-contrast));
+}
+
+.rm-input,
+.rm-select,
+.rm-textarea {
+  background: var(
+    --rmccc-skin-input-bg,
+    color-mix(in srgb, var(--rmccc-background) 30%, var(--rmccc-surface))
+  );
+  border-color: var(
+    --rmccc-skin-input-border,
+    color-mix(in srgb, var(--rmccc-border) 82%, transparent)
+  );
+  border-radius: var(--rmccc-skin-input-radius, var(--rmccc-radius-control));
+}
+
+.rm-menu {
+  background: var(--rmccc-skin-menu-bg, var(--rmccc-surface-elevated));
+  border-color: var(--rmccc-skin-menu-border, var(--rmccc-border));
+  border-radius: var(--rmccc-skin-menu-radius, 13px);
+  box-shadow: var(--rmccc-skin-menu-shadow, var(--rmccc-shadow-2));
+  backdrop-filter: var(--rmccc-skin-menu-blur, none);
+}
+
+.rm-dialog {
+  background: var(--rmccc-skin-dialog-bg, var(--rmccc-surface-elevated));
+  border-color: var(--rmccc-skin-dialog-border, var(--rmccc-border));
+  border-radius: var(--rmccc-skin-dialog-radius, var(--rmccc-radius-modal));
+  box-shadow: var(--rmccc-skin-dialog-shadow, var(--rmccc-shadow-2));
+  backdrop-filter: var(--rmccc-skin-dialog-blur, none);
+}
+
+.rm-tag {
+  background: var(--rmccc-skin-tag-bg, color-mix(in srgb, var(--rmccc-surface-elevated) 64%, transparent));
+  border-color: var(--rmccc-skin-tag-border, var(--rmccc-border));
+  border-radius: var(--rmccc-skin-tag-radius, 7px);
+  color: var(--rmccc-skin-tag-text, var(--rmccc-text));
+}
+
+.titlebar {
+  background: var(
+    --rmccc-skin-titlebar-bg,
+    color-mix(in srgb, var(--rmccc-surface) 68%, transparent)
+  );
+  border-bottom-color: var(
+    --rmccc-skin-titlebar-border,
+    color-mix(in srgb, var(--rmccc-border) 64%, transparent)
+  );
+  backdrop-filter: var(--rmccc-skin-titlebar-blur, blur(26px) saturate(140%));
+}
+
+/* ── Component images (SVG / pixel textures) ──────────────────────────── */
+
+html[data-skin-card-image="background"] .rm-card,
+html[data-skin-card-image="background"] .instance-card {
+  background-image: var(--rmccc-skin-card-image);
+  background-size: 100% 100%;
+  background-repeat: no-repeat;
+}
+
+html[data-skin-card-image="border"] .rm-card,
+html[data-skin-card-image="border"] .instance-card {
+  border-width: var(--rmccc-skin-card-slice, 8px);
+  border-style: solid;
+  border-color: transparent;
+  border-image: var(--rmccc-skin-card-image) var(--rmccc-skin-card-slice, 8) fill /
+    var(--rmccc-skin-card-slice, 8px) stretch;
+}
+
+html[data-skin-hero-image="background"] .hero-card,
+html[data-skin-hero-image="background"] .hero-module {
+  background-image: var(--rmccc-skin-hero-image);
+  background-size: 100% 100%;
+  background-repeat: no-repeat;
+}
+
+html[data-skin-hero-image="border"] .hero-card,
+html[data-skin-hero-image="border"] .hero-module {
+  border-width: var(--rmccc-skin-hero-slice, 8px);
+  border-style: solid;
+  border-color: transparent;
+  border-image: var(--rmccc-skin-hero-image) var(--rmccc-skin-hero-slice, 8) fill /
+    var(--rmccc-skin-hero-slice, 8px) stretch;
+}
+
+html[data-skin-button-image="background"] .rm-btn-primary {
+  background-image: var(--rmccc-skin-button-image);
+  background-size: 100% 100%;
+  background-repeat: no-repeat;
+}
+
+/* 按钮用伪元素画九宫格，避免 border-width 吃掉固定高度里的文字。 */
+html[data-skin-button-image="border"] .rm-btn,
+html[data-skin-button-image="border"] .rm-btn-primary,
+html[data-skin-button-image="border"] .rm-btn-secondary {
+  background: transparent;
+}
+
+html[data-skin-button-image="border"] .rm-btn::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+  border: var(--rmccc-skin-button-slice, 6px) solid transparent;
+  border-image: var(--rmccc-skin-button-image) var(--rmccc-skin-button-slice, 6) fill /
+    var(--rmccc-skin-button-slice, 6px) stretch;
+}
+
+html[data-skin-tag-image="background"] .rm-tag {
+  background-image: var(--rmccc-skin-tag-image);
+  background-size: 100% 100%;
+  background-repeat: no-repeat;
+}
+
+html[data-skin-menu-image="background"] .rm-menu {
+  background-image: var(--rmccc-skin-menu-image);
+  background-size: 100% 100%;
+  background-repeat: no-repeat;
+}
+
+html[data-skin-dialog-image="background"] .rm-dialog {
+  background-image: var(--rmccc-skin-dialog-image);
+  background-size: 100% 100%;
+  background-repeat: no-repeat;
+}
+
+html[data-skin-titlebar-image="background"] .titlebar {
+  background-image: var(--rmccc-skin-titlebar-image);
+  background-size: 100% 100%;
+  background-repeat: no-repeat;
+}
+
+html[data-skin-input-image="background"] .rm-input,
+html[data-skin-input-image="background"] .rm-select,
+html[data-skin-input-image="background"] .rm-textarea {
+  background-image: var(--rmccc-skin-input-image);
+  background-size: 100% 100%;
+  background-repeat: no-repeat;
+}

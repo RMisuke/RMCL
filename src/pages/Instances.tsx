@@ -1,28 +1,29 @@
 /**
- * Instance list (ui-design 03): card grid / compact list, search + sort,
- * inline launch/stop, context menu, single CTA for creation.
+ * Instance list (ADR-016): version-backed instances grouped by game directory.
+ *
+ * There is no separate "version repository" page anymore — an instance *is*
+ * `versions/{id}`. The list deliberately skips the expensive completeness scan;
+ * health checks live in the instance detail maintenance tab.
  */
 import type { JSX } from "solid-js";
-import { Show, For, createMemo, createSignal, createEffect, onMount } from "solid-js";
+import { Show, For, createMemo, createSignal, onMount } from "solid-js";
 import { useNavigate } from "@solidjs/router";
 import { PageHeader } from "../components/PageHeader";
 import { RmButton, RmIconButton, RmInput, RmSelect, RmTag } from "../components/rm/controls";
 import { RmMenu, RmDialog } from "../components/rm/overlays";
-import { RmContentState, RmEmptyState, RmListRow } from "../components/rm/surfaces";
-import { profilesStore } from "../stores/profiles";
+import { RmContentState, RmEmptyState } from "../components/rm/surfaces";
+import { instancesStore } from "../stores/instances";
 import { launchStore } from "../stores/launch";
-import { profiles, instances, dialog } from "../ipc/api";
-import { settingsStore } from "../stores/settings";
-import { uiStore, toast, confirmDanger, promptText } from "../stores/ui";
+import { instances, gameDirectories, dialog } from "../ipc/api";
+import type { GameDirectory, InstanceDetail } from "../ipc/types";
+import type { DeleteInstanceTarget } from "../components/DeleteInstanceDialog";
+import { uiStore, toast, promptText } from "../stores/ui";
 import { t } from "../i18n";
 import { initialOf, relativeTime, elidePath } from "../lib/format";
 import { playtimeLabel } from "../lib/playtime";
 import { loaderLabel } from "../lib/loaders";
-import type { InstanceInfo } from "../ipc/types";
 import { readPref, writePref } from "../lib/prefs";
-import { Icon } from "../components/icons";
 import { DeleteInstanceDialog } from "../components/DeleteInstanceDialog";
-import type { Profile } from "../ipc/api";
 
 type SortKey = "lastPlayed" | "name" | "created";
 
@@ -31,211 +32,181 @@ export default function Instances(): JSX.Element {
   const [search, setSearch] = createSignal("");
   const [sort, setSort] = createSignal<SortKey>(readPref("instances.sort", "lastPlayed"));
   const [view, setView] = createSignal<"cards" | "list">(readPref("instances.view", "cards"));
-  // 多游戏目录："" = 全部根合并；路径值 = 只看该根下的版本。
-  const [rootFilter, setRootFilter] = createSignal("");
+  const [directories, setDirectories] = createSignal<GameDirectory[]>([]);
+  const [selectedDir, setSelectedDir] = createSignal("");
+  const [detailTarget, setDetailTarget] = createSignal<DeleteInstanceTarget | null>(null);
+  const [deleteOpen, setDeleteOpen] = createSignal(false);
+
+  async function loadDirectories(): Promise<void> {
+    const [all, selected] = await Promise.all([
+      gameDirectories.list(),
+      gameDirectories.selected(),
+    ]);
+    if (all.ok) setDirectories(all.data);
+    if (selected.ok) setSelectedDir(selected.data.id);
+    else if (all.ok && all.data[0]) setSelectedDir(all.data[0].id);
+  }
 
   onMount(() => {
-    void settingsStore.refresh();
-  });
-
-  /** 主根（配置的 game_root_dir）+ 额外根。 */
-  const roots = createMemo(() => {
-    const config = settingsStore.config();
-    const primary = config?.game_root_dir ?? "";
-    const extras = config?.extra_game_roots ?? [];
-    return { primary, extras };
+    void (async () => {
+      await loadDirectories();
+      await instancesStore.refresh(true);
+    })();
   });
 
   const items = createMemo(() => {
     const query = search().trim().toLowerCase();
-    const list = (profilesStore.items() ?? []).filter((p) =>
-      query ? p.name.toLowerCase().includes(query) : true
+    const list = (instancesStore.items() ?? []).filter((item) =>
+      query
+        ? item.summary.display_name.toLowerCase().includes(query) ||
+          item.summary.game_version.toLowerCase().includes(query)
+        : true
     );
     const sorted = [...list];
     sorted.sort((a, b) => {
       switch (sort()) {
         case "name":
-          return a.name.localeCompare(b.name);
+          return a.summary.display_name.localeCompare(b.summary.display_name);
         case "created":
-          return a.created_at.localeCompare(b.created_at);
+          return (a.summary.created_at ?? "").localeCompare(b.summary.created_at ?? "");
         default:
-          return (b.last_played ?? "").localeCompare(a.last_played ?? "");
+          return (b.summary.last_played ?? "").localeCompare(a.summary.last_played ?? "");
       }
     });
     return sorted;
   });
 
-  /** “浏览其他游戏目录”的版本清单（导入后即可启动/改设置）。 */
-  const [rootVersions, setRootVersions] = createSignal<InstanceInfo[] | null>(null);
-  const [manageOpen, setManageOpen] = createSignal(false);
-  const [rootLoading, setRootLoading] = createSignal(false);
+  const currentDirectory = createMemo(
+    () => directories().find((d) => d.id === selectedDir()) ?? null
+  );
 
-  /** "Forge 47.4.20" / "原版（无加载器）" for a browsed version. */
-  function loaderLine(version: InstanceInfo): string {
-    if (!version.loader_type) return t("instances.versionDetail.vanilla");
-    const label = loaderLabel(version.loader_type);
-    return version.loader_version ? `${label} ${version.loader_version}` : label;
-  }
-
-  /** Profile already imported for this external root + version (idempotent). */
-  function importedProfile(version: InstanceInfo): Profile | undefined {
-    const root = rootFilter().replace(/\/+$/, "");
-    return profilesStore
-      .items()
-      ?.find(
-        (p) =>
-          p.external_root &&
-          p.game_version === version.id &&
-          p.game_dir.replace(/\/+$/, "") === root
-      );
-  }
-
-  function isVersionRunning(version: InstanceInfo): boolean {
-    const profile = importedProfile(version);
-    return !!profile && launchStore.isRunning(profile.id);
-  }
-
-  /** Import on demand, then return the launchable profile. */
-  async function importVersion(version: InstanceInfo): Promise<Profile | null> {
-    const existing = importedProfile(version);
-    if (existing) return existing;
-    const res = await profiles.importVersion(rootFilter(), version.id);
+  async function switchDirectory(id: string): Promise<void> {
+    const res = await gameDirectories.select(id);
     if (!res.ok) {
       toast({ message: res.error.message, tone: "error" });
-      return null;
-    }
-    profilesStore.upsert(res.data);
-    return res.data;
-  }
-
-  async function openVersion(version: InstanceInfo): Promise<void> {
-    const profile = await importVersion(version);
-    if (profile) navigate(`/instances/${profile.id}`);
-  }
-
-  async function launchVersion(version: InstanceInfo): Promise<void> {
-    const profile = await importVersion(version);
-    if (!profile) return;
-    const res = await launchStore.start(profile.id, profile.name);
-    if (!res.ok) toast({ message: res.message ?? "", tone: "error" });
-  }
-
-  function stopVersion(version: InstanceInfo): void {
-    const profile = importedProfile(version);
-    if (profile) void launchStore.stop(profile.id);
-  }
-
-  /** Completeness chip shared by the external cards/list rows. */
-  function completeness(version: InstanceInfo): JSX.Element {
-    return (
-      <RmTag tone={version.missing_count === 0 ? "success" : "warning"}>
-        {version.missing_count === 0
-          ? t("settings.advanced.repo.complete")
-          : t("settings.advanced.repo.missing", { n: version.missing_count })}
-      </RmTag>
-    );
-  }
-
-  async function refreshRootVersions(root: string): Promise<void> {
-    if (!root) {
-      setRootVersions(null);
       return;
     }
-    setRootLoading(true);
-    if (root === "__all__") {
-      // 全部根：主仓库（无参调用 = 后端已索引的根）+ 额外根合并去重。
-      const results = await Promise.all([
-        instances.list(),
-        ...roots().extras.map((r) => instances.list(r)),
-      ]);
-      const merged = results.flatMap((res) => (res.ok ? res.data : []));
-      const seen = new Set<string>();
-      setRootVersions(merged.filter((v) => (seen.has(v.id) ? false : seen.add(v.id))));
-    } else {
-      // "__primary__" → 后端主仓库；否则按路径扫描额外根。
-      const res = instances.list(root === "__primary__" ? undefined : root);
-      const out = await res;
-      setRootVersions(out.ok ? out.data : []);
-      if (!out.ok) toast({ message: out.error.message, tone: "error" });
-    }
-    setRootLoading(false);
+    setSelectedDir(id);
+    await instancesStore.refresh(true);
   }
 
-  createEffect(() => {
-    void refreshRootVersions(rootFilter());
-  });
-
-  async function addGameRoot(): Promise<void> {
-    const res = await dialog.pickDirectory();
-    if (!res.ok || !res.data) return;
-    const picked = res.data;
-    const { extras } = roots();
-    if (extras.includes(picked)) {
-      toast({ message: t("instances.root.alreadyAdded"), tone: "info" });
-      setRootFilter(picked);
+  async function addDirectory(): Promise<void> {
+    const picked = await dialog.pickDirectory();
+    if (!picked.ok || !picked.data) return;
+    const res = await gameDirectories.add(picked.data, undefined, true);
+    if (!res.ok) {
+      toast({ message: res.error.message, tone: "error" });
       return;
     }
-    const saved = await settingsStore.update({ extra_game_roots: [...extras, picked] });
-    toast({
-      message: saved.ok
-        ? t("instances.root.added", { path: picked })
-        : (saved.message ?? t("instances.root.addFailed")),
-      tone: saved.ok ? "success" : "error",
-    });
+    await loadDirectories();
+    await switchDirectory(res.data.id);
+    toast({ message: t("instances.root.added", { path: picked.data }), tone: "success" });
   }
 
-  async function removeGameRoot(root: string): Promise<void> {
-    const allowed = await confirmDanger({
+  async function removeDirectory(directory: GameDirectory): Promise<void> {
+    const allowed = await uiStore.confirm({
       title: t("instances.root.remove.title"),
-      body: t("instances.root.remove.body", { path: root }),
+      body: t("instances.root.remove.body", { path: directory.path }),
       confirmLabel: t("common.delete"),
+      danger: true,
     });
     if (!allowed) return;
-    const res = await settingsStore.update({
-      extra_game_roots: roots().extras.filter((r) => r !== root),
-    });
-    if (res.ok && rootFilter() === root) setRootFilter("");
+    const res = await gameDirectories.remove(directory.id);
+    if (!res.ok) {
+      toast({ message: res.error.message, tone: "error" });
+      return;
+    }
+    await loadDirectories();
+    await instancesStore.refresh(true);
   }
 
-  async function launch(profileId: string, name?: string): Promise<void> {
-    const res = await launchStore.start(profileId, name);
+  async function launch(key: string, name: string): Promise<void> {
+    const res = await launchStore.start(key, name);
     if (!res.ok) toast({ message: res.message ?? "", tone: "error" });
   }
 
-  // 删除 = 删除全部游戏资源（共享组件带确认 + 5s 冷静期 + 二次点击）。
-  const [deleteTarget, setDeleteTarget] = createSignal<Profile | null>(null);
-  const [deleteOpen, setDeleteOpen] = createSignal(false);
-
-  function openDelete(id: string): void {
-    const p = profilesStore.items()?.find((x) => x.id === id);
-    if (!p) return;
-    setDeleteTarget(p);
-    setDeleteOpen(true);
-  }
-
-  const menuFor = (id: string, name: string) => [
-    { label: t("instances.menu.launch"), icon: "play" as const, disabled: launchStore.isRunning(id), onSelect: () => void launch(id) },
-    { label: t("instances.menu.detail"), icon: "settings" as const, onSelect: () => navigate(`/instances/${id}`) },
-    { label: t("instances.menu.browseMods"), icon: "package" as const, onSelect: () => navigate(`/download?instance=${id}#mods`) },
-    { label: t("instances.menu.rename"), icon: "edit" as const, disabled: launchStore.isRunning(id), onSelect: () => void renameDialog(id, name) },
-    { label: t("instances.menu.delete"), icon: "trash" as const, danger: true, disabled: launchStore.isRunning(id), onSelect: () => openDelete(id) },
-  ];
-
-  async function renameDialog(id: string, current: string): Promise<void> {
+  async function renameDialog(item: InstanceDetail): Promise<void> {
     const next = await promptText({
       title: t("instances.menu.rename"),
       label: t("instances.rename.prompt"),
-      initial: current,
+      initial: item.summary.display_name,
     });
-    if (!next || next === current) return;
-    const res = await profiles.update(id, { name: next });
+    if (!next || next === item.summary.display_name) return;
+    const res = await instances.updateSettings(item.summary.key, { display_name: next });
     if (res.ok) {
-      profilesStore.upsert(res.data);
+      instancesStore.upsert(res.data);
       toast({ message: t("instances.renamed"), tone: "success" });
     } else {
       toast({ message: res.error.message, tone: "error" });
     }
   }
+
+  async function duplicateDialog(item: InstanceDetail): Promise<void> {
+    const next = await promptText({
+      title: t("instances.menu.duplicate"),
+      label: t("instances.rename.prompt"),
+      initial: `${item.summary.id}-copy`,
+    });
+    if (!next) return;
+    const res = await instances.duplicate(item.summary.key, next, false);
+    if (res.ok) {
+      instancesStore.upsert(res.data);
+      toast({ message: t("instances.duplicated"), tone: "success" });
+    } else {
+      toast({ message: res.error.message, tone: "error" });
+    }
+  }
+
+  function openDelete(item: InstanceDetail): void {
+    setDetailTarget({
+      key: item.summary.key,
+      name: item.summary.display_name,
+      external: item.directory.kind === "external",
+    });
+    setDeleteOpen(true);
+  }
+
+  const menuFor = (item: InstanceDetail) => {
+    const key = item.summary.key;
+    const running = launchStore.isRunning(key);
+    return [
+      {
+        label: t("instances.menu.launch"),
+        icon: "play" as const,
+        disabled: running,
+        onSelect: () => void launch(key, item.summary.display_name),
+      },
+      {
+        label: t("instances.menu.detail"),
+        icon: "settings" as const,
+        onSelect: () => navigate(`/instances/${encodeURIComponent(key)}`),
+      },
+      {
+        label: t("instances.menu.browseMods"),
+        icon: "package" as const,
+        onSelect: () => navigate(`/download?instance=${encodeURIComponent(key)}#mods`),
+      },
+      {
+        label: t("instances.menu.rename"),
+        icon: "edit" as const,
+        disabled: running,
+        onSelect: () => void renameDialog(item),
+      },
+      {
+        label: t("instances.menu.duplicate"),
+        icon: "copy" as const,
+        disabled: running,
+        onSelect: () => void duplicateDialog(item),
+      },
+      {
+        label: t("instances.menu.delete"),
+        icon: "trash" as const,
+        danger: true,
+        disabled: running,
+        onSelect: () => openDelete(item),
+      },
+    ];
+  };
 
   return (
     <div class="page">
@@ -248,27 +219,23 @@ export default function Instances(): JSX.Element {
         }
       />
       <div class="page-body">
-        {/* 单行工具栏：搜索(自适应) | 目录下拉 | 排序下拉 │ 视图切换组 · 刷新 · 目录管理（右对齐图标簇） */}
         <div class="toolbar instances-toolbar">
           <RmInput value={search()} onInput={setSearch} placeholder={t("instances.search.placeholder")} />
-          {/* 游戏目录过滤（HMCL 式）：下拉只做过滤；目录的添加/移除走管理弹窗 */}
           <RmSelect
             class="instances-root-select"
-            value={rootFilter()}
-            onChange={setRootFilter}
-            options={[
-              { value: "", label: t("instances.root.profiles") },
-              { value: "__all__", label: t("instances.root.all") },
-              { value: "__primary__", label: t("instances.root.primary") },
-              ...roots().extras.map((r) => ({ value: r, label: elidePath(r, 24) })),
-            ]}
+            value={selectedDir()}
+            onChange={(value) => void switchDirectory(value)}
+            options={directories().map((dir) => ({
+              value: dir.id,
+              label: dir.name || elidePath(dir.path, 24),
+            }))}
           />
           <RmSelect
             class="instances-sort-select"
             value={sort()}
-            onChange={(v) => {
-              setSort(v as SortKey);
-              writePref("instances.sort", v);
+            onChange={(value) => {
+              setSort(value as SortKey);
+              writePref("instances.sort", value);
             }}
             options={[
               { value: "lastPlayed", label: t("instances.sort.lastPlayed") },
@@ -297,136 +264,32 @@ export default function Instances(): JSX.Element {
               }}
             />
           </div>
-          <RmIconButton icon="refresh" label={t("common.refresh")} onClick={() => void profilesStore.refresh(true)} />
           <RmIconButton
-            icon="folder"
-            label={t("instances.root.manage")}
-            title={t("instances.root.manage")}
-            onClick={() => setManageOpen(true)}
+            icon="refresh"
+            label={t("common.refresh")}
+            onClick={() => void instancesStore.refresh(true)}
           />
+          <RmIconButton icon="folder" label={t("instances.root.add")} onClick={() => void addDirectory()} />
+          <Show when={currentDirectory() && directories().length > 1}>
+            <RmIconButton
+              icon="trash"
+              danger
+              label={t("instances.root.remove.title")}
+              onClick={() => void removeDirectory(currentDirectory()!)}
+            />
+          </Show>
         </div>
 
-        <Show
-          when={rootFilter() === ""}
-          fallback={
-            <div class="rm-card">
-              <div class="rm-card-head">
-                <h3 class="rm-card-title">
-                  {rootFilter() === "__all__"
-                    ? t("instances.root.allTitle")
-                    : rootFilter() === "__primary__"
-                      ? t("instances.root.primary")
-                      : t("instances.root.browseTitle", { path: elidePath(rootFilter(), 44) })}
-                </h3>
-                <span class="muted-line">
-                  {rootLoading() ? t("common.loading") : `${rootVersions()?.length ?? 0}`}
-                </span>
-              </div>
-              <div class="rm-card-body">
-                <Show
-                  when={!rootLoading() && (rootVersions()?.length ?? 0) === 0}
-                  fallback={
-                    <Show
-                      when={view() === "cards"}
-                      fallback={
-                        <div class="rm-list">
-                          <For each={rootVersions() ?? []}>
-                            {(version) => (
-                              <div class="rm-row is-clickable" onClick={() => void openVersion(version)}>
-                                <InstanceIcon profile={{ name: version.id, icon: null }} />
-                                <div class="rm-row-main">
-                                  <div class="rm-row-title">
-                                    {version.id}
-                                    <Show when={importedProfile(version)}>
-                                      {" "}<RmTag tone="success">{t("instances.version.imported")}</RmTag>
-                                    </Show>
-                                  </div>
-                                  <div class="rm-row-subtitle">
-                                    {version.game_version} · {loaderLine(version)}
-                                    <Show when={version.hmcl}> · {t("instances.versionDetail.hmcl")}</Show>
-                                  </div>
-                                </div>
-                                <div class="rm-row-trailing" onClick={(e) => e.stopPropagation()}>
-                                  {completeness(version)}
-                                  <Show
-                                    when={isVersionRunning(version)}
-                                    fallback={
-                                      <RmButton size="sm" icon="play" onClick={() => void launchVersion(version)}>
-                                        {t("common.launch")}
-                                      </RmButton>
-                                    }
-                                  >
-                                    <RmButton size="sm" variant="danger" icon="square" onClick={() => stopVersion(version)}>
-                                      {t("common.stop")}
-                                    </RmButton>
-                                  </Show>
-                                  <RmButton size="sm" icon="sliders" onClick={() => void openVersion(version)}>
-                                    {t("instances.version.settings")}
-                                  </RmButton>
-                                </div>
-                              </div>
-                            )}
-                          </For>
-                        </div>
-                      }
-                    >
-                      <div class="instance-grid">
-                        <For each={rootVersions() ?? []}>
-                          {(version) => (
-                            <div class="instance-card" onClick={() => void openVersion(version)}>
-                              <InstanceIcon profile={{ name: version.id, icon: null }} large />
-                              <div class="instance-card-name">{version.id}</div>
-                              <div class="instance-card-tags">
-                                <RmTag>{version.game_version}</RmTag>
-                                <Show
-                                  when={version.loader_type}
-                                  fallback={<RmTag>{t("instances.versionDetail.vanillaShort")}</RmTag>}
-                                >
-                                  <RmTag tone="accent">{loaderLabel(version.loader_type)}</RmTag>
-                                </Show>
-                                <Show when={version.hmcl}>
-                                  <RmTag tone="success">HMCL</RmTag>
-                                </Show>
-                                <Show when={importedProfile(version)}>
-                                  <RmTag tone="success">{t("instances.version.imported")}</RmTag>
-                                </Show>
-                              </div>
-                              <div class="instance-card-meta">{loaderLine(version)}</div>
-                              <div class="instance-card-actions" onClick={(e) => e.stopPropagation()}>
-                                <Show
-                                  when={isVersionRunning(version)}
-                                  fallback={
-                                    <RmButton size="sm" icon="play" onClick={() => void launchVersion(version)}>
-                                      {t("common.launch")}
-                                    </RmButton>
-                                  }
-                                >
-                                  <RmButton size="sm" variant="danger" icon="square" onClick={() => stopVersion(version)}>
-                                    {t("common.stop")}
-                                  </RmButton>
-                                </Show>
-                                <RmButton size="sm" icon="sliders" onClick={() => void openVersion(version)}>
-                                  {t("instances.version.settings")}
-                                </RmButton>
-                                {completeness(version)}
-                              </div>
-                            </div>
-                          )}
-                        </For>
-                      </div>
-                    </Show>
-                  }
-                >
-                  <div class="hero-empty">{t("instances.root.noVersions")}</div>
-                </Show>
-              </div>
-            </div>
-          }
-        >
+        <Show when={currentDirectory()}>
+          <div class="muted-line instance-directory-hint">
+            {elidePath(currentDirectory()!.path, 64)}
+          </div>
+        </Show>
+
         <RmContentState
-          data={profilesStore.items()}
-          loading={profilesStore.loading() && profilesStore.items() === undefined}
-          error={profilesStore.error()}
+          data={instancesStore.items()}
+          loading={instancesStore.loading() && instancesStore.items() === undefined}
+          error={instancesStore.error()}
           isEmpty={(list) => list.length === 0}
           skeleton={
             <div class="instance-grid">
@@ -446,33 +309,52 @@ export default function Instances(): JSX.Element {
             />
           }
         >
-          {(list) => (
+          {() => (
             <Show
               when={view() === "cards"}
               fallback={
                 <div class="rm-list">
                   <For each={items()}>
-                    {(profile) => (
-                      <div class="rm-row is-clickable" onClick={() => navigate(`/instances/${profile.id}`)}>
-                        <InstanceIcon profile={profile} />
+                    {(item) => (
+                      <div
+                        class="rm-row is-clickable"
+                        onClick={() => navigate(`/instances/${encodeURIComponent(item.summary.key)}`)}
+                      >
+                        <InstanceIcon item={item} />
                         <div class="rm-row-main">
-                          <div class="rm-row-title">{profile.name}</div>
+                          <div class="rm-row-title">{item.summary.display_name}</div>
                           <div class="rm-row-subtitle">
-                            {profile.game_version}
-                            <Show when={profile.mod_loader}> · {loaderLabel(profile.mod_loader!.loader_type)} {profile.mod_loader!.loader_version}</Show>
+                            {item.summary.game_version}
+                            <Show when={item.summary.loader}>
+                              {" "}· {loaderLabel(item.summary.loader!.kind)} {item.summary.loader!.version}
+                            </Show>
                           </div>
                         </div>
                         <div class="rm-row-trailing" onClick={(e) => e.stopPropagation()}>
-                          <Show when={launchStore.isRunning(profile.id)} fallback={
-                            <RmButton size="sm" icon="play" onClick={(e) => { e.stopPropagation(); void launch(profile.id, profile.name); }}>
-                              {t("common.launch")}
-                            </RmButton>
-                          }>
-                            <RmButton size="sm" variant="danger" icon="square" onClick={(e) => { e.stopPropagation(); void launchStore.stop(profile.id); }}>
+                          <Show
+                            when={launchStore.isRunning(item.summary.key)}
+                            fallback={
+                              <RmButton
+                                size="sm"
+                                icon="play"
+                                onClick={() =>
+                                  void launch(item.summary.key, item.summary.display_name)
+                                }
+                              >
+                                {t("common.launch")}
+                              </RmButton>
+                            }
+                          >
+                            <RmButton
+                              size="sm"
+                              variant="danger"
+                              icon="square"
+                              onClick={() => void launchStore.stop(item.summary.key)}
+                            >
                               {t("common.stop")}
                             </RmButton>
                           </Show>
-                          <RmMenu align="right" items={menuFor(profile.id, profile.name)}>
+                          <RmMenu align="right" items={menuFor(item)}>
                             <RmIconButton icon="more-horizontal" label={t("common.more")} />
                           </RmMenu>
                         </div>
@@ -484,38 +366,58 @@ export default function Instances(): JSX.Element {
             >
               <div class="instance-grid">
                 <For each={items()}>
-                  {(profile) => (
-                    <div class="instance-card" onClick={() => navigate(`/instances/${profile.id}`)}>
-                      <Show when={launchStore.isRunning(profile.id)}>
+                  {(item) => (
+                    <div
+                      class="instance-card"
+                      onClick={() => navigate(`/instances/${encodeURIComponent(item.summary.key)}`)}
+                    >
+                      <Show when={launchStore.isRunning(item.summary.key)}>
                         <span class="instance-running-dot" title={t("instances.running")} />
                       </Show>
-                      <InstanceIcon profile={profile} large />
-                      <div class="instance-card-name">{profile.name}</div>
+                      <InstanceIcon item={item} large />
+                      <div class="instance-card-name">{item.summary.display_name}</div>
                       <div class="instance-card-tags">
-                        <RmTag>{profile.game_version}</RmTag>
-                        <Show when={profile.mod_loader}>
-                          <RmTag tone="accent">{loaderLabel(profile.mod_loader!.loader_type)}</RmTag>
+                        <RmTag>{item.summary.game_version}</RmTag>
+                        <Show when={item.summary.loader}>
+                          <RmTag tone="accent">{loaderLabel(item.summary.loader!.kind)}</RmTag>
+                        </Show>
+                        <Show when={item.directory.kind === "external"}>
+                          <RmTag tone="success">{t("instances.root.external")}</RmTag>
                         </Show>
                       </div>
                       <div class="instance-card-meta">
-                        {profile.play_time_seconds > 0
-                          ? t("playtime.cumulative", { time: playtimeLabel(profile.play_time_seconds) })
+                        {item.summary.play_time_seconds > 0
+                          ? t("playtime.cumulative", {
+                              time: playtimeLabel(Number(item.summary.play_time_seconds)),
+                            })
                           : t("playtime.none")}
+                        <Show when={item.summary.last_played}>
+                          {" "}· {relativeTime(item.summary.last_played!)}
+                        </Show>
                       </div>
                       <div class="instance-card-actions" onClick={(e) => e.stopPropagation()}>
                         <Show
-                          when={launchStore.isRunning(profile.id)}
+                          when={launchStore.isRunning(item.summary.key)}
                           fallback={
-                            <RmButton size="sm" icon="play" onClick={() => void launch(profile.id, profile.name)}>
+                            <RmButton
+                              size="sm"
+                              icon="play"
+                              onClick={() => void launch(item.summary.key, item.summary.display_name)}
+                            >
                               {t("common.launch")}
                             </RmButton>
                           }
                         >
-                          <RmButton size="sm" variant="danger" icon="square" onClick={() => void launchStore.stop(profile.id)}>
+                          <RmButton
+                            size="sm"
+                            variant="danger"
+                            icon="square"
+                            onClick={() => void launchStore.stop(item.summary.key)}
+                          >
                             {t("common.stop")}
                           </RmButton>
                         </Show>
-                        <RmMenu align="right" items={menuFor(profile.id, profile.name)}>
+                        <RmMenu align="right" items={menuFor(item)}>
                           <RmIconButton icon="more-horizontal" label={t("common.more")} />
                         </RmMenu>
                       </div>
@@ -526,62 +428,11 @@ export default function Instances(): JSX.Element {
             </Show>
           )}
         </RmContentState>
-        </Show>
       </div>
 
-      {/* 游戏目录管理（HMCL 式弹窗）：主目录固定，额外目录可增删 */}
-      <RmDialog
-        open={manageOpen()}
-        title={t("instances.root.manage")}
-        onClose={() => setManageOpen(false)}
-      >
-        <div class="rm-list">
-          <RmListRow
-            icon={<InstanceIcon profile={{ name: "M", icon: null }} />}
-            title={roots().primary ? elidePath(roots().primary, 44) : t("instances.root.primaryDefault")}
-            subtitle={t("instances.root.primaryHint")}
-            selected={rootFilter() === "__primary__"}
-            onClick={() => {
-              setRootFilter("__primary__");
-              setManageOpen(false);
-            }}
-            trailing={<RmTag tone="accent">{t("instances.root.primary")}</RmTag>}
-          />
-          <For each={roots().extras}>
-            {(root) => (
-              <RmListRow
-                icon={<InstanceIcon profile={{ name: "E", icon: null }} />}
-                title={elidePath(root, 44)}
-                subtitle={t("instances.root.extraHint")}
-                selected={rootFilter() === root}
-                onClick={() => {
-                  setRootFilter(root);
-                  setManageOpen(false);
-                }}
-                trailing={
-                  <div class="btn-row">
-                    <RmIconButton
-                      icon="trash"
-                      danger
-                      label={t("instances.root.remove.title")}
-                      onClick={() => void removeGameRoot(root)}
-                    />
-                  </div>
-                }
-              />
-            )}
-          </For>
-        </div>
-        <div class="btn-row" style={{ "margin-top": "12px" }}>
-          <RmButton size="sm" icon="plus" onClick={() => void addGameRoot()}>
-            {t("instances.root.add")}
-          </RmButton>
-        </div>
-      </RmDialog>
-
-      <Show when={deleteTarget()}>
+      <Show when={detailTarget()}>
         <DeleteInstanceDialog
-          profile={deleteTarget()!}
+          instance={detailTarget()!}
           open={deleteOpen()}
           onClose={() => setDeleteOpen(false)}
         />
@@ -590,11 +441,19 @@ export default function Instances(): JSX.Element {
   );
 }
 
-function InstanceIcon(props: { profile: { name: string; icon: string | null }; large?: boolean }): JSX.Element {
+function InstanceIcon(props: { item: InstanceDetail; large?: boolean }): JSX.Element {
+  const url = () => {
+    const icon = props.item.summary.icon;
+    if (typeof icon === "object" && icon !== null && "type" in icon) {
+      if (icon.type === "data_url") return String((icon as { value: string }).value);
+      if (icon.type === "file") return String((icon as { value: string }).value);
+    }
+    return null;
+  };
   return (
     <div class={`instance-icon${props.large ? " is-large" : ""}`}>
-      <Show when={props.profile.icon} fallback={<span>{initialOf(props.profile.name)}</span>}>
-        <img src={props.profile.icon!} alt="" loading="lazy" />
+      <Show when={url()} fallback={<span>{initialOf(props.item.summary.display_name)}</span>}>
+        <img src={url()!} alt="" loading="lazy" />
       </Show>
     </div>
   );

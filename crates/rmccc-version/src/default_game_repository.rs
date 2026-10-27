@@ -102,11 +102,19 @@ impl DefaultGameRepository {
         if path.exists() {
             return Ok(());
         }
-        if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent)?;
+        // A read-only external game directory is still a valid instance
+        // source — HMCL only logs a warning here, because the marker is a
+        // convenience for Mojang/Forge installers, not a launch requirement.
+        let result = std::fs::create_dir_all(self.base_directory.as_path())
+            .and_then(|_| std::fs::write(&path, launcher_profiles_content()));
+        match result {
+            Ok(()) => tracing::info!(path = %path.display(), "Created launcher_profiles.json"),
+            Err(e) => tracing::warn!(
+                path = %path.display(),
+                error = %e,
+                "Cannot create launcher_profiles.json; continuing without it"
+            ),
         }
-        std::fs::write(&path, launcher_profiles_content())?;
-        tracing::info!(path = %path.display(), "Created launcher_profiles.json");
         Ok(())
     }
 
@@ -501,12 +509,76 @@ impl GameRepository for DefaultGameRepository {
                 std::fs::rename(&old, &new)?;
             }
         }
+
+        // HMCL `renameInstance`: rewrite the manifest id and jar, then update
+        // every child whose `inheritsFrom` pointed at the old id. Without the
+        // child rewrite, renaming a base version silently breaks all loader
+        // instances derived from it.
+        let renamed_json = file_layout::instance_json(&self.base_directory, to);
+        if let Err(e) = rewrite_manifest_references(&renamed_json, |value| {
+            value["id"] = serde_json::Value::String(to.to_string());
+            if value.get("jar").and_then(|v| v.as_str()) == Some(from) {
+                value["jar"] = serde_json::Value::String(to.to_string());
+            }
+        }) {
+            tracing::warn!(
+                path = %renamed_json.display(),
+                error = %e,
+                "Renamed instance, but could not update its manifest id"
+            );
+        }
+
+        for child in self.manifests.keys().cloned().collect::<Vec<_>>() {
+            if child == from || child == to {
+                continue;
+            }
+            let json = file_layout::instance_json(&self.base_directory, &child);
+            if let Err(e) = rewrite_manifest_references(&json, |value| {
+                if value.get("inheritsFrom").and_then(|v| v.as_str()) == Some(from) {
+                    value["inheritsFrom"] = serde_json::Value::String(to.to_string());
+                }
+            }) {
+                tracing::warn!(
+                    child = %child,
+                    path = %json.display(),
+                    error = %e,
+                    "Could not update child inheritsFrom after rename"
+                );
+            }
+        }
+
         self.refresh()?;
         tracing::info!(from = %from, to = %to, "Instance renamed");
         Ok(())
     }
 
     fn duplicate_instance(&mut self, from: &str, to: &str) -> Result<()> {
+        self.duplicate_instance_with(from, to, true)
+    }
+
+    fn remove_instance(&mut self, id: &str) -> Result<()> {
+        validate_instance_id(id)?;
+        let root = file_layout::instance_root(&self.base_directory, id);
+        if root.exists() {
+            std::fs::remove_dir_all(&root)?;
+        }
+        self.manifests.remove(id);
+        tracing::info!(id = %id, "Instance removed");
+        Ok(())
+    }
+}
+
+impl DefaultGameRepository {
+    /// Duplicate an instance, optionally excluding `saves/`.
+    ///
+    /// HMCL `HMCLGameRepository.duplicateInstance` keeps saves behind a
+    /// checkbox; the manifest is rewritten so the copy is self-contained.
+    pub fn duplicate_instance_with(
+        &mut self,
+        from: &str,
+        to: &str,
+        copy_saves: bool,
+    ) -> Result<()> {
         validate_instance_id(from)?;
         validate_instance_id(to)?;
         if from == to {
@@ -524,7 +596,7 @@ impl GameRepository for DefaultGameRepository {
                 "Instance '{from}' not installed"
             )));
         }
-        copy_dir_recursive(&from_root, &to_root)?;
+        copy_dir_recursive_filtered(&from_root, &to_root, copy_saves)?;
         for ext in ["json", "jar"] {
             let old = to_root.join(format!("{from}.{ext}"));
             let new = to_root.join(format!("{to}.{ext}"));
@@ -532,37 +604,70 @@ impl GameRepository for DefaultGameRepository {
                 std::fs::rename(&old, &new)?;
             }
         }
+
+        // Rewrite id and (only when it pointed at the source) jar. Leaving a
+        // `None` jar alone preserves inheritance from the parent instance,
+        // which is what derived loader instances rely on.
+        let copied_json = file_layout::instance_json(&self.base_directory, to);
+        if let Err(e) = rewrite_manifest_references(&copied_json, |value| {
+            value["id"] = serde_json::Value::String(to.to_string());
+            if value.get("jar").and_then(|v| v.as_str()) == Some(from) {
+                value["jar"] = serde_json::Value::String(to.to_string());
+            }
+        }) {
+            tracing::warn!(
+                path = %copied_json.display(),
+                error = %e,
+                "Duplicated instance, but could not update its manifest id"
+            );
+        }
+
         self.refresh()?;
         tracing::info!(from = %from, to = %to, "Instance duplicated");
         Ok(())
     }
-
-    fn remove_instance(&mut self, id: &str) -> Result<()> {
-        validate_instance_id(id)?;
-        let root = file_layout::instance_root(&self.base_directory, id);
-        if root.exists() {
-            std::fs::remove_dir_all(&root)?;
-        }
-        self.manifests.remove(id);
-        tracing::info!(id = %id, "Instance removed");
-        Ok(())
-    }
 }
 
-/// Recursively copy a directory tree.
-fn copy_dir_recursive(from: &Path, to: &Path) -> Result<()> {
+/// Recursively copy a directory tree, optionally skipping `saves/`.
+fn copy_dir_recursive_filtered(from: &Path, to: &Path, copy_saves: bool) -> Result<()> {
     std::fs::create_dir_all(to)?;
     for entry in std::fs::read_dir(from)? {
         let entry = entry?;
+        let name = entry.file_name();
+        if !copy_saves && name == "saves" && entry.file_type()?.is_dir() {
+            continue;
+        }
         let src = entry.path();
-        let dst = to.join(entry.file_name());
+        let dst = to.join(&name);
         if src.is_dir() {
-            copy_dir_recursive(&src, &dst)?;
+            copy_dir_recursive_filtered(&src, &dst, copy_saves)?;
         } else {
             std::fs::copy(&src, &dst)?;
         }
     }
     Ok(())
+}
+
+/// Read a version JSON, let `edit` mutate it, and write it back atomically.
+///
+/// Missing files are ignored (a child may only exist as a folder while its
+/// manifest is being repaired). Invalid JSON is reported to the caller.
+fn rewrite_manifest_references(
+    path: &Path,
+    edit: impl FnOnce(&mut serde_json::Value),
+) -> std::io::Result<()> {
+    if !path.exists() {
+        return Ok(());
+    }
+    let text = std::fs::read_to_string(path)?;
+    let mut value: serde_json::Value = serde_json::from_str(&text)
+        .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
+    edit(&mut value);
+    let pretty = serde_json::to_string_pretty(&value)
+        .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
+    let tmp = path.with_extension("json.tmp");
+    std::fs::write(&tmp, pretty)?;
+    std::fs::rename(&tmp, path)
 }
 
 /// Heuristic: does this JSON actually describe a game version?

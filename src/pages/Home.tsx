@@ -17,9 +17,10 @@ import { RmEmptyState } from "../components/rm/surfaces";
 import { Icon, type IconName } from "../components/icons";
 import { AccountAvatar } from "../components/AccountAvatar";
 import { PluginFrame } from "../plugin-ui/PluginFrame";
+import { ThemeHeroLayer } from "../components/ThemeSurface";
 import { dashboard, external, downloads, type WidgetDescriptor } from "../ipc/api";
 import type { VersionInfo } from "../ipc/types";
-import { profilesStore } from "../stores/profiles";
+import { instancesStore } from "../stores/instances";
 import { authStore } from "../stores/auth";
 import { launchStore } from "../stores/launch";
 import { downloadsStore } from "../stores/downloads";
@@ -409,7 +410,7 @@ export default function Home(): JSX.Element {
   const [addOpen, setAddOpen] = createSignal(false);
 
   onMount(() => {
-    void profilesStore.refresh();
+    void instancesStore.refresh();
     void authStore.refresh();
     void dashboard.listWidgets().then((res) => {
       if (res.ok) setCatalog(res.data);
@@ -419,22 +420,22 @@ export default function Home(): JSX.Element {
   // Copied before sort: `.sort()` on the store's array would mutate it in
   // place (perf audit 2.4); memoized so it recomputes only on change.
   const sortedByLastPlayed = createMemo(() =>
-    [...(profilesStore.items() ?? [])].sort((a, b) =>
-      (b.last_played ?? "").localeCompare(a.last_played ?? "")
+    [...(instancesStore.items() ?? [])].sort((a, b) =>
+      (b.summary.last_played ?? "").localeCompare(a.summary.last_played ?? "")
     )
   );
 
   // 默认选中最近游玩的实例。Effects, not memos, own side effects (perf audit 2.8).
   createEffect(() => {
-    if (!profilesStore.selectedId() && (profilesStore.items() ?? []).length > 0) {
-      const latest = [...(profilesStore.items() ?? [])].sort((a, b) =>
-        (b.last_played ?? "").localeCompare(a.last_played ?? "")
+    if (!instancesStore.selectedKey() && (instancesStore.items() ?? []).length > 0) {
+      const latest = [...(instancesStore.items() ?? [])].sort((a, b) =>
+        (b.summary.last_played ?? "").localeCompare(a.summary.last_played ?? "")
       )[0];
-      if (latest) profilesStore.setSelectedId(latest.id);
+      if (latest) instancesStore.setSelectedKey(latest.summary.key);
     }
   });
 
-  const selected = () => profilesStore.selected() ?? null;
+  const selected = () => instancesStore.selected() ?? null;
   const session = () => authStore.session();
 
   function persist(next: HeroLayout): void {
@@ -553,7 +554,7 @@ export default function Home(): JSX.Element {
         return;
       }
     }
-    const result = await launchStore.start(profile.id, profile.name);
+    const result = await launchStore.start(profile.summary.key, profile.summary.display_name);
     if (!result.ok) toast({ message: result.message ?? "", tone: "error" });
   }
 
@@ -590,6 +591,8 @@ export default function Home(): JSX.Element {
 
   return (
     <div class="hero">
+      {/* 主题 v2：Hero 背景图/视频 + 主界面特效（ADR-014） */}
+      <ThemeHeroLayer />
       {/* 流动背景光斑 + 主题化环境粒子（随外观主题切换意象与配色；动效开关闸门） */}
       <div class={`hero-flow ${ambientThemeClass(ambientKey())}`} aria-hidden="true">
         <ThemeAmbient themeKey={ambientKey()} />
@@ -721,11 +724,11 @@ export default function Home(): JSX.Element {
         </Show>
 
         {/** 运行状态卡：折叠时 Account 卡归位，展开时 Account 上移让位（CSS 动画） */}
-        <div class={`hero-run-slot${launchStore.isRunning(selected()?.id ?? "") ? " is-active" : ""}`}>
+        <div class={`hero-run-slot${launchStore.isRunning(selected()?.summary.key ?? "") ? " is-active" : ""}`}>
           <div class="hero-card hero-module hero-run-card">
             <span class="dot-running" />
             <span class="hero-run-label">{t("instances.running")}</span>
-            <RmButton size="sm" icon="terminal" onClick={() => uiStore.openLogDrawer(selected()?.id ?? null)}>
+            <RmButton size="sm" icon="terminal" onClick={() => uiStore.openLogDrawer(selected()?.summary.key ?? null)}>
               {t("home.viewLog")}
             </RmButton>
             {/* 一键强制关闭：terminate_tree 整组终止，经 stop() 统一确认 */}
@@ -733,7 +736,7 @@ export default function Home(): JSX.Element {
               size="sm"
               variant="danger"
               icon="square"
-              onClick={() => void launchStore.stop(selected()?.id ?? "")}
+              onClick={() => void launchStore.stop(selected()?.summary.key ?? "")}
             >
               {t("home.forceStop")}
             </RmButton>
@@ -745,7 +748,7 @@ export default function Home(): JSX.Element {
             {/* B3-1 salvage: no instances yet → guide CTA instead of a dead
                 launch button (delegates to the install wizard). */}
             <Show
-              when={(profilesStore.items() ?? []).length > 0}
+              when={(instancesStore.items() ?? []).length > 0}
               fallback={
                 <div class="hero-launch-guide">
                   <RmButton size="lg" variant="primary" icon="download" onClick={() => navigate("/download#install")}>
@@ -760,26 +763,26 @@ export default function Home(): JSX.Element {
                 side="up"
                 items={[
                   ...sortedByLastPlayed().map((p) => ({
-                      label: `${p.name} · ${p.game_version}`,
+                      label: `${p.summary.display_name} · ${p.summary.game_version}`,
                       icon: "gamepad" as const,
-                      onSelect: () => profilesStore.setSelectedId(p.id),
+                      onSelect: () => instancesStore.setSelectedKey(p.summary.key),
                     })),
                   { label: t("download.wizard.bindLocal"), icon: "download" as const, onSelect: () => navigate("/download#install") },
                   ...(selected()
-                    ? [{ label: t("home.instanceSettings"), icon: "sliders" as const, onSelect: () => navigate(`/instances/${selected()!.id}#settings`) }]
+                    ? [{ label: t("home.instanceSettings"), icon: "sliders" as const, onSelect: () => navigate(`/instances/${selected()!.summary.key}#settings`) }]
                     : []),
                 ]}
               >
                 <button class="hero-launch-picker" title={t("home.pickInstance")}>
                   <span class="hero-launch-picker-copy">
                     <span class="hero-launch-picker-main">
-                      {selected()?.name ?? t("home.pickInstance")}
+                      {selected()?.summary.display_name ?? t("home.pickInstance")}
                     </span>
                     <Show when={selected()}>
                       <span class="hero-launch-picker-sub">
-                        {selected()!.play_time_seconds > 0
+                        {selected()!.summary.play_time_seconds > 0
                           ? t("playtime.cumulative", {
-                              time: playtimeLabel(selected()!.play_time_seconds),
+                              time: playtimeLabel(Number(selected()!.summary.play_time_seconds)),
                             })
                           : t("playtime.none")}
                       </span>
@@ -792,7 +795,7 @@ export default function Home(): JSX.Element {
                 variant="primary"
                 icon="play"
                 size="lg"
-                loading={launchStore.isStarting(selected()?.id ?? "")}
+                loading={launchStore.isStarting(selected()?.summary.key ?? "")}
                 onClick={() => void launchCurrent()}
               >
                 {t("home.launch")}
@@ -887,7 +890,7 @@ function ServerCard(): JSX.Element {
 // ── 客户端 / 服务端版本比对卡（演示数据）──
 
 function CompareCard(): JSX.Element {
-  const clientVersion = () => profilesStore.selected()?.game_version ?? "26.3";
+  const clientVersion = () => instancesStore.selected()?.summary.game_version ?? "26.3";
   // 模拟：服务端版本固定 26.2，客户端更高则无需更新。
   const serverVersion = "26.2";
   const needsUpdate = createMemo(() => clientVersion() < serverVersion);
@@ -968,27 +971,27 @@ function AnnouncementsCard(): JSX.Element {
 function InstancesCard(): JSX.Element {
   return (
     <div class="hero-list">
-      <For each={profilesStore.items() ?? []}>
+      <For each={instancesStore.items() ?? []}>
         {(profile) => (
           <button
-            class={`hero-row${(profilesStore.selected()?.id ?? null) === profile.id ? " is-selected" : ""}`}
-            onClick={() => profilesStore.setSelectedId(profile.id)}
+            class={`hero-row${(instancesStore.selected()?.summary.key ?? null) === profile.summary.key ? " is-selected" : ""}`}
+            onClick={() => instancesStore.setSelectedKey(profile.summary.key)}
           >
             <span class="hero-row-icon"><Icon name="gamepad" size={16} /></span>
             <span class="hero-row-main">
-              <span class="hero-row-title">{profile.name}</span>
+              <span class="hero-row-title">{profile.summary.display_name}</span>
               <span class="hero-row-subtitle">
-                {profile.game_version}
-                <Show when={profile.mod_loader}> · {loaderLabel(profile.mod_loader!.loader_type)}</Show>
+                {profile.summary.game_version}
+                <Show when={profile.summary.loader}> · {loaderLabel(profile.summary.loader!.kind)}</Show>
               </span>
             </span>
             <span class="hero-row-meta">
-              {profile.last_played ? relativeTime(profile.last_played) : t("instances.neverPlayed")}
+              {profile.summary.last_played ? relativeTime(profile.summary.last_played) : t("instances.neverPlayed")}
             </span>
           </button>
         )}
       </For>
-      <Show when={(profilesStore.items() ?? []).length === 0}>
+      <Show when={(instancesStore.items() ?? []).length === 0}>
         <div class="hero-empty">{t("instances.empty.title")}</div>
       </Show>
     </div>
@@ -1114,7 +1117,7 @@ function GamesCard(): JSX.Element {
             <span class="hero-row-icon"><span class="dot-running" /></span>
             <span class="hero-row-main">
               <span class="hero-row-title">
-                {profilesStore.items()?.find((p) => p.id === game.profileId)?.name ?? game.profileId}
+                {instancesStore.items()?.find((p) => p.summary.key === game.profileId)?.summary.display_name ?? game.profileId}
               </span>
               <span class="hero-row-subtitle">{t("instances.running")}</span>
             </span>

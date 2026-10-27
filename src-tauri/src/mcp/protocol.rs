@@ -408,9 +408,9 @@ mod tests {
     }
 
     #[test]
-    fn catalog_covers_31_tools_with_object_schemas() {
+    fn catalog_covers_30_tools_with_object_schemas() {
         let catalog = tools::catalog();
-        assert_eq!(catalog.len(), 31);
+        assert_eq!(catalog.len(), 30);
         let mut names: Vec<&str> = catalog.iter().map(|t| t.name).collect();
         let unique = names.len();
         names.sort_unstable();
@@ -441,7 +441,7 @@ mod tests {
             .iter()
             .filter(|t| t.risk == ToolRisk::Destructive)
             .count();
-        assert_eq!((read, operate, destructive), (15, 11, 5));
+        assert_eq!((read, operate, destructive), (15, 10, 5));
     }
 
     #[test]

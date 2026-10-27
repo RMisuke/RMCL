@@ -11,7 +11,7 @@ rmccc-version = { workspace = true }
 rmccc-launch = { workspace = true }
 rmccc-modloader = { workspace = true }
 rmccc-mods = { workspace = true }
-rmccc-profile = { workspace = true }
+rmccc-instance = { workspace = true }
 rmccc-config = { workspace = true }
 rmccc-platform = { workspace = true }
 rmccc-plugin = { workspace = true }

@@ -1,28 +1,29 @@
 /**
- * 删除实例对话框（唯一的删除入口组件）。
+ * Delete-instance dialog (single deletion entry point).
  *
- * 语义：删除 = 删除版本目录（versions/{id}，含版本 JSON / JAR / Natives）
- * 与实例配置；独立游戏目录（mods / 存档等）默认一并删除，可通过开关保留。
- * 后端对目录清理有双守卫：共享游戏根与不像游戏目录的路径一律拒删
- * （rmccc-profile delete 的 is_shared_game_root / looks_like_game_dir）。
- *
- * 三重防误触：删除键在左/取消在右（与全局确认框布局相反，打破肌肉记忆）、
- * 强制 5 秒冷静期（倒计时内禁用）、冷却结束后需**第二次点击**才执行。
- * 共享版本被其他实例引用时自动保留版本目录（ADR-002 决策 3 同思路）。
+ * ADR-016: an instance *is* `versions/{id}`. `deleteFiles=false` hides the
+ * instance (settings `hidden=true`) and keeps every game file; `deleteFiles=true`
+ * removes the version directory and its `.rmccc` settings.
  */
 import type { JSX } from "solid-js";
 import { Show, createSignal, createEffect, onMount, onCleanup } from "solid-js";
 import { useNavigate } from "@solidjs/router";
 import { RmDialog } from "./rm/overlays";
 import { RmButton, RmSwitch } from "./rm/controls";
-import { profiles, instances } from "../ipc/api";
-import type { Profile } from "../ipc/api";
-import { profilesStore } from "../stores/profiles";
+import { instances } from "../ipc/api";
+
+import { instancesStore } from "../stores/instances";
 import { toast } from "../stores/ui";
 import { t } from "../i18n";
 
+export interface DeleteInstanceTarget {
+  key: string;
+  name: string;
+  external: boolean;
+}
+
 export function DeleteInstanceDialog(props: {
-  profile: Profile;
+  instance: DeleteInstanceTarget;
   open: boolean;
   onClose: () => void;
 }): JSX.Element {
@@ -30,23 +31,18 @@ export function DeleteInstanceDialog(props: {
   const [count, setCount] = createSignal(5);
   const [armed, setArmed] = createSignal(false);
   const [busy, setBusy] = createSignal(false);
-  // 外置目录（HMCL）只移除实例记录，游戏文件属于用户既有目录。
-  const isExternal = () => props.profile.external_root;
-  // Also remove the isolated game dir (mods / saves); backend guards reject
-  // shared roots and non-game-looking paths either way.
-  const [deleteDir, setDeleteDir] = createSignal(!props.profile.external_root);
+  const isExternal = () => props.instance.external;
+  const [deleteFiles, setDeleteFiles] = createSignal(!isExternal());
 
-  // 每次打开重置冷静期与武装态（关闭后残留状态不得带入下一次）。
   createEffect(() => {
     if (props.open) {
       setCount(5);
       setArmed(false);
       setBusy(false);
-      setDeleteDir(!props.profile.external_root);
+      setDeleteFiles(!isExternal());
     }
   });
 
-  // 冷静期倒计时；到 0 后信号值不再变化，Solid 等值不触发更新（可安全续跑）。
   onMount(() => {
     const id = setInterval(() => setCount((c) => Math.max(0, c - 1)), 1000);
     onCleanup(() => clearInterval(id));
@@ -54,32 +50,14 @@ export function DeleteInstanceDialog(props: {
 
   const execute = async () => {
     setBusy(true);
-    // Order matters: remove the profile record first. If the later version-dir
-    // step fails we keep a clean, retryable state instead of a deleted
-    // directory with a dangling profile entry.
-    const res = await profiles.delete(props.profile.id, isExternal() ? false : deleteDir());
+    const key = props.instance.key;
+    const res = await instances.remove(key, deleteFiles());
     if (!res.ok) {
       toast({ message: res.error.message, tone: "error" });
       setBusy(false);
       return;
     }
-    profilesStore.removeItem(props.profile.id);
-    // 共享版本保护：版本目录仍被其他实例引用时保留文件（ADR-002 决策 3 同思路）。
-    const shared = (profilesStore.items() ?? []).some(
-      (p) => p.id !== props.profile.id && p.game_version === props.profile.game_version
-    );
-    if (!shared && !isExternal()) {
-      const removed = await instances.remove(props.profile.game_version);
-      if (!removed.ok) {
-        toast({
-          message: t("instanceDetail.deleteAll.versionDirFailed", { message: removed.error.message }),
-          tone: "error",
-        });
-        props.onClose();
-        navigate("/instances");
-        return;
-      }
-    }
+    instancesStore.removeItem(key);
     toast({ message: t("instances.deleted"), tone: "success" });
     props.onClose();
     navigate("/instances");
@@ -122,19 +100,23 @@ export function DeleteInstanceDialog(props: {
     >
       <div class="rm-confirm-body">
         {isExternal()
-          ? t("instanceDetail.deleteAll.externalBody", { name: props.profile.name })
-          : t("instanceDetail.deleteAll.body", { name: props.profile.name })}
+          ? t("instanceDetail.deleteAll.externalBody", { name: props.instance.name })
+          : t("instanceDetail.deleteAll.body", { name: props.instance.name })}
+      </div>
+      <div class="path-row">
+        <span class="path-row-value">{t("instanceDetail.deleteAll.deleteDir")}</span>
+        <RmSwitch
+          checked={deleteFiles()}
+          onChange={setDeleteFiles}
+          label={t("instanceDetail.deleteAll.deleteDir")}
+        />
       </div>
       <Show
-        when={!isExternal()}
-        fallback={<div class="rm-confirm-body muted-line">{t("instanceDetail.deleteAll.external")}</div>}
+        when={!deleteFiles()}
+        fallback={<div class="rm-confirm-body muted-line">{t("instanceDetail.deleteAll.shared")}</div>}
       >
-        <div class="path-row">
-          <span class="path-row-value">{t("instanceDetail.deleteAll.deleteDir")}</span>
-          <RmSwitch checked={deleteDir()} onChange={setDeleteDir} label={t("instanceDetail.deleteAll.deleteDir")} />
-        </div>
+        <div class="rm-confirm-body muted-line">{t("instanceDetail.deleteAll.external")}</div>
       </Show>
-      <div class="rm-confirm-body muted-line">{t("instanceDetail.deleteAll.shared")}</div>
     </RmDialog>
   );
 }

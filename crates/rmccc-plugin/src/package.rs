@@ -6,6 +6,7 @@
 use crate::manifest::{validate_manifest, ManifestContext, PluginManifest};
 use crate::path::{is_windows_reserved, validate_relative_path};
 use crate::theme::{ThemeDocument, MAX_THEME_BYTES};
+use crate::theme_assets::{validate_theme_assets, AssetReader};
 use rmccc_error::{PluginErrorCode, Result, RmcccError};
 use std::collections::BTreeSet;
 use std::fs::File;
@@ -41,7 +42,7 @@ const DENIED_EXTENSIONS: &[&str] = &[
 ];
 const ALLOWED_EXTENSIONS: &[&str] = &[
     "json", "md", "txt", "css", "png", "jpg", "jpeg", "gif", "webp", "svg", "ttf", "otf", "woff",
-    "woff2",
+    "woff2", "mp4", "webm",
 ];
 
 /// 包内单个条目的元数据（不保存内容）。
@@ -267,6 +268,7 @@ fn inspect_reader<R: Read + Seek>(reader: R, ctx: &ManifestContext) -> Result<Ar
     //
     // 在这里做而不是等到应用主题时：让"能打包 = 能安装 = 能应用"，
     // 避免装上一个永远选不中的主题（ADR-005 决策 7 / 主题编写规范）。
+    let mut documents: Vec<ThemeDocument> = Vec::new();
     for theme in &manifest.contributes.themes {
         if !file_paths.contains(&theme.path) {
             return Err(plugin_error(
@@ -306,10 +308,37 @@ fn inspect_reader<R: Read + Seek>(reader: R, ctx: &ManifestContext) -> Result<Ar
                 format!("主题 {} 超过 {MAX_THEME_BYTES} 字节上限", theme.path),
             ));
         }
-        ThemeDocument::parse(&raw).map_err(|e| {
+        let document = ThemeDocument::parse(&raw).map_err(|e| {
             plugin_error(
                 PluginErrorCode::PackageInvalid,
                 format!("主题 {}（{}）校验失败：{e}", theme.id, theme.path),
+            )
+        })?;
+        documents.push(document);
+    }
+
+    // v2 皮肤（字体/背景/组件/特效）必须有 themes.skin 能力；纯配色仍只需 themes.apply。
+    let requires_skin = documents.iter().any(|doc| doc.requires_skin());
+    if requires_skin
+        && !manifest
+            .permissions
+            .iter()
+            .any(|permission| permission.capability == "themes.skin")
+    {
+        return Err(plugin_error(
+            PluginErrorCode::ManifestInvalid,
+            "主题包含字体/背景/组件/特效，Manifest 必须声明 themes.skin 能力".to_string(),
+        ));
+    }
+    // 资产存在性/大小/魔数/SVG 内容校验（与运行期同一套规则）。
+    let mut asset_reader = ZipAssetReader {
+        archive: &mut archive,
+    };
+    for (document, theme) in documents.iter().zip(manifest.contributes.themes.iter()) {
+        validate_theme_assets(document, &mut asset_reader).map_err(|e| {
+            plugin_error(
+                PluginErrorCode::PackageInvalid,
+                format!("主题 {} 的资产校验失败：{e}", theme.id),
             )
         })?;
     }
@@ -597,6 +626,36 @@ pub fn not_a_package(path: &Path) -> RmcccError {
     )
 }
 
+/// 把 zip 条目适配成主题资产读取器（包检查用）。
+struct ZipAssetReader<'a, R: Read + Seek> {
+    archive: &'a mut zip::ZipArchive<R>,
+}
+
+impl<R: Read + Seek> AssetReader for ZipAssetReader<'_, R> {
+    fn size(&mut self, path: &str) -> Result<u64> {
+        let file = self.archive.by_name(path).map_err(|e| {
+            plugin_error(
+                PluginErrorCode::PackageInvalid,
+                format!("主题资产不存在：{path}（{e}）"),
+            )
+        })?;
+        Ok(file.size())
+    }
+
+    fn head(&mut self, path: &str, max: usize) -> Result<Vec<u8>> {
+        let mut file = self.archive.by_name(path).map_err(|e| {
+            plugin_error(
+                PluginErrorCode::PackageInvalid,
+                format!("主题资产不存在：{path}（{e}）"),
+            )
+        })?;
+        let mut buffer = vec![0u8; max];
+        let read = file.read(&mut buffer)?;
+        buffer.truncate(read);
+        Ok(buffer)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -708,7 +767,7 @@ mod tests {
             // CSS 注入 / 外链探针
             r##"{ "schemaVersion": 1, "colors": { "background": "url(https://evil.example/p)", "surface": "#111", "text": "#fff", "accent": "#fff", "border": "#222" } }"##,
             // 版本不匹配
-            r##"{ "schemaVersion": 2, "colors": { "background": "#000", "surface": "#111", "text": "#fff", "accent": "#fff", "border": "#222" } }"##,
+            r##"{ "schemaVersion": 3, "colors": { "background": "#000", "surface": "#111", "text": "#fff", "accent": "#fff", "border": "#222" } }"##,
         ] {
             let bytes = zip_with(&[
                 ("manifest.json", manifest.as_bytes(), 0o644),

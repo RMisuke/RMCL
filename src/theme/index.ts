@@ -8,7 +8,7 @@
 
 import { createSignal } from "solid-js";
 import { dashboard } from "../ipc/api";
-import type { ThemeInfo, ThemeTokens } from "../ipc/types";
+import type { ThemeInfo, ThemeSkin, ThemeSkinPayload, ThemeTokens } from "../ipc/types";
 
 const DARK_FALLBACK: ThemeTokens = {
   background: "#0b1020",
@@ -199,7 +199,192 @@ export async function applyThemePreference(
 ): Promise<ThemeMode> {
   currentPreference = preference;
   const tokens = await resolveTokens(preference);
-  return applyThemeTokens(tokens);
+  const mode = applyThemeTokens(tokens);
+  await refreshThemeSkin(preference);
+  return mode;
+}
+
+// ── Theme v2 skin (ADR-014) ───────────────────────────────────────────────
+//
+// The backend resolves theme assets into `rmcccplugin://` URLs and validates
+// every value. This module only maps the already-trusted skin to CSS variables
+// and host-owned markup (effects/backdrop/nav icons); themes never provide CSS.
+
+const [currentSkin, setCurrentSkin] = createSignal<ThemeSkin | null>(null);
+const [skinMeta, setSkinMeta] = createSignal({
+  requiresSkin: false,
+  granted: false,
+});
+
+/** Active v2 skin, or null for built-in / color-only themes. */
+export function themeSkin(): ThemeSkin | null {
+  return currentSkin();
+}
+
+/** Whether the active theme wants skin features and whether the user granted them. */
+export function themeSkinMeta(): { requiresSkin: boolean; granted: boolean } {
+  return skinMeta();
+}
+
+const SKIN_SLOTS = [
+  "card",
+  "button",
+  "input",
+  "menu",
+  "dialog",
+  "tag",
+  "hero",
+  "titlebar",
+];
+const appliedSkinVars = new Set<string>();
+let fontStyleElement: HTMLStyleElement | null = null;
+
+function setSkinVar(name: string, value: string) {
+  document.documentElement.style.setProperty(name, value);
+  appliedSkinVars.add(name);
+}
+
+function clearSkin() {
+  const root = document.documentElement;
+  for (const name of appliedSkinVars) root.style.removeProperty(name);
+  appliedSkinVars.clear();
+  fontStyleElement?.remove();
+  fontStyleElement = null;
+  delete root.dataset.skin;
+  delete root.dataset.skinPill;
+  delete root.dataset.skinBackground;
+  for (const slot of SKIN_SLOTS) {
+    delete root.dataset[`skin${slot[0].toUpperCase()}${slot.slice(1)}Image`];
+  }
+  setCurrentSkin(null);
+  setSkinMeta({ requiresSkin: false, granted: false });
+}
+
+function fontStackFor(face: { family: string; fallback: string }): string {
+  return `"${face.family}", ${face.fallback}`;
+}
+
+function fontFacesCss(skin: ThemeSkin): string {
+  const faces = [
+    skin.typography?.ui,
+    skin.typography?.display,
+    skin.typography?.mono,
+  ].filter((face): face is NonNullable<typeof face> => Boolean(face));
+  let css = "";
+  for (const face of faces) {
+    for (const source of face.sources) {
+      const format = source.url.endsWith(".woff2")
+        ? "woff2"
+        : source.url.endsWith(".woff")
+          ? "woff"
+          : source.url.endsWith(".otf")
+            ? "opentype"
+            : "truetype";
+      css += `@font-face{font-family:"${face.family}";src:url("${source.url}") format("${format}");font-weight:${source.weight};font-style:${source.style};font-display:${source.display};}`;
+    }
+  }
+  return css;
+}
+
+/** Apply a backend-resolved skin payload (or clear it for color-only themes). */
+export function applyThemeSkinPayload(payload: ThemeSkinPayload) {
+  clearSkin();
+  setSkinMeta({
+    requiresSkin: payload.requiresSkin,
+    granted: payload.granted,
+  });
+  const skin = payload.skin;
+  if (!skin) return;
+  setCurrentSkin(skin);
+
+  const root = document.documentElement;
+  root.dataset.skin = "on";
+
+  const shape = skin.shape;
+  if (shape) {
+    if (shape.tag != null) setSkinVar("--rmccc-radius-tag", `${shape.tag}px`);
+    if (shape.control != null)
+      setSkinVar("--rmccc-radius-control", `${shape.control}px`);
+    if (shape.card != null) setSkinVar("--rmccc-radius-card", `${shape.card}px`);
+    if (shape.modal != null)
+      setSkinVar("--rmccc-radius-modal", `${shape.modal}px`);
+    if (shape.pill) root.dataset.skinPill = "on";
+  }
+
+  const background = skin.background;
+  if (background) root.dataset.skinBackground = background.scope;
+
+  const unit = skin.spacing?.unit;
+  if (unit) {
+    [unit, unit * 2, unit * 3, unit * 4, unit * 6, unit * 8].forEach(
+      (value, index) => setSkinVar(`--rmccc-space-${index + 1}`, `${value}px`)
+    );
+  }
+
+  if (skin.typography?.ui)
+    setSkinVar("--font-stack", fontStackFor(skin.typography.ui));
+  if (skin.typography?.display)
+    setSkinVar("--font-display", fontStackFor(skin.typography.display));
+  if (skin.typography?.mono)
+    setSkinVar("--font-mono", fontStackFor(skin.typography.mono));
+
+  const faceCss = fontFacesCss(skin);
+  if (faceCss) {
+    const style = document.createElement("style");
+    style.id = "rmccc-theme-fonts";
+    style.textContent = faceCss;
+    document.head.appendChild(style);
+    fontStyleElement = style;
+  }
+
+  for (const [slot, component] of Object.entries(skin.components ?? {})) {
+    if (!component) continue;
+    const prefix = `--rmccc-skin-${slot}-`;
+    if (component.background)
+      setSkinVar(`${prefix}bg`, component.background);
+    if (component.border) setSkinVar(`${prefix}border`, component.border);
+    if (component.text) setSkinVar(`${prefix}text`, component.text);
+    if (component.radius != null)
+      setSkinVar(`${prefix}radius`, `${component.radius}px`);
+    if (component.blur != null)
+      setSkinVar(`${prefix}blur`, `${component.blur}px`);
+    if (component.padding != null)
+      setSkinVar(`${prefix}padding`, `${component.padding}px`);
+    if (component.shadow)
+      setSkinVar(`${prefix}shadow`, `var(--rmccc-shadow-${component.shadow})`);
+    if (component.primaryBackground)
+      setSkinVar(`${prefix}primary-bg`, component.primaryBackground);
+    if (component.primaryText)
+      setSkinVar(`${prefix}primary-text`, component.primaryText);
+    if (component.image) {
+      setSkinVar(`${prefix}image`, `url("${component.image}")`);
+      if (component.imageSlice != null)
+        setSkinVar(`${prefix}slice`, `${component.imageSlice}`);
+      root.setAttribute(
+        `data-skin-${slot}-image`,
+        component.imageMode ?? "background"
+      );
+    }
+  }
+}
+
+async function refreshThemeSkin(preference: string | null) {
+  if (
+    !preference ||
+    preference === "system" ||
+    preference === "light" ||
+    preference === "dark"
+  ) {
+    clearSkin();
+    return;
+  }
+  const res = await dashboard.getThemeSkin(preference);
+  if (!res.ok) {
+    console.warn("theme: could not load skin", res.error);
+    clearSkin();
+    return;
+  }
+  applyThemeSkinPayload(res.data);
 }
 
 export function getThemePreference(): string | null {

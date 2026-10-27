@@ -1,0 +1,22 @@
+{
+  "manifestVersion": 1,
+  "id": "dev.rmccc.theme-grass",
+  "name": "Grass Block",
+  "version": "1.0.0",
+  "description": "草方块：像素字体、MC 风格九宫格按钮/面板、草方块旋转特效与全景背景。",
+  "publisher": { "id": "dev.rmccc", "name": "RMCCC Examples" },
+  "compatibility": {
+    "pluginApi": "1.x",
+    "core": ">=0.1.0 <0.2.0",
+    "platforms": []
+  },
+  "permissions": [
+    { "capability": "themes.apply", "reason": "提供草方块配色" },
+    { "capability": "themes.skin", "reason": "替换字体、圆角、背景图、组件贴图与主界面特效" }
+  ],
+  "contributes": {
+    "themes": [
+      { "id": "grass", "name": "Grass Block", "path": "themes/grass.json" }
+    ]
+  }
+}

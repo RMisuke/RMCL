@@ -1,6 +1,6 @@
 # ADR-014: 主题 v2 —— 外观皮肤（字体 / 形状 / 间距 / 背景图 / 组件槽）与用户覆盖
 
-- **状态**：proposed（2026-10-27 草案）
+- **状态**：accepted（2026-10-27 草案，2026-10-27 实施核心切片）
 - **日期**：2026-10-27
 - **阶段**：Phase 3+（主题系统扩展）
 - **关联**：ADR-003（包格式）、ADR-004（Manifest/权限）、ADR-005（主题令牌/安全色）、
@@ -75,6 +75,24 @@ Home 与 Settings 均正常渲染，未改任何组件 JSX，也未出现布局�
 ## 决策
 
 采用 **B**，并补充三条产品约束：**能力分级、用户覆盖优先、包内资源**。
+
+### 0. 实现记录（2026-10-27）
+
+已落地：
+
+- `schemaVersion: 2` + `typography/shape/spacing/background/components/effects/navigation`；
+- `themes.skin`（medium）与安装期能力门槛；未授予时只应用配色；
+- 资产管线：`assets/` 图片/字体/视频，扩展名 + 魔数 + SVG 文本 + 大小上限；
+  资源路由 `assets/...`（themes.apply + themes.skin），字体 CORS、视频 Range、SVG CSP；
+- `theme-skin.css` + `applyThemeSkinPayload`：字体（含包内 `@font-face`）、圆角、间距、
+  背景图/循环 mp4、组件槽（含九宫格贴图）、主界面特效（`rotating-blocks` / `aurora` /
+  `particles`）、Tab 图标与装饰；
+- 示例：`examples/plugins/theme-aurora`（视频背景 + 玻璃 + 特效）与
+  `examples/plugins/theme-grass`（像素字体 + MC 九宫格 + 草方块特效），均可打包安装。
+
+尚未落地（后续切片）：用户覆盖 UI（`appearance.json` 的密度/圆角/逐项开关）、主题预览确认、
+用户自定义背景、多套外观预设。当前组件槽图片的 `border` 模式在按钮上通过伪元素绘制，
+卡片使用 border-width；其他槽支持 background 模式。
 
 ### 1. 主题文档 v2
 

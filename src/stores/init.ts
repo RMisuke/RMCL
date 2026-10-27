@@ -10,7 +10,7 @@ import { EVENTS } from "../ipc/events";
 import { t } from "../i18n";
 import { dispatchPluginPush } from "../plugin-ui/bridge";
 import { authStore } from "./auth";
-import { profilesStore } from "./profiles";
+import { instancesStore } from "./instances";
 import { launchStore } from "./launch";
 import { downloadsStore } from "./downloads";
 import { modloadersStore } from "./modloaders";
@@ -28,7 +28,7 @@ export function initStores(): void {
   // ── Domain event subscriptions (each store also attaches its own listeners;
   //    the ones below cover attribution/feedback that crosses domains) ──
   authStore.attachEvents();
-  profilesStore.attachEvents();
+  instancesStore.attachEvents();
   launchStore.attachEvents();
   downloadsStore.attachEvents();
   modloadersStore.attachEvents();
@@ -56,20 +56,20 @@ export function initStores(): void {
   );
 
   // ── Cross-domain reactions ──
-  void listen<{ profile_id: string; exit_code: number }>(EVENTS.LAUNCH_EXITED, (event) => {
+  void listen<{ key?: string; profile_id?: string; exit_code: number }>(EVENTS.LAUNCH_EXITED, (event) => {
     // User-initiated stops (P1-7) are not crashes — don't pop the log drawer.
-    if (event.payload.exit_code !== 0 && !launchStore.consumeUserKill(event.payload.profile_id)) {
+    if (event.payload.exit_code !== 0 && !launchStore.consumeUserKill(event.payload.key ?? event.payload.profile_id ?? "")) {
       // Abnormal exit: open the log drawer with the crash highlighted (10 §4).
-      uiStore.openLogDrawer(event.payload.profile_id);
+      uiStore.openLogDrawer(event.payload.key ?? event.payload.profile_id ?? "");
     }
   });
   void listen<{ profile_id: string; version: string }>(EVENTS.DOWNLOAD_COMPLETE, () => {
-    void profilesStore.refresh(true);
+    void instancesStore.refresh(true);
   });
 
   // ── Startup data ──
   void authStore.refresh();
-  void profilesStore.refresh();
+  void instancesStore.refresh();
   void launchStore.restoreStatus();
   void aiStore.refreshConfig();
   void mcpStore.refreshStatus();

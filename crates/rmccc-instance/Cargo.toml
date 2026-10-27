@@ -1,0 +1,17 @@
+[package]
+name = "rmccc-instance"
+version = "0.1.0"
+edition = "2021"
+description = "Game directory registry, version-backed instances, and per-instance launch settings (HMCL-aligned)."
+
+[dependencies]
+rmccc-error.workspace = true
+rmccc-config.workspace = true
+rmccc-platform.workspace = true
+rmccc-version.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+chrono.workspace = true
+tracing.workspace = true
+uuid.workspace = true
+ts-rs.workspace = true

@@ -1,0 +1,83 @@
+{
+  "schemaVersion": 2,
+  "name": "Grass Block",
+  "mode": "dark",
+  "colors": {
+    "background": "#1c2416",
+    "surface": "#2b241a",
+    "surfaceElevated": "#3a3022",
+    "text": "#f3ead6",
+    "textMuted": "#b9a98c",
+    "accent": "#7ec85a",
+    "accentContrast": "#10200a",
+    "border": "#5a4a32"
+  },
+  "typography": {
+    "display": {
+      "family": "KenPixel",
+      "fallback": "sans-serif",
+      "files": [{ "src": "assets/fonts/kenpixel.ttf", "weight": "400", "style": "normal" }]
+    }
+  },
+  "shape": { "tag": 3, "control": 4, "card": 4, "modal": 6 },
+  "spacing": { "unit": 4, "density": "compact" },
+  "background": {
+    "image": "assets/bg/grass-panorama.png",
+    "fit": "cover",
+    "position": "center",
+    "dim": 0.62,
+    "scope": "both"
+  },
+  "components": {
+    "card": {
+      "image": "assets/ui/panel.png",
+      "imageSlice": 8,
+      "imageMode": "border",
+      "padding": 18,
+      "shadow": "soft"
+    },
+    "hero": {
+      "image": "assets/ui/panel.png",
+      "imageSlice": 8,
+      "imageMode": "border"
+    },
+    "button": {
+      "image": "assets/ui/button.png",
+      "imageSlice": 8,
+      "imageMode": "border",
+      "primaryText": "#f4ffe8"
+    },
+    "input": { "background": "#1a140ee6", "border": "#6a5638", "radius": 4 },
+    "menu": {
+      "image": "assets/ui/panel.png",
+      "imageSlice": 8,
+      "imageMode": "border"
+    },
+    "dialog": {
+      "image": "assets/ui/panel.png",
+      "imageSlice": 8,
+      "imageMode": "border"
+    },
+    "tag": { "background": "#4a3a26", "border": "#7a6440", "radius": 3 },
+    "titlebar": {
+      "image": "assets/ui/titlebar.png",
+      "imageMode": "background"
+    }
+  },
+  "effects": [
+    {
+      "type": "rotating-blocks",
+      "texture": "assets/tex/grass.png",
+      "count": 12,
+      "size": 46,
+      "speed": 16,
+      "opacity": 0.75,
+      "area": "hero"
+    }
+  ],
+  "navigation": {
+    "ornaments": [
+      { "image": "assets/tex/grass.png", "side": "left", "width": 34, "opacity": 0.9 }
+    ]
+  }
+}

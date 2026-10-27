@@ -9,13 +9,15 @@ impl CliContext {
     /// Install game resources for a profile (canonical pipeline).
     pub async fn resource_install(
         &self,
-        profile_id: &str,
+        key: &str,
         version: &str,
         progress: Option<&ProgressCb>,
     ) -> Result<()> {
-        let profile = self.get_profile(profile_id).await?;
+        let instance = self.get_instance(key).await?;
         let core = self.core.read().await;
-        let report = pipeline::install_game(&core.handle(), &profile, version, progress).await?;
+        let report =
+            pipeline::install_game(&core.handle(), &instance.paths.game_dir, version, progress)
+                .await?;
         if !report.is_complete() {
             return Err(RmcccError::DownloadFailed {
                 url: version.to_string(),
@@ -26,23 +28,21 @@ impl CliContext {
             });
         }
         // Refresh the local index so the new files are observed.
-        pipeline::refresh_repository(&core.handle())?;
+        pipeline::refresh_repository(&core.handle(), &instance.summary.directory_id)?;
         Ok(())
     }
 
     /// Completeness check against the local repository (offline).
-    pub async fn resource_check(&self, profile_id: &str) -> Result<Value> {
-        let profile = self.get_profile(profile_id).await?;
+    pub async fn resource_check(&self, key: &str) -> Result<Value> {
+        let instance = self.get_instance(key).await?;
         let core = self.core.read().await;
         let (game_root, resolved) = {
-            let repo = core
-                .game_repository
-                .read()
-                .map_err(|_| RmcccError::Other("game repository lock poisoned".to_string()))?;
-            let resolved = repo
-                .get_resolved(&profile.game_version)
-                .map_err(|e| RmcccError::Other(e.to_string()))?;
-            (repo.game_dir().to_path_buf(), resolved)
+            let mut service = core
+                .instances
+                .lock()
+                .map_err(|_| RmcccError::Other("instance service lock poisoned".to_string()))?;
+            let (detail, resolved) = service.resolved_version(key)?;
+            (detail.paths.game_dir, resolved)
         };
         // 显式检查命令：全量 SHA1 复核（启动路径只用 Size 级）。
         let missing = rmccc_version::completion::check_completion(
@@ -62,8 +62,8 @@ impl CliContext {
             })
             .collect();
         Ok(json!({
-            "profile_id": profile_id,
-            "game_version": profile.game_version,
+            "key": key,
+            "game_version": instance.summary.id,
             "complete": items.is_empty(),
             "missing_count": items.len(),
             "missing": items,
@@ -72,24 +72,21 @@ impl CliContext {
 
     /// Repair missing resources (HMCL checkGameCompletionAsync equivalent).
     /// Returns whether anything was repaired.
-    pub async fn resource_repair(
-        &self,
-        profile_id: &str,
-        progress: Option<&ProgressCb>,
-    ) -> Result<bool> {
-        let profile = self.get_profile(profile_id).await?;
+    pub async fn resource_repair(&self, key: &str, progress: Option<&ProgressCb>) -> Result<bool> {
+        let instance = self.get_instance(key).await?;
         let core = self.core.read().await;
         // 显式修复命令：全量 SHA1 复核（ensure_launch_ready 的启动路径只用 Size 级）。
         let report = pipeline::repair_instance(
             &core.handle(),
-            &profile.game_version,
+            &instance.paths.game_dir,
+            &instance.summary.id,
             progress,
             rmccc_version::completion::CompletionVerify::Hash,
         )
         .await?;
         if !report.is_complete() {
             return Err(RmcccError::DownloadFailed {
-                url: profile.game_version.clone(),
+                url: instance.summary.id.clone(),
                 reason: format!(
                     "{} of {} files failed to download",
                     report.failed_files, report.total_files
@@ -100,10 +97,10 @@ impl CliContext {
     }
 
     /// SHA1 integrity verification for a profile's game files.
-    pub async fn resource_verify(&self, profile_id: &str) -> Result<Value> {
-        let profile = self.get_profile(profile_id).await?;
-        let game_dir = &profile.game_dir;
-        let version_id = &profile.game_version;
+    pub async fn resource_verify(&self, key: &str) -> Result<Value> {
+        let instance = self.get_instance(key).await?;
+        let game_dir = &instance.paths.game_dir;
+        let version_id = &instance.summary.id;
 
         let provider: &dyn rmccc_version::VersionProvider =
             &rmccc_version::MojangVersionProvider::new(self.http_client.clone());
@@ -158,7 +155,7 @@ impl CliContext {
 
         let ok = failed.is_empty() && missing.is_empty();
         Ok(json!({
-            "profile_id": profile_id,
+            "key": key,
             "game_version": version_id,
             "verified": verified + lib_checked,
             "verified_files": verified,
