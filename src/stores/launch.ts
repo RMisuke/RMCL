@@ -12,6 +12,22 @@ import { t } from "../i18n";
 
 const MAX_LINES = 1000;
 
+/**
+ * User-facing launch errors: the backend messages are English/technical, so
+ * the two Java preconditions get localized here (the numbers come from the
+ * structured message the backend formats deterministically).
+ */
+function launchErrorMessage(error: { code: string; message: string }): string {
+  if (error.code === "java_not_found") return t("errors.javaNotFound");
+  if (error.code === "java_version_mismatch") {
+    const match = /found Java (\d+).*?Java (\d+)/.exec(error.message);
+    if (match) {
+      return t("errors.javaVersionMismatch", { found: match[1], required: match[2] });
+    }
+  }
+  return error.message;
+}
+
 export interface RunningGame {
   profileId: string;
   pid: number;
@@ -79,6 +95,19 @@ export const launchStore = createRoot(() => {
   async function start(profileId: string, profileName?: string): Promise<{ ok: boolean; message?: string }> {
     setStarting((set) => new Set(set).add(profileId));
 
+    // Launching always makes this instance the active one: the Home launch
+    // picker and its running card must follow a launch started from the
+    // instance list/detail page, not keep showing a stale selection.
+    const known = (instancesStore.items() ?? []).some((item) => item.summary.key === profileId);
+    try {
+      await instancesStore.selectInstance(profileId);
+      if (!known) {
+        await Promise.all([instancesStore.refresh(true), instancesStore.refreshDirectories(true)]);
+      }
+    } catch {
+      // Selection is cosmetic; never block a launch on it.
+    }
+
     // 启动气泡：检查资源 → 自动补全 → 启动（HMCL launching steps 等价）。
     setFlow({ profileId, profileName: profileName ?? profileId, stage: "check" });
     let missing = 0;
@@ -108,10 +137,11 @@ export const launchStore = createRoot(() => {
       return next;
     });
     if (!res.ok) {
-      setFlow((f) => (f && f.profileId === profileId ? { ...f, stage: "failed", error: res.error.message } : f));
+      const message = launchErrorMessage(res.error);
+      setFlow((f) => (f && f.profileId === profileId ? { ...f, stage: "failed", error: message } : f));
       // P2-19: the failed bubble stays until dismissed — a 5s auto-clear
       // dropped the error whenever the user glanced away.
-      return { ok: false, message: res.error.message };
+      return { ok: false, message };
     }
     // LAUNCH_STARTED 事件通常先到；45s 兜底（进程拉起但事件丢失时仍收尾）。
     // 句柄存下来：dismissFlow 时一并取消（P3-10）。

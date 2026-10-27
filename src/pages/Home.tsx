@@ -748,17 +748,6 @@ export default function Home(): JSX.Element {
 
         <div class="hero-card hero-module hero-launch">
           <div class="hero-launch-main">
-            <button
-              class="hero-dir-chip"
-              title={t("home.currentDirectory")}
-              onClick={() => navigate("/instances")}
-            >
-              <Icon name="folder" size={13} />
-              <span>{instancesStore.selectedDirectory()?.directory.name ?? t("instances.sidebar.title")}</span>
-              <span class="hero-dir-chip-count">
-                {instancesStore.selectedDirectory()?.instance_count ?? 0}
-              </span>
-            </button>
             {/* B3-1 salvage: no instances yet → guide CTA instead of a dead
                 launch button (delegates to the install wizard). */}
             <Show
@@ -991,7 +980,7 @@ function InstancesCard(): JSX.Element {
         <button class="hero-list-dir" onClick={() => navigate("/instances")}>
           <Icon name="folder" size={12} />
           <span>{directory()!.directory.name}</span>
-          <span class="hero-dir-chip-count">{directory()!.instance_count}</span>
+          <span class="hero-list-dir-count">{directory()!.instance_count}</span>
         </button>
       </Show>
       <For each={instancesStore.items() ?? []}>

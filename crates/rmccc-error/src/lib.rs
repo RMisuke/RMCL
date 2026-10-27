@@ -61,7 +61,7 @@ pub enum RmcccError {
     #[error("Java not found")]
     JavaNotFound,
 
-    #[error("Java version {found} too old, need {required}+")]
+    #[error("Java version error: found Java {found}, but Java {required}+ is required")]
     JavaVersionMismatch { found: u32, required: u32 },
 
     // ── Launch ──

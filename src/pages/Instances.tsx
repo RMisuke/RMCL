@@ -100,7 +100,13 @@ export default function Instances(): JSX.Element {
   async function addDirectory(): Promise<void> {
     const picked = await dialog.pickDirectory();
     if (!picked.ok || !picked.data) return;
-    const res = await instancesStore.addDirectory(picked.data);
+    const folder = picked.data.split(/[\\/]/).filter(Boolean).pop() ?? "Minecraft";
+    const nickname = await promptText({
+      title: t("instances.sidebar.add"),
+      label: t("instances.dir.renameHint"),
+      initial: folder,
+    });
+    const res = await instancesStore.addDirectory(picked.data, nickname?.trim() || folder);
     if (!res.ok) {
       toast({ message: res.error.message, tone: "error" });
       return;

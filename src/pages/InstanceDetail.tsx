@@ -46,12 +46,11 @@ import { loaderIcon } from "../lib/mcIcons";
 import * as versionCache from "../stores/versionCache";
 import { useHashTab } from "../lib/useHashTab";
 
-const TABS: { id: string; icon: "list" | "package" | "layers" | "sliders" | "wrench"; label: TranslationKey }[] = [
+const TABS: { id: string; icon: "list" | "package" | "layers" | "sliders"; label: TranslationKey }[] = [
   { id: "overview", icon: "list", label: "instanceDetail.tab.overview" },
   { id: "mods", icon: "package" as const, label: "instanceDetail.tab.mods" },
   { id: "loaders", icon: "layers" as const, label: "instanceDetail.tab.loaders" },
   { id: "settings", icon: "sliders" as const, label: "instanceDetail.tab.settings" },
-  { id: "maintenance", icon: "wrench" as const, label: "instanceDetail.tab.maintenance" },
 ];
 
 export default function InstanceDetail(): JSX.Element {
@@ -90,27 +89,9 @@ export default function InstanceDetail(): JSX.Element {
 
   onMount(() => void load());
 
-  // Unsaved-settings guard (P1-13): SettingsTab reports dirty upward so a tab
-  // switch confirms before the Switch unmounts the draft.
-  const [settingsDirty, setSettingsDirty] = createSignal(false);
-  const changeTab = (next: string) => {
-    if (next === tab() || !settingsDirty()) {
-      setTab(next);
-      return;
-    }
-    void uiStore
-      .confirm({
-        title: t("instanceDetail.settings.unsaved.title"),
-        body: t("instanceDetail.settings.unsaved.body"),
-        confirmLabel: t("instanceDetail.settings.unsaved.discard"),
-        danger: true,
-      })
-      .then((allowed) => {
-        if (!allowed) return;
-        setSettingsDirty(false);
-        setTab(next);
-      });
-  };
+  // Settings are auto-saved on change (no explicit Save button), so tabs can
+  // switch freely without an unsaved-draft confirmation.
+  const changeTab = setTab;
 
   async function launch(): Promise<void> {
     const res = await launchStore.start(profileId(), profile()?.name);
@@ -179,8 +160,7 @@ export default function InstanceDetail(): JSX.Element {
                   <Match when={tab() === "overview"}><OverviewTab profile={p()} onGoTab={changeTab} /></Match>
                   <Match when={tab() === "mods"}><ModsTab profile={p()} /></Match>
                   <Match when={tab() === "loaders"}><LoadersTab profile={p()} /></Match>
-                  <Match when={tab() === "settings"}><SettingsTab profile={p()} onDirtyChange={setSettingsDirty} /></Match>
-                  <Match when={tab() === "maintenance"}><MaintenanceTab profile={p()} /></Match>
+                  <Match when={tab() === "settings"}><SettingsTab profile={p()} /></Match>
                 </Switch>
               </div>
             </>
@@ -194,6 +174,7 @@ export default function InstanceDetail(): JSX.Element {
 // ── Toolbar menus ──
 
 function BrowseMenu(props: { profile: InstanceView }): JSX.Element {
+  const [open, setOpen] = createSignal(false);
   const [paths, setPaths] = createSignal<InstancePaths | null>(null);
   // Key on the profile id, not the object: the store refreshes produce new
   // objects even when nothing changed (perf audit 2.5).
@@ -212,37 +193,101 @@ function BrowseMenu(props: { profile: InstanceView }): JSX.Element {
     void navigator.clipboard.writeText(value);
     toast({ message: t("common.copied"), tone: "success" });
   };
+  const rows = () => {
+    const data = paths();
+    if (!data) return [];
+    return [
+      { label: t("instanceDetail.browse.gameDir"), value: data.game_dir },
+      { label: t("instanceDetail.browse.runDir"), value: data.run_dir },
+      { label: t("instanceDetail.browse.mods"), value: data.mods_dir },
+    ];
+  };
   return (
-    <RmMenu
-      side="right"
-      items={[
-        { label: `${t("instanceDetail.browse.gameDir")}: ${elidePath(paths()?.game_dir ?? "")}`, onSelect: () => paths() && copy(paths()!.game_dir) },
-        { label: `${t("instanceDetail.browse.runDir")}: ${elidePath(paths()?.run_dir ?? "")}`, onSelect: () => paths() && copy(paths()!.run_dir) },
-        { label: `${t("instanceDetail.browse.mods")}: ${elidePath(paths()?.mods_dir ?? "")}`, onSelect: () => paths() && copy(paths()!.mods_dir) },
-      ]}
-    >
-      <RmButton size="sm" icon="folder">{t("instanceDetail.browse")}</RmButton>
-    </RmMenu>
+    <>
+      <RmButton size="sm" icon="folder" onClick={() => setOpen(true)}>
+        {t("instanceDetail.browse")}
+      </RmButton>
+      {/* A dialog instead of a side-popover: the sidebar clips overflow, so the
+          old `side="right"` menu was cut off at the page edge. */}
+      <RmDialog
+        open={open()}
+        title={t("instanceDetail.browse.title")}
+        width={620}
+        onClose={() => setOpen(false)}
+        footer={<RmButton onClick={() => setOpen(false)}>{t("common.close")}</RmButton>}
+      >
+        <div class="instance-path-list">
+          <For each={rows()}>
+            {(row) => (
+              <div class="instance-path-row">
+                <span class="instance-path-label">{row.label}</span>
+                <span class="instance-path-value" title={row.value}>{row.value}</span>
+                <RmIconButton
+                  icon="copy"
+                  label={t("common.copy")}
+                  onClick={() => copy(row.value)}
+                />
+              </div>
+            )}
+          </For>
+        </div>
+      </RmDialog>
+    </>
   );
 }
 
 function ManageMenu(props: { profile: InstanceView }): JSX.Element {
   const navigate = useNavigate();
+  const [open, setOpen] = createSignal(false);
   const [deleteOpen, setDeleteOpen] = createSignal(false);
   return (
     <>
-      <RmMenu
-        // 侧栏底部按钮：向上弹出（红框位置），避免向下遮住按钮本身。
-        side="up"
-        items={[
-          { label: t("instances.menu.rename"), icon: "edit", onSelect: () => void renameInstanceView(props.profile) },
-          { label: t("instances.menu.browseMods"), icon: "package", onSelect: () => navigate(`/download?instance=${props.profile.id}#mods`) },
-          { label: t("instanceDetail.manage.delete"), icon: "trash", danger: true, onSelect: () => setDeleteOpen(true) },
-        ]}
+      <RmButton size="sm" icon="more-horizontal" onClick={() => setOpen(true)}>
+        {t("instanceDetail.manage")}
+      </RmButton>
+      <RmDialog
+        open={open()}
+        title={t("instanceDetail.manage")}
+        width={420}
+        onClose={() => setOpen(false)}
+        footer={<RmButton onClick={() => setOpen(false)}>{t("common.close")}</RmButton>}
       >
-        <RmButton size="sm" icon="more-horizontal">{t("instanceDetail.manage")}</RmButton>
-      </RmMenu>
-      <DeleteInstanceDialog instance={{ key: props.profile.id, name: props.profile.name, external: props.profile.external_root }} open={deleteOpen()} onClose={() => setDeleteOpen(false)} />
+        <div class="instance-manage-actions">
+          <RmButton
+            icon="edit"
+            onClick={() => {
+              setOpen(false);
+              void renameInstanceView(props.profile);
+            }}
+          >
+            {t("instances.menu.rename")}
+          </RmButton>
+          <RmButton
+            icon="package"
+            onClick={() => {
+              setOpen(false);
+              navigate(`/download?instance=${props.profile.id}#mods`);
+            }}
+          >
+            {t("instances.menu.browseMods")}
+          </RmButton>
+          <RmButton
+            variant="danger"
+            icon="trash"
+            onClick={() => {
+              setOpen(false);
+              setDeleteOpen(true);
+            }}
+          >
+            {t("instances.menu.delete")}
+          </RmButton>
+        </div>
+      </RmDialog>
+      <DeleteInstanceDialog
+        instance={{ key: props.profile.id, name: props.profile.name, external: props.profile.external_root }}
+        open={deleteOpen()}
+        onClose={() => setDeleteOpen(false)}
+      />
     </>
   );
 }
@@ -840,23 +885,41 @@ function InstanceIconCard(props: { profile: InstanceView }): JSX.Element {
   );
 }
 
-function SettingsTab(props: { profile: InstanceView; onDirtyChange: (dirty: boolean) => void }): JSX.Element {
+function SettingsTab(props: { profile: InstanceView }): JSX.Element {
   const [resolved, setResolved] = createSignal<ResolvedInstanceSettings | null>(null);
   const [javas, setJavas] = createSignal<JavaInfo[]>([]);
   const [draftOverrides, setDraftOverrides] = createSignal<Set<string>>(
     new Set(props.profile.override_properties)
   );
-  const [dirty, setDirty] = createSignal(false);
+  // Auto-save state: every change patches the backend immediately (text/number
+  // inputs are debounced by 450ms). There is deliberately no Save button.
+  const [saving, setSaving] = createSignal(false);
+  const [savedAt, setSavedAt] = createSignal<number | null>(null);
+  let saveTimer: ReturnType<typeof setTimeout> | undefined;
+  let inFlight = false;
+  let pending = false;
+  // Revisions let a slow in-flight save finish without clearing the "unsaved"
+  // flag for edits the user made while the request was running.
+  let revision = 0;
+  let savedRevision = 0;
+  const markChanged = () => {
+    revision += 1;
+    setSavedAt(null);
+  };
+
+  // Isolation + completeness live here (the old Maintenance tab was removed).
+  const [isolation, setIsolation] = createSignal(props.profile.isolation ?? "never");
+  const [paths, setPaths] = createSignal<InstancePaths | null>(null);
+  const [missing, setMissing] = createSignal<MissingFileInfo[] | null>(null);
+  const [checking, setChecking] = createSignal(false);
+  const [repairing, setRepairing] = createSignal(false);
+
   // env_vars is a plain (non-inherited) profile field (P2-15): KEY=VALUE lines.
   const initialEnvText = Object.entries(props.profile.env_vars ?? {})
     .map(([k, v]) => `${k}=${v}`)
     .join("\n");
   let envInitial = initialEnvText;
   const [envText, setEnvText] = createSignal(initialEnvText);
-  // Report dirty upward so the parent guards tab switches before this
-  // component unmounts and the draft is lost (P1-13).
-  createEffect(() => props.onDirtyChange(dirty()));
-  onCleanup(() => props.onDirtyChange(false));
 
   // Local draft of the overridable values (initialized from the profile; the
   // displayed value for inherited fields comes from `resolved`).
@@ -892,6 +955,15 @@ function SettingsTab(props: { profile: InstanceView; onDirtyChange: (dirty: bool
       if (r.ok) setJavas(r.data);
       else toast({ message: r.error.message, tone: "error" });
     });
+    void instances.paths(props.profile.id).then((r) => r.ok && setPaths(r.data));
+  });
+
+  onCleanup(() => {
+    if (saveTimer) {
+      clearTimeout(saveTimer);
+      saveTimer = undefined;
+      void persist();
+    }
   });
 
   const overridden = (field: string): boolean => draftOverrides().has(field);
@@ -926,7 +998,8 @@ function SettingsTab(props: { profile: InstanceView; onDirtyChange: (dirty: bool
       }
       return next;
     });
-    setDirty(true);
+    markChanged();
+    scheduleSave(true);
   }
 
   function toggleLock(field: string): void {
@@ -936,15 +1009,29 @@ function SettingsTab(props: { profile: InstanceView; onDirtyChange: (dirty: bool
       else next.add(field);
       return next;
     });
-    setDirty(true);
+    markChanged();
+    scheduleSave(true);
   }
 
   function setValue(field: string, value: unknown): void {
     setValues((v) => ({ ...v, [field]: value }));
-    setDirty(true);
+    markChanged();
+    scheduleSave();
   }
 
-  async function save(): Promise<void> {
+  function scheduleSave(immediate = false): void {
+    if (saveTimer) clearTimeout(saveTimer);
+    saveTimer = setTimeout(
+      () => {
+        saveTimer = undefined;
+        void persist();
+      },
+      immediate ? 0 : 450
+    );
+  }
+
+  /** Build the patch from the current draft (plain fields + override list). */
+  function draftPatch(): Record<string, unknown> {
     const v = values();
     const lines = (key: string) =>
       String(v[key] ?? "")
@@ -965,9 +1052,9 @@ function SettingsTab(props: { profile: InstanceView; onDirtyChange: (dirty: bool
     for (const field of overrides) {
       switch (field) {
         case "java_path": opts.java_path = String(v.java_path) || null; break;
-        case "memory_mb": opts.memory_mb = Number(v.memory_mb); break;
-        case "min_memory_mb": opts.min_memory_mb = Number(v.min_memory_mb); break;
-        case "metaspace_mb": opts.metaspace_mb = Number(v.metaspace_mb); break;
+        case "memory_mb": opts.memory_mb = Math.max(512, Math.min(32768, Number(v.memory_mb) || 0)); break;
+        case "min_memory_mb": opts.min_memory_mb = Math.max(128, Number(v.min_memory_mb) || 0); break;
+        case "metaspace_mb": opts.metaspace_mb = Math.max(0, Number(v.metaspace_mb) || 0); break;
         case "width": opts.width = Number(v.width); break;
         case "height": opts.height = Number(v.height); break;
         case "fullscreen": opts.fullscreen = Boolean(v.fullscreen); break;
@@ -986,7 +1073,19 @@ function SettingsTab(props: { profile: InstanceView; onDirtyChange: (dirty: bool
         case "no_generated_optimizing_jvm_args": opts.no_generated_optimizing_jvm_args = Boolean(v.no_generated_optimizing_jvm_args); break;
       }
     }
-    const res = await updateInstance(props.profile.id, opts);
+    return opts;
+  }
+
+  async function persist(): Promise<void> {
+    if (inFlight) {
+      pending = true;
+      return;
+    }
+    const rev = revision;
+    if (rev === savedRevision) return;
+    inFlight = true;
+    setSaving(true);
+    const res = await updateInstance(props.profile.id, draftPatch());
     if (res.ok) {
       instancesStore.upsert(res.data);
       // env_vars is a plain field: follow the textarea, but only when it
@@ -1004,9 +1103,47 @@ function SettingsTab(props: { profile: InstanceView; onDirtyChange: (dirty: bool
           envInitial = envText();
         }
       }
-      setDirty(false);
-      toast({ message: t("common.saved"), tone: "success" });
+      savedRevision = rev;
+      setSavedAt(Date.now());
       void instances.resolvedSettings(props.profile.id).then((r) => r.ok && setResolved(r.data));
+    } else {
+      toast({ message: res.error.message, tone: "error" });
+    }
+    inFlight = false;
+    setSaving(false);
+    if (pending) {
+      pending = false;
+      scheduleSave(true);
+    }
+  }
+
+  async function changeIsolation(value: string): Promise<void> {
+    setIsolation(value);
+    const res = await updateInstance(props.profile.id, { isolation: value });
+    if (res.ok) {
+      instancesStore.upsert(res.data);
+      void instances.paths(props.profile.id).then((r) => r.ok && setPaths(r.data));
+      setSavedAt(Date.now());
+    } else {
+      toast({ message: res.error.message, tone: "error" });
+    }
+  }
+
+  async function checkCompletion(): Promise<void> {
+    setChecking(true);
+    const res = await instances.checkCompletion(props.profile.id);
+    setChecking(false);
+    if (res.ok) setMissing(res.data);
+    else toast({ message: res.error.message, tone: "error" });
+  }
+
+  async function repairInstance(): Promise<void> {
+    setRepairing(true);
+    const res = await instances.repair(props.profile.id);
+    setRepairing(false);
+    if (res.ok) {
+      toast({ message: t("instanceDetail.maintenance.repaired", { n: res.data }), tone: "success" });
+      void checkCompletion();
     } else {
       toast({ message: res.error.message, tone: "error" });
     }
@@ -1157,7 +1294,8 @@ function SettingsTab(props: { profile: InstanceView; onDirtyChange: (dirty: bool
             value={envText()}
             onInput={(e) => {
               setEnvText(e.currentTarget.value);
-              setDirty(true);
+              markChanged();
+              scheduleSave();
             }}
           />
         </RmFieldRow>
@@ -1180,66 +1318,13 @@ function SettingsTab(props: { profile: InstanceView; onDirtyChange: (dirty: bool
         </For>
       </RmAdvancedSection>
 
-      <div class="settings-footer">
-        <RmButton variant="primary" disabled={!dirty()} onClick={() => void save()}>
-          {t("common.save")}
-        </RmButton>
-      </div>
-    </div>
-  );
-}
-
-// ── Tab 5 · Maintenance ──
-
-function MaintenanceTab(props: { profile: InstanceView }): JSX.Element {
-  const [missing, setMissing] = createSignal<MissingFileInfo[] | null>(null);
-  const [checking, setChecking] = createSignal(false);
-  const [repairing, setRepairing] = createSignal(false);
-  const [isolation, setIsolation] = createSignal(props.profile.isolation ?? "never");
-  const [paths, setPaths] = createSignal<InstancePaths | null>(null);
-  const [deleteOpen, setDeleteOpen] = createSignal(false);
-
-  // Key on the profile id, not the object (perf audit 2.5).
-  createEffect(
-    on(
-      () => props.profile.id,
-      (id) => {
-        void instances.paths(id).then((r) => r.ok && setPaths(r.data));
-      }
-    )
-  );
-
-  async function check(): Promise<void> {
-    setChecking(true);
-    const res = await instances.checkCompletion(props.profile.id);
-    setChecking(false);
-    if (res.ok) setMissing(res.data);
-    else toast({ message: res.error.message, tone: "error" });
-  }
-
-  async function repair(): Promise<void> {
-    setRepairing(true);
-    const res = await instances.repair(props.profile.id);
-    setRepairing(false);
-    if (res.ok) {
-      toast({ message: t("instanceDetail.maintenance.repaired", { n: res.data }), tone: "success" });
-      void check();
-    } else {
-      toast({ message: res.error.message, tone: "error" });
-    }
-  }
-
-  const running = () => launchStore.isRunning(props.profile.id);
-
-  return (
-    <div class="tab-stack">
       <RmCard title={t("instanceDetail.maintenance.completion")}>
         <div class="btn-row">
-          <RmButton icon="shield" loading={checking()} onClick={() => void check()}>
+          <RmButton icon="shield" loading={checking()} onClick={() => void checkCompletion()}>
             {t("instanceDetail.maintenance.check")}
           </RmButton>
           <Show when={missing() && missing()!.length > 0}>
-            <RmButton variant="primary" icon="wrench" loading={repairing()} onClick={() => void repair()}>
+            <RmButton variant="primary" icon="wrench" loading={repairing()} onClick={() => void repairInstance()}>
               {t("instanceDetail.maintenance.repair", { n: missing()!.length })}
             </RmButton>
           </Show>
@@ -1261,32 +1346,25 @@ function MaintenanceTab(props: { profile: InstanceView }): JSX.Element {
         </Show>
       </RmCard>
 
-      <RmCard title={t("instanceDetail.maintenance.isolation")} actions={<Show when={running()}><RmTag tone="warning">{t("instances.running")}</RmTag></Show>}>
+      <RmCard
+        title={t("instanceDetail.maintenance.isolation")}
+        actions={
+          <Show when={launchStore.isRunning(props.profile.id)}>
+            <RmTag tone="warning">{t("instances.running")}</RmTag>
+          </Show>
+        }
+      >
         <div class="btn-row">
           <RmSelect
             value={isolation()}
-            disabled={running()}
-            onChange={(v) => setIsolation(v)}
+            disabled={launchStore.isRunning(props.profile.id)}
+            onChange={(v) => void changeIsolation(v)}
             options={[
               { value: "never", label: t("instanceDetail.maintenance.isolationShared") },
               { value: "always", label: t("instanceDetail.maintenance.isolationIsolated") },
               { value: "modded", label: t("instanceDetail.maintenance.isolationModded") },
             ]}
           />
-          <RmButton
-            size="sm"
-            disabled={running() || isolation() === (props.profile.isolation ?? "never")}
-            onClick={async () => {
-              const res = await updateInstance(props.profile.id, { isolation: isolation() });
-              if (res.ok) {
-                instancesStore.upsert(res.data);
-                void instances.paths(props.profile.id).then((r) => r.ok && setPaths(r.data));
-                toast({ message: t("common.saved"), tone: "success" });
-              } else toast({ message: res.error.message, tone: "error" });
-            }}
-          >
-            {t("common.save")}
-          </RmButton>
         </div>
         <div class="muted-line">{t("instanceDetail.maintenance.isolationWarning")}</div>
         <Show when={paths()}>
@@ -1297,19 +1375,18 @@ function MaintenanceTab(props: { profile: InstanceView }): JSX.Element {
         </Show>
       </RmCard>
 
-      <RmCard title={t("instanceDetail.maintenance.danger")} danger>
-        <div class="btn-row">
-          <RmButton icon="edit" onClick={() => void renameInstanceView(props.profile)}>
-            {t("instances.menu.rename")}
-          </RmButton>
-          <RmButton variant="danger" icon="trash" disabled={running()} onClick={() => setDeleteOpen(true)}>
-            {t("instances.menu.delete")}
-          </RmButton>
-        </div>
-      </RmCard>
-
-      <DeleteInstanceDialog instance={{ key: props.profile.id, name: props.profile.name, external: props.profile.external_root }} open={deleteOpen()} onClose={() => setDeleteOpen(false)} />
+      <div class="settings-autosave" aria-live="polite">
+        <Show
+          when={saving()}
+          fallback={
+            <span>
+              {savedAt() ? t("instanceDetail.settings.saved") : t("instanceDetail.settings.autoSave")}
+            </span>
+          }
+        >
+          {t("instanceDetail.settings.saving")}
+        </Show>
+      </div>
     </div>
   );
 }
-

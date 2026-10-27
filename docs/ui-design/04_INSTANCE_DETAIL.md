@@ -1,12 +1,12 @@
 # 04 · 实例详情页
 
-> 路由 `/instances/:id`（tab 用 hash：`#overview` `#mods` `#loaders` `#settings` `#maintenance`）。
+> 路由 `/instances/:id`（tab 用 hash：`#overview` `#mods` `#loaders` `#settings`）。
 > 对标 HMCL GameInstancePage：左侧 tab 栏 + 底部工具条；这是全应用信息量最大的页面，
 > 渐进披露原则在此页接受最严格的检验。
 
 ## 1. 设计目标
 
-1. 一个实例的一切：是什么（概览）、装了什么（Mod 管理）、怎么跑（加载器/设置）、坏没坏（维护）。
+1. 一个实例的一切：是什么（概览）、装了什么（Mod 管理）、怎么跑（加载器/设置，含完整性与隔离）。
 2. 高频路径 ≤ 2 击：启动（工具条常驻）、装 Mod（Mod 管理 tab → 前往仓库）。
 3. 22 个可覆盖字段的继承模型必须可视：每个字段看得到「当前生效值」与「是否覆盖」。
 
@@ -20,8 +20,7 @@
 │ ▤ 概览    │                                                   │
 │ ▦ Mod 管理│                当前 tab 内容                        │
 │ ⚙ Mod加载器│              （独立滚动）                          │
-│ 🔧 设置   │                                                   │
-│ 🧰 维护   │                                                   │
+│ 🔧 设置   │  （含完整性体检与隔离策略，设置改动自动保存）          │
 │──────────│                                                   │
 │ [▶ 启动]  │                                                   │
 │ [浏览 ▾] │                                                   │
@@ -32,12 +31,10 @@
 - PageHeader 的 [▶ 启动] 与侧栏底部 [▶ 启动] 同一动作（运行中均变 [■ 停止]）——
   双入口是刻意的（滚动到任何位置都能启动）。
 - 侧栏底部工具条（HMCL 模式）：
-  - **浏览 ▾**：游戏目录 / mods / saves / logs / screenshots / config
-    （路径来自 `instance_paths`；「在系统中打开」依赖 `open_path` IPC（P1），
-    未就绪前菜单项显示路径 + 「复制路径」）；
-  - **管理 ▾**：重命名 / 复制实例（Profile 级复制无 IPC——灰置 +
-    「版本级复制请到 设置→高级→版本仓库」）/ 删除实例 / 删除并清理版本文件
-    （`profile_delete` + 可选 `instance_remove(版本id)`，双重确认）。
+  - **浏览**：打开对话框列出游戏目录 / 运行目录 / mods 的完整路径，每行可复制。
+    （旧实现是向右弹出的菜单，会被侧栏 overflow 裁切，已改对话框。）
+  - **管理**：打开对话框提供重命名 / 浏览 Mod / 删除实例；删除走确认对话框。
+    重命名、删除不再出现在设置或维护里。
 
 ## 3. Tab 1 · 概览（默认）
 
@@ -54,7 +51,7 @@
 ├───────────────────────────────────────────────┤
 │ 🩺 完整性                                      │
 │  [检查完整性]  上次检查: 未检查 / 缺失 12 个文件   │
-│  （结果与修复动作详见维护 tab，此处仅摘要 + 跳转）  │
+│  （结果与修复动作详见设置 tab 底部，此处仅摘要 + 跳转）  │
 ├───────────────────────────────────────────────┤
 │ 快速操作                                        │
 │ [前往 Mod 仓库] [检查缺失前置] [管理设置]           │
@@ -62,7 +59,7 @@
 ```
 
 - 数据：`profiles.list`（profile）+ `instance_paths` + `instance_resolved_settings`（Java/内存生效值）。
-- 完整性摘要：进页不自动扫描；显示维护 tab 缓存的结果（同实例会话内）。
+- 完整性摘要：进页不自动扫描；显示设置 tab 缓存的结果（同实例会话内）。
 
 ## 4. Tab 2 · Mod 管理
 
@@ -143,8 +140,9 @@
   点锁 → 加入 `override_properties` + 控件可编辑；
 - 覆盖态：控件可编辑 + 副标题显示「覆盖全局（4096）」；再点锁 → 弹确认「恢复继承，当前自定义值将丢弃」。
 - 生效值统一以 `instance_resolved_settings` 为准显示（后端已实现 resolve）。
-- 保存：分区失焦/「保存」按钮（页脚常驻，仅脏时可用）→ `profile_update`；
-  校验错误行内红字（内存范围 512–32768、端口类字段无则跳过）。
+- **自动保存**：没有「保存」按钮。选择/开关切换立即提交；文本与数字输入 450ms 防抖后提交；
+  统一走 `instance_update_settings`（继承锁变化也立即提交覆盖名单）。页脚显示
+  「修改后自动保存 / 正在保存… / 已自动保存」，失败 toast 并保留下次编辑重试。
 
 ### 6.2 分区与披露级别
 
@@ -160,9 +158,10 @@
 - Java 选择器的**版本预检**（前端规则表，仅提示不阻断）：game_version ≥ 1.20.5 → 建议 Java 21；
   ≥ 1.17 → Java 17+；选中 Java 的 `major_version` 不满足 → 选择器行内黄条警告
   （启动失败时后端会报 `java_version_mismatch`，前端提前人话化）。
-- 隔离策略（`isolation`）不在此 tab——归维护 tab（它更像「目录怎么放」的运维决策）。
+- 完整性体检与隔离策略在本 tab 底部（原维护 tab 已删除）：隔离策略选择后立即保存，
+  运行中禁用。
 
-## 7. Tab 5 · 维护
+## 7. 完整性与隔离（设置 tab 内，原维护 tab 已删除）
 
 ```
 ┌──────────────────────────────────────────────┐
@@ -188,13 +187,14 @@
 
 - 检查完整性 = `instance_check_completion`（Hash 级全量复核，按钮上注明「约需数十秒，
   大型实例更久」+ 运行中状态）；修复 = `instance_repair`。
-- `instance_refresh`（重扫仓库）：放设置→高级→版本仓库，不放这（这里是 profile 视角）。
+- 危险区（重命名/删除）已移入「管理」对话框；维护 tab 整体删除。
+- `instance_refresh`（重扫仓库）：目录切换/刷新按钮已自动触发。
 
 ## 8. 页面级状态与错误
 
 - 实例不存在（URL 手输/已删除）：整页 `RmEmptyState`「实例不存在或已删除」+ 返回列表。
-- 运行中的实例：设置 tab 部分字段（隔离策略、删除）禁用 + tooltip。
-- `profile_update` 失败：行内错误 + 保留草稿；离开页面有未保存改动 → 拦截确认。
+- 运行中的实例：设置 tab 部分字段（隔离策略）禁用 + tooltip。
+- 自动保存失败：toast 错误；下一次改动会重试（无未保存草稿拦截，切 tab 不弹确认）。
 
 ## 9. 接口与事件映射（本页全量）
 
@@ -204,14 +204,13 @@
 | 概览 | `instance.paths`、`instance_resolved_settings`、`instance.check_completion`（摘要） |
 | Mod 管理 | `mod.list/toggle/remove/pick_and_install/install_local`、`mods_dependency_scan/apply_plan`（设计新增，P14） |
 | 加载器 | `modloader.list/install`（+ P2 remove、P6 analyze） |
-| 设置 | `settings.detectJava`、`instance_resolved_settings`、`profile.update` |
-| 维护 | `instance.check_completion/repair/paths` |
+| 设置 | `settings.detectJava`、`instance_resolved_settings`、`instance_update_settings`、`instance.check_completion/repair`、`instance_paths` |
 | 事件 | `launch://started/output/exited`、`modloader://progress`、`instances://refreshed` |
 
 ## 10. 渐进披露自查
 
-一级：启动/停止、5 个 tab、Mod 列表、加载器卡片、Java/内存/窗口；
-二级：行内 ⋯ 菜单、浏览/管理菜单、完整性体检；
+一级：启动/停止、4 个 tab、Mod 列表、加载器卡片、Java/内存/窗口；
+二级：行内 ⋯ 菜单、浏览/管理对话框、完整性体检；
 三级：JVM/游戏参数、wrapper/命令、native 开关、调试开关、Metaspace（全部 RmAdvancedSection）。
 
 ## 11. i18n key 提案（节选）
@@ -238,4 +237,4 @@
 - 前置补装闭环（纯逻辑，无 AI 配置也应全通）：删掉 indium → 检查缺失前置 →
   一键补装 → 列表刷新且再次检查为零缺失。
 - modloader 安装：fabric on 1.20.4 全流程（列表→选择→进度→完成→卡片 ✓）。
-- 维护：人为删除一个 library 文件 → 体检发现 → 修复 → 再体检干净。
+- 设置-完整性：人为删除一个 library 文件 → 体检发现 → 修复 → 再体检干净。

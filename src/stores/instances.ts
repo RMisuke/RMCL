@@ -216,9 +216,9 @@ export const instancesStore = createRoot(() => {
   }
 
   /** Select an instance and persist it (Home quick launch + dashboard card). */
-  function selectInstance(key: string | null): void {
+  async function selectInstance(key: string | null): Promise<void> {
     setSelectedKey(key);
-    void instances.select(key);
+    await instances.select(key);
   }
 
   function attachEvents(): void {

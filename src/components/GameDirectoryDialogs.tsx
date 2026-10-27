@@ -56,7 +56,7 @@ export function DirectoryManageDialog(props: {
   async function rename(entry: GameDirectoryOverview): Promise<void> {
     const next = await promptText({
       title: t("instances.dir.rename"),
-      label: t("instances.manage.name"),
+      label: t("instances.dir.renameHint"),
       initial: entry.directory.name,
     });
     if (!next || next === entry.directory.name) return;
@@ -179,6 +179,8 @@ export function DirectoryScanDialog(props: {
 }): JSX.Element {
   const [candidates, setCandidates] = createSignal<DirectoryCandidate[] | undefined>(undefined);
   const [selected, setSelected] = createSignal<Set<string>>(new Set());
+  /** Nickname per candidate path; only the RMCCC display name, never the folder. */
+  const [names, setNames] = createSignal<Map<string, string>>(new Map());
   const [loading, setLoading] = createSignal(false);
   const [error, setError] = createSignal<string | null>(null);
   const [importing, setImporting] = createSignal(false);
@@ -209,6 +211,7 @@ export function DirectoryScanDialog(props: {
           .map((entry) => entry.path)
       )
     );
+    setNames(new Map(res.data.map((entry) => [entry.path, entry.name])));
   }
 
   function toggle(path: string): void {
@@ -227,7 +230,11 @@ export function DirectoryScanDialog(props: {
     let imported = 0;
     let first: string | null = null;
     for (const entry of chosen) {
-      const res = await instancesStore.addDirectory(entry.path, entry.name);
+      const nickname = names().get(entry.path)?.trim();
+      const res = await instancesStore.addDirectory(
+        entry.path,
+        nickname && nickname.length > 0 ? nickname : entry.name
+      );
       if (res.ok) {
         imported += 1;
         first ??= res.data.id;
@@ -326,6 +333,25 @@ export function DirectoryScanDialog(props: {
                       <Show when={entry.layout.has_pcl_metadata}> · PCL</Show>
                       <Show when={entry.layout.has_launcher_profiles}> · launcher_profiles.json</Show>
                     </div>
+                    <Show when={!entry.registered}>
+                      <div
+                        class="dir-scan-nickname"
+                        onClick={(e) => e.stopPropagation()}
+                      >
+                        <input
+                          class="rm-input"
+                          value={names().get(entry.path) ?? entry.name}
+                          placeholder={t("instances.scan.nickname")}
+                          onInput={(e) =>
+                            setNames((prev) => {
+                              const next = new Map(prev);
+                              next.set(entry.path, e.currentTarget.value);
+                              return next;
+                            })
+                          }
+                        />
+                      </div>
+                    </Show>
                   </div>
                 </div>
               )}

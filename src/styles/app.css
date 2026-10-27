@@ -2717,34 +2717,6 @@ html[data-motion="off"] .hero-glow { display: none; }
   animation: shimmer 1.2s infinite;
 }
 
-.hero-dir-chip {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  align-self: flex-start;
-  max-width: 100%;
-  padding: 3px 9px;
-  border: 1px solid var(--rmccc-border);
-  border-radius: 999px;
-  background: var(--rmccc-surface-sunken);
-  color: var(--rmccc-text-muted);
-  font-size: 11px;
-  line-height: 1.4;
-}
-.hero-dir-chip:hover { border-color: var(--rmccc-accent); color: var(--rmccc-accent); }
-.hero-dir-chip > span:first-of-type {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.hero-dir-chip-count {
-  padding: 0 5px;
-  border-radius: 999px;
-  background: var(--rmccc-surface);
-  color: var(--rmccc-text-muted);
-  font-variant-numeric: tabular-nums;
-}
-
 .instances-dir-external {
   display: inline-flex;
   align-items: center;
@@ -2770,6 +2742,14 @@ html[data-motion="off"] .hero-glow { display: none; }
   white-space: nowrap;
 }
 .hero-list-dir:hover { color: var(--rmccc-accent); }
+.hero-list-dir-count {
+  margin-left: auto;
+  padding: 0 5px;
+  border-radius: 999px;
+  background: var(--rmccc-surface);
+  color: var(--rmccc-text-muted);
+  font-variant-numeric: tabular-nums;
+}
 
 /* The two-line directory rows are taller than generic side tabs. */
 .instances-dirs { overflow: hidden; }
@@ -2782,3 +2762,41 @@ html[data-motion="off"] .hero-glow { display: none; }
 .instances-dirs-list { overflow-y: auto; }
 
 .instance-row:not(.instance-row-head) { cursor: pointer; }
+
+/* Instance detail: browse/manage dialogs + auto-save status. */
+.instance-path-list { display: flex; flex-direction: column; gap: var(--rmccc-space-2); }
+.instance-path-row {
+  display: flex;
+  align-items: center;
+  gap: var(--rmccc-space-2);
+  padding: 6px 8px;
+  border: 1px solid var(--rmccc-border);
+  border-radius: var(--rmccc-radius-control);
+  background: var(--rmccc-surface);
+}
+.instance-path-label {
+  width: 72px;
+  flex-shrink: 0;
+  font-size: 12px;
+  color: var(--rmccc-text-muted);
+}
+.instance-path-value {
+  flex: 1;
+  min-width: 0;
+  font-family: var(--rmccc-font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  font-size: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.instance-manage-actions { display: flex; flex-direction: column; gap: var(--rmccc-space-2); }
+.instance-manage-actions .rm-btn { justify-content: flex-start; }
+.settings-autosave {
+  align-self: flex-end;
+  font-size: 12px;
+  color: var(--rmccc-text-muted);
+  padding: 0 2px var(--rmccc-space-2);
+}
+
+.dir-scan-nickname { margin-top: 4px; }
+.dir-scan-nickname .rm-input { height: 28px; font-size: 12px; }

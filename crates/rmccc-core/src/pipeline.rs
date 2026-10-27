@@ -627,11 +627,22 @@ fn detect_launch_java(
                     bin.display()
                 ))
             })?;
-            if !effective.not_check_jvm && probed.major_version != required_java {
+            // Java is forward compatible in the launcher's selection model:
+            // only reject a runtime that is *older* than the version the game
+            // manifest requires (Java 25 satisfies "Java 21+"). The previous
+            // `!=` check rejected perfectly valid newer runtimes.
+            if !effective.not_check_jvm && probed.major_version < required_java {
                 return Err(RmcccError::JavaVersionMismatch {
                     found: probed.major_version,
                     required: required_java,
                 });
+            }
+            if probed.major_version > required_java {
+                tracing::warn!(
+                    found = probed.major_version,
+                    required = required_java,
+                    "Using a newer Java runtime than the version requires"
+                );
             }
             Ok(probed)
         }

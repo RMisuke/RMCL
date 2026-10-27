@@ -84,8 +84,13 @@ pub fn select_for(
         return Ok(closest.clone());
     }
 
+    let newest = installations
+        .iter()
+        .map(|j| j.major_version)
+        .max()
+        .unwrap_or_default();
     Err(rmccc_error::RmcccError::JavaVersionMismatch {
-        found: installations[0].major_version,
+        found: newest,
         required: required_major,
     })
 }
