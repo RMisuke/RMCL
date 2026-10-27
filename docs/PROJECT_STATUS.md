@@ -10,6 +10,27 @@
 
 ## 0. 更新记录
 
+**2026-10-27（主题 v2 设计：字体 / 圆角 / 间距 / 背景图 / 组件槽 + 用户覆盖，ADR-014 proposed）**：
+
+1. **研究结论**：主题 v1 的 8 色令牌不足以支撑"全新体验"，但也不应把任意 CSS 交给插件。
+   现有样式已有 `--rmccc-radius-*` / `--rmccc-space-*` / `--font-stack` / `--hero-image`
+   等钩子，约 235 处已在用令牌，其余写死数值可由"宿主皮肤层"覆盖，无需重写组件。
+2. **方案**：[ADR-014](adr/ADR-014-theme-v2-appearance-skin.md)（**proposed**）提出
+   `schemaVersion: 2` + 类型化令牌（字体/形状/间距/背景/8 个组件槽），
+   新增 **medium 能力 `themes.skin`**（字体/背景有视觉欺骗面，必须显式授权），
+   宿主 `theme-skin.css` 消费变量，主题永远不提供 CSS/URL/远程资源；
+   用户可逐项拒绝字体/背景/组件，并覆盖密度、圆角缩放与背景图（用户优先）。
+3. **可行性验证（demo-only，不改生产代码）**：在 `demo/` 用单层 CSS 变量 + 受控选择器
+   叠加 "Aurora Glass" 皮肤（字体栈、22–26px 圆角、5/10/15/20/30/40 间距、
+   背景图 + 暗化、卡片/按钮/输入/菜单玻璃质感），Home 与 Settings 均正常，
+   未改任何组件 JSX。截图：`target/skin-probe/{home-default,home-aurora,settings-aurora}.png`。
+4. **文档**：ADR 索引 / `docs/README.md` / 指南 §9.5 / `THEME_PLUGIN_AUTHORING.md` 已标注
+   v2 为 proposed；`schemas/theme.schema.json` 与生产代码**未改**，v2 字段现在仍会被拒绝。
+5. **待拍板**：`themes.skin` 是否按 medium 显式授权；组件槽是否先做 8 个；用户覆盖是否
+   需要多套外观预设；插件 iframe 是否只拿令牌（当前建议只拿令牌）。
+6. 验证：本轮无生产代码变更；沿用上一轮 `681 passed` 与已构建 `SNGL.app`。ADR accepted 后
+   按 S1（schema/令牌/皮肤层）→ S2（资产/字体）→ S3（组件槽）→ S4（外观页/示例主题）实施。
+
 **2026-10-27（插件主题规范 + 安全审计：主题强校验 / Windows 隔离 UI 门禁 / SSRF 加固）**：
 
 1. **主题文档下沉**：新增 `crates/rmccc-plugin/src/theme.rs`（`ThemeDocument`、`REQUIRED_COLORS`、

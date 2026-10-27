@@ -884,6 +884,9 @@ WidgetInstance
 - 主题/布局与功能插件分别启用；UI 主题不能声明或继承业务权限。
 - 作者规范：[`guides/THEME_PLUGIN_AUTHORING.md`](guides/THEME_PLUGIN_AUTHORING.md)；
   Schema：[`schemas/theme.schema.json`](../schemas/theme.schema.json)。
+- 方向（**proposed**，未实现）：主题 v2 计划开放字体/圆角/间距/背景图/组件槽，
+  采用"类型化令牌 + 宿主皮肤层"而不是任意 CSS，并新增 `themes.skin` 能力与用户覆盖，
+  见 [ADR-014](adr/ADR-014-theme-v2-appearance-skin.md)。
 
 ## 9.6 插件 UI 技术约束
 

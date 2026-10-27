@@ -7,6 +7,11 @@
 > [ADR-003](../adr/ADR-003-plugin-package-and-install-transaction.md)（包格式）。
 > 通用插件流程见 [PLUGIN_AUTHORING.md](PLUGIN_AUTHORING.md)；本文只讲"主题"这一形态。
 
+> **v2 预览（proposed）**：字体/圆角/间距/背景图/组件级外观正在
+> [ADR-014](../adr/ADR-014-theme-v2-appearance-skin.md) 中设计（`schemaVersion: 2` +
+> 新能力 `themes.skin`），**尚未实现**。在 ADR accepted 并发布实现前，请按本指南的 v1
+> 规则（仅 `colors`）编写主题；v2 字段现在会被拒绝。
+
 ## 0. 先明确边界
 
 | 主题可以做 | 主题不能做 |

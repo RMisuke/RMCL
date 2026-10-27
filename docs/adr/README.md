@@ -24,8 +24,10 @@
 | [ADR-011](ADR-011-binary-size-metric.md) | 主可执行体积门禁：度量对象与阈值（2026-10-24 起 < 20 MiB） | **accepted** | Phase 0 | AGENTS.md 体积红线；审计 §15.5 |
 | [ADR-012](ADR-012-macos-intel-build.md) | macOS Intel 的 runner、打包和最低系统版本 | proposed | Phase 0 | 指南 §5.1、§16.3 |
 | [ADR-013](ADR-013-lightweight-ai-and-external-mcp.md) | 轻干预 AI 架构：内部 LLM 服务 + 外部 MCP 控制（内建 Agent 退役） | **accepted**（2026-10-23） | Phase 6→AI/MCP | `../AI_AND_MCP_ARCHITECTURE.md`；ADR-009/010（修订）/011；`../ui-design/07_AI_AND_MCP.md` |
+| [ADR-014](ADR-014-theme-v2-appearance-skin.md) | 主题 v2：外观皮肤（字体/形状/间距/背景图/组件槽）+ 用户覆盖 | **proposed**（2026-10-27 草案） | Phase 3+ | ADR-003/004/005/006；`../audits/PLUGIN_SECURITY_AUDIT_2026-10-27.md`；`../guides/THEME_PLUGIN_AUTHORING.md` |
 
-> ADR-008 已于 2026-10-26 建立草案（proposed）；accepted 前 Phase 7 不得据此改协议。
+> ADR-008 已于 2026-10-26 建立草案（proposed）；ADR-014 于 2026-10-27 建立主题 v2 草案；
+> accepted 前均不得据此改协议。
 > 序号不按字母序排列以保持历史编号稳定。
 
 ## 模板
