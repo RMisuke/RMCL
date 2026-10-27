@@ -11,7 +11,7 @@
  * re-runs the directory query.
  */
 import type { JSX } from "solid-js";
-import { Show, For, Switch, Match, createMemo, createSignal, onMount } from "solid-js";
+import { Show, For, Switch, Match, createMemo, createSignal, createEffect, onMount, on } from "solid-js";
 import { useNavigate } from "@solidjs/router";
 import { PageHeader } from "../components/PageHeader";
 import { Icon } from "../components/icons";
@@ -26,7 +26,7 @@ import type { GameDirectoryOverview, InstanceDetail } from "../ipc/types";
 import type { DeleteInstanceTarget } from "../components/DeleteInstanceDialog";
 import { uiStore, toast, promptText } from "../stores/ui";
 import { t } from "../i18n";
-import { initialOf, relativeTime, elidePath } from "../lib/format";
+import { initialOf, relativeTime, elidePath, formatBytes } from "../lib/format";
 import { playtimeLabel } from "../lib/playtime";
 import { loaderLabel } from "../lib/loaders";
 import { readPref, writePref } from "../lib/prefs";
@@ -49,6 +49,8 @@ export default function Instances(): JSX.Element {
   const [detailTarget, setDetailTarget] = createSignal<DeleteInstanceTarget | null>(null);
   const [deleteOpen, setDeleteOpen] = createSignal(false);
   const [switching, setSwitching] = createSignal<string | null>(null);
+  /** Instance key → bytes; loaded separately so `instance_list` stays cheap. */
+  const [sizes, setSizes] = createSignal<Record<string, number>>({});
 
   onMount(() => {
     void (async () => {
@@ -56,6 +58,25 @@ export default function Instances(): JSX.Element {
       await instancesStore.rescan();
     })();
   });
+
+  async function loadSizes(): Promise<void> {
+    const directoryId = directory()?.directory.id;
+    if (!directoryId) return;
+    const res = await instances.sizes(directoryId);
+    if (!res.ok) return;
+    setSizes(
+      Object.fromEntries(res.data.map((item) => [item.key, Number(item.bytes)]))
+    );
+  }
+
+  // Recompute after refreshes (install/repair/rename) and directory switches.
+  createEffect(
+    on(
+      () => instancesStore.items(),
+      () => void loadSizes(),
+      { defer: true }
+    )
+  );
 
   const directory = () => instancesStore.selectedDirectory();
 
@@ -473,6 +494,7 @@ export default function Instances(): JSX.Element {
                       fallback={
                         <InstanceCards
                           items={items()}
+                          sizes={sizes()}
                           menuFor={menuFor}
                           onLaunch={launch}
                           onOpen={(key) => navigate(`/instances/${encodeURIComponent(key)}`)}
@@ -482,6 +504,7 @@ export default function Instances(): JSX.Element {
                       <Match when={view() === "list"}>
                         <InstanceList
                           items={items()}
+                          sizes={sizes()}
                           menuFor={menuFor}
                           onLaunch={launch}
                           onOpen={(key) => navigate(`/instances/${encodeURIComponent(key)}`)}
@@ -522,6 +545,7 @@ export default function Instances(): JSX.Element {
 
 function InstanceCards(props: {
   items: InstanceDetail[];
+  sizes: Record<string, number>;
   menuFor: (item: InstanceDetail) => MenuItem[];
   onLaunch: (key: string, name: string) => void;
   onOpen: (key: string) => void;
@@ -562,6 +586,11 @@ function InstanceCards(props: {
               <Show when={item.summary.last_played}>
                 {" "}· {relativeTime(item.summary.last_played!)}
               </Show>
+              <Show when={props.sizes[item.summary.key] !== undefined}>
+                <span class="instance-card-size">
+                  {formatBytes(props.sizes[item.summary.key])}
+                </span>
+              </Show>
             </div>
             <div class="instance-card-actions" onClick={(e) => e.stopPropagation()}>
               <LaunchControl item={item} onLaunch={props.onLaunch} />
@@ -580,6 +609,7 @@ function InstanceCards(props: {
 
 function InstanceList(props: {
   items: InstanceDetail[];
+  sizes: Record<string, number>;
   menuFor: (item: InstanceDetail) => MenuItem[];
   onLaunch: (key: string, name: string) => void;
   onOpen: (key: string) => void;
@@ -618,6 +648,9 @@ function InstanceList(props: {
                       time: playtimeLabel(Number(item.summary.play_time_seconds)),
                     })}
                   </span>
+                </Show>
+                <Show when={props.sizes[item.summary.key] !== undefined}>
+                  <span class="instance-row-meta">{formatBytes(props.sizes[item.summary.key])}</span>
                 </Show>
               </div>
             </div>

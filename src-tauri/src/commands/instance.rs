@@ -7,9 +7,9 @@
 use crate::state::AppState;
 use rmccc_error::IpcError;
 pub use rmccc_instance::{
-    DirectoryCandidate, GameDirectory, GameDirectoryKind, GameDirectoryOverview,
-    GlobalGameSettings, InstanceDetail, InstancePaths, InstanceSettingsPatch, InstanceSummary,
-    ResolvedInstanceSettings,
+    CacheCleanReport, DirectoryCandidate, GameDirectory, GameDirectoryKind, GameDirectoryOverview,
+    GlobalGameSettings, InstanceDetail, InstancePaths, InstanceSettingsPatch, InstanceStorage,
+    InstanceSummary, ResolvedInstanceSettings, StorageOverview,
 };
 use serde::Serialize;
 use std::path::PathBuf;
@@ -155,6 +155,72 @@ pub async fn game_directory_reveal(
         message: format!("Failed to open game directory: {e}"),
         retryable: false,
     })
+}
+
+// ── Storage management ─────────────────────────────────────────────
+
+fn blocking_error(e: impl std::fmt::Display) -> IpcError {
+    IpcError {
+        code: rmccc_error::ErrorCode::InternalError,
+        message: format!("storage task failed: {e}"),
+        retryable: false,
+    }
+}
+
+#[tauri::command]
+#[tracing::instrument(skip(state))]
+pub async fn storage_overview(
+    state: tauri::State<'_, AppState>,
+) -> Result<StorageOverview, IpcError> {
+    let (data_dir, directories) = {
+        let core = state.core.read().await;
+        let service = core.instances.lock().map_err(|_| locked_error())?;
+        (
+            service.data_dir().to_path_buf(),
+            service.directories().to_vec(),
+        )
+    };
+    tauri::async_runtime::spawn_blocking(move || {
+        rmccc_instance::storage_overview(&data_dir, &directories)
+    })
+    .await
+    .map_err(blocking_error)
+}
+
+/// Remove only the regenerable cache (`{data_dir}/cache`).
+#[tauri::command]
+#[tracing::instrument(skip(state))]
+pub async fn storage_clean_cache(
+    state: tauri::State<'_, AppState>,
+) -> Result<CacheCleanReport, IpcError> {
+    let data_dir = {
+        let core = state.core.read().await;
+        let service = core.instances.lock().map_err(|_| locked_error())?;
+        service.data_dir().to_path_buf()
+    };
+    tauri::async_runtime::spawn_blocking(move || rmccc_instance::clean_caches(&data_dir))
+        .await
+        .map_err(blocking_error)
+}
+
+/// Per-instance sizes for the instance cards (selected directory by default).
+#[tauri::command]
+#[tracing::instrument(skip(state))]
+pub async fn instance_sizes(
+    state: tauri::State<'_, AppState>,
+    directory_id: Option<String>,
+) -> Result<Vec<InstanceStorage>, IpcError> {
+    let directory = {
+        let core = state.core.read().await;
+        let service = core.instances.lock().map_err(|_| locked_error())?;
+        match directory_id.as_deref() {
+            Some(id) => service.directory(id)?.clone(),
+            None => service.selected_directory().clone(),
+        }
+    };
+    tauri::async_runtime::spawn_blocking(move || rmccc_instance::instances_in(&directory))
+        .await
+        .map_err(blocking_error)
 }
 
 // ── Instances ───────────────────────────────────────────────────────

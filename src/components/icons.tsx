@@ -54,7 +54,8 @@ export type IconName =
   | "eye"
   | "eye-off"
   | "terminal"
-  | "layers";
+  | "layers"
+  | "hard-drive";
 
 const PATHS: Record<IconName, string> = {
   home: "M3 10.5 12 3l9 7.5M5 9.5V21h14V9.5M9.5 21v-6h5v6",
@@ -103,6 +104,7 @@ const PATHS: Record<IconName, string> = {
   "eye-off": "M4 4l16 16M10 5.9A9.7 9.7 0 0 1 12 5.7c6 0 9.5 6.3 9.5 6.3a17 17 0 0 1-3 3.7m-3.4 1.6A9.4 9.4 0 0 1 12 18.3c-6 0-9.5-6.3-9.5-6.3a17 17 0 0 1 4-4.6M9.9 9.9a3 3 0 0 0 4.2 4.2",
   terminal: "M4 5h16v14H4zM7.5 9.5 10 12l-2.5 2.5M12.5 15H17",
   layers: "M12 3 3 8l9 5 9-5-9-5ZM3 12.5l9 5 9-5M3 17l9 5 9-5",
+  "hard-drive": "M4 5h16v14H4zM4 12h16M8 8.5h.01M8 15.5h.01",
 };
 
 interface IconProps {

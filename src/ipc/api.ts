@@ -36,6 +36,12 @@ export type {
   DirectoryCandidate,
   DirectoryLayout,
   DirectorySource,
+  StorageOverview,
+  StorageEntry,
+  StorageKind,
+  GameDirectoryStorage,
+  InstanceStorage,
+  CacheCleanReport,
   GlobalGameSettings,
   EffectiveGameSettings,
   IsolationPolicy,
@@ -82,6 +88,12 @@ import type { AppInfoView,
   DirectoryCandidate,
   DirectoryLayout,
   DirectorySource,
+  StorageOverview,
+  StorageEntry,
+  StorageKind,
+  GameDirectoryStorage,
+  InstanceStorage,
+  CacheCleanReport,
   GlobalGameSettings,
   EffectiveGameSettings,
   IsolationPolicy,
@@ -187,6 +199,9 @@ export const instances = {
     safeInvoke<InstanceDetail>("instance_rename", { key, newId }),
   duplicate: (key: string, newId: string, copySaves = false) =>
     safeInvoke<InstanceDetail>("instance_duplicate", { key, newId, copySaves }),
+  /** Per-instance disk usage for the instance cards (selected dir default). */
+  sizes: (directoryId?: string) =>
+    safeInvoke<InstanceStorage[]>("instance_sizes", { directoryId }),
   /** `deleteFiles=false` hides the instance and keeps `versions/{id}`. */
   remove: (key: string, deleteFiles = false) =>
     safeInvoke<void>("instance_remove", { key, deleteFiles }),
@@ -231,6 +246,15 @@ export const gameDirectories = {
     safeInvoke<GameDirectory>("game_directory_update", { id, name, path }),
   remove: (id: string) => safeInvoke<void>("game_directory_remove", { id }),
   select: (id: string) => safeInvoke<GameDirectory>("game_directory_select", { id }),
+};
+
+// ── Storage management ──
+
+export const storage = {
+  /** Launcher-owned directories + every game directory with per-instance sizes. */
+  overview: () => safeInvoke<StorageOverview>("storage_overview"),
+  /** Remove only `{data_dir}/cache` (regenerable download/icon cache). */
+  cleanCache: () => safeInvoke<CacheCleanReport>("storage_clean_cache"),
 };
 
 // ── Versions ──

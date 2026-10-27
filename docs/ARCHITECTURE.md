@@ -1464,6 +1464,9 @@ ai_* 5 条 + mods 纯逻辑 2 条取代，S4/S5 再加 mcp_* 9 条）。
 | `game_directory_scan` | `instance.rs` | Discover HMCL/PCL/official `.minecraft` directories |
 | `game_directory_reveal` | `instance.rs` | Open a game root in Finder/Explorer |
 | `game_directory_add` / `update` / `remove` / `select` | `instance.rs` | Registry CRUD (never deletes files; empty root gets `versions/`) |
+| `storage_overview` | `instance.rs` | Launcher directories + game directories with per-instance sizes (blocking walk on a worker thread) |
+| `storage_clean_cache` | `instance.rs` | Remove `{data_dir}/cache` only; returns freed bytes |
+| `instance_sizes` | `instance.rs` | Per-instance sizes for the instance cards |
 | `instance_list` | `instance.rs` | Detailed instances for a directory (settings + paths, no completeness scan) |
 | `instance_get` | `instance.rs` | Instance detail by `{directory}/{id}` |
 | `instance_refresh` | `instance.rs` | Rescan a directory, emit `instances://refreshed` |

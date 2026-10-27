@@ -1,6 +1,6 @@
 # 08 · 设置页
 
-> 路由 `/settings`（子导航 hash：`#game-defaults` / `#general` / `#download` / `#plugins` /
+> 路由 `/settings`（子导航 hash：`#game-defaults` / `#general` / `#download` / `#storage` / `#plugins` /
 > `#advanced` / `#about`）。对标 HMCL LauncherSettingsPage 的三组左导航结构，
 > 并补齐现状缺失的镜像源/并发/更新检查/版本仓库管理。
 
@@ -67,7 +67,38 @@
 > 代理设置：后端 AppConfig 无此字段（HMCL 有）。不放假控件；在分区底部灰字
 > 「代理支持规划中」。缺口记录于 00 §9。
 
-## 6. 分区 · AI 与外部控制（#ai）
+## 6. 分区 · 存储管理（#storage）
+
+> 2026-10-28 新增。用于回答「空间被谁占了」，并提供唯一的安全清理入口。
+
+```
+┌ 存储概览 ────────────────────────────────────────────────┐
+│ 总占用 3.2 GiB │ 启动器数据 820 MiB │ 游戏目录 2.3 GiB │ 可清理 816 MiB │
+│ [一键清理缓存]  只清理可再生成的下载/图标缓存                 │
+├ 启动器目录与配置 ─────────────────────────────────────────┤
+│ 🗑 下载与图标缓存   ~/…/rmccc/cache        816 MiB  [可清理] │
+│ 📁 启动器配置       ~/…/rmccc/config        12 KiB          │
+│ 📁 运行日志         ~/…/rmccc/logs          1.1 MiB         │
+│ 📁 已安装插件 … / 插件数据 … / 运行状态 … / WebView 缓存 …   │
+├ 游戏目录（可展开） ───────────────────────────────────────┤
+│ ▸ Default   ~/…/rmccc/instances     2.3 GiB   [打开目录]     │
+│   ▸ 展开：                                                  │
+│     共享资源 libraries/assets/…      1.8 GiB                 │
+│     1.20.4-Fabric   420 MiB          [打开实例]              │
+│     …                                                       │
+└───────────────────────────────────────────────────────────┘
+```
+
+- 数据来自 `storage_overview`：启动器数据按 data dir 一级条目分类（配置/缓存/日志/插件/
+  状态/Agent/Dashboard/私有数据/旧 profile/顶层配置文件），另加 macOS WebView 缓存；
+  游戏目录单独统计，避免与 `{data_dir}/instances` 重复计数。
+- 每个游戏目录可展开显示 `versions/{id}` 的逐实例占用与「共享资源」
+  （libraries/assets/其他未归入实例的文件）；实例行可直接进详情页删除。
+- 「一键清理缓存」只删除 `{data_dir}/cache`（下载对象、版本清单、图标缓存），
+  不触碰存档、模组、实例、插件、配置；确认对话框写明后可执行，成功 toast 释放量并刷新。
+- 大目录扫描在 `spawn_blocking` 中执行，不阻塞 IPC/主线程。
+
+## 7. 分区 · AI 与外部控制（#ai）
 
 全局唯一入口：**AI 服务**（OpenAI 兼容端口：地址/密钥/自动检测模型/流式）与
 **外部 Agent 控制**（MCP 服务器：开关/令牌/会话/工具权限/最近操作）。
@@ -83,7 +114,7 @@ i18n、验收）统一维护在 [07_AI_AND_MCP.md](07_AI_AND_MCP.md)，此处只
   在线会话 + 工具权限矩阵（31 工具按 只读/操作/破坏性 分组）+ 最近 Agent 操作；
 - 运行期反馈不在本页：归因徽标/确认卡在任务中心（10 §3），日志 AI 分析在日志抽屉（10 §4）。
 
-## 7. 分区 · 插件（#plugins）—— 插件设置页宿主
+## 8. 分区 · 插件（#plugins）—— 插件设置页宿主
 
 ```
 ┌──────────────────────────────────────────────┐
@@ -102,7 +133,7 @@ i18n、验收）统一维护在 [07_AI_AND_MCP.md](07_AI_AND_MCP.md)，此处只
 - 空态：「暂无插件提供设置页」+ [管理插件 ›] → /plugins。
 - 权限撤销/插件禁用时：卡片显示占位（同 02 §3.5 权限态）。
 
-## 8. 分区 · 高级（#advanced）
+## 9. 分区 · 高级（#advanced）
 
 ### 8.1 版本仓库管理（instance_list 等命令的唯一 UI）
 
@@ -130,37 +161,40 @@ instance_duplicate）/ 删除（确认「实例引用该版本时可能无法启
   修改引导到 CLI/配置文件说明（折叠说明，不给 UI 输入——改 data_dir 是重运维操作）。
 - 前端诊断：frontend_log 机制说明（只读说明卡，无操作）。
 
-## 9. 分区 · 关于（#about）
+## 10. 分区 · 关于（#about）
 
 应用名 + 版本 + 构建信息（前端读 package version）；
 体积承诺说明（「主程序 < 10 MiB」当前实测值由 CI 写入的常量显示——若无则省略）；
 开源地址/文档链接（`open_external_url`）；[立即检查更新]（同 §4，P9 依赖）。
 
-## 10. 状态与错误
+## 11. 状态与错误
 
 - settings_get/set 失败：分区顶部行内错误条 + 重试；不做全局弹窗。
 - 版本仓库操作失败（重名/非法 id/文件占用）：dialog 内行内错误，不关弹窗。
 - 主题切换失败（损坏主题）：回退内置 + toast（现有降级逻辑）。
 
-## 11. 接口映射（本页全量）
+## 12. 接口映射（本页全量）
 
 `settings_get/set/get_user/set_user/supported_locales/detectJava`、
 `dashboard_list_themes/get_theme_tokens/set_theme_preference/get_theme_preference/get_theme_json`、
-`instance_list/refresh/rename/duplicate/remove`、`log_get/clear`、`open_external_url`、
+`instance_list/refresh/rename/duplicate/remove`、`storage_overview/storage_clean_cache/instance_sizes`、
+`log_get/clear`、`open_external_url`、
 `plugin_list`（插件分区）、`ai_*` 5 条 + `mcp_*` 9 条（设计新增，见 07 §8）；
 事件 `instances://refreshed`、`ai://delta/done/error`、`mcp://session/confirmation`。
 
-## 12. 渐进披露自查
+## 13. 渐进披露自查
 
 一级：语言、外观模式与主题、下载源、并发、Java 默认、内存默认、AI 地址/密钥/模型、
 MCP 总开关与接入配置；
 二级：主题 JSON、日志查看器、插件设置页、MCP 会话与令牌管理、最近 Agent 操作；
+二级补充：存储管理的游戏目录展开、逐实例占用；
 三级：默认 JVM/游戏参数、事件节流、版本仓库、data_dir（整个「高级」分区本身就是三级）、
 MCP 逐工具权限矩阵。
 
-## 12. i18n key 提案（节选）
+## 14. i18n key 提案（节选）
 
-`settings.nav.gameDefaults|general|download|plugins|advanced|about` /
+`settings.nav.gameDefaults|general|download|storage|plugins|advanced|about` /
+`settings.storage.overview|total|launcher|games|cleanable|clean|cleanTitle|cleanBody|cleaned` /
 `settings.game.intro` `settings.game.rootDir` `settings.game.rootDirNote` /
 `settings.general.language` `settings.general.appearance.mode` `settings.general.theme {name}` /
 `settings.general.updates` `settings.general.updates.checkNow` /
@@ -174,9 +208,11 @@ MCP 逐工具权限矩阵。
 
 `settings.ai.*` / `settings.mcp.*` 命名空间的完整清单见 07_AI_AND_MCP.md §10。
 
-## 14. 验收要点
+## 15. 验收要点
 
 - `AppConfig` 15 个可写字段全部有控件（对照 SettingsUpdate 逐项 checklist）。
+- 存储管理：`cache/` 有内容时显示可清理量；清理后 cache 消失、实例/存档不变；
+  展开游戏目录能看到每个实例的体积。
 - 版本仓库：复制→重命名→删除链路 + 引用计数显示正确。
 - 主题切换即时生效且「跟随系统」在系统外观切换时联动（matchMedia 监听，现有机制）。
 - 镜像切换后新下载走 BMCLAPI（抓包或后端日志验证，人工验收项）。

@@ -151,7 +151,8 @@ fn ipc_command_count_is_stable() {
     // → 99：dashboard_get_theme_skin（主题 v2 皮肤，ADR-014）
     //        （前端审计 B3-1；hero 主页布局改走 localStorage）。
     // → 109：game_directory_overview / scan / reveal（目录侧边栏与 HMCL/PCL 兼容）。
-    assert_eq!(crate::handlers::IPC_COMMANDS.len(), 109);
+    // → 112：storage_overview / storage_clean_cache / instance_sizes（存储管理）。
+    assert_eq!(crate::handlers::IPC_COMMANDS.len(), 112);
 }
 
 // ────────────────────────── 2. 错误码契约 ──────────────────────────
@@ -504,6 +505,38 @@ fn game_directory_overview_and_scan_see_the_managed_root() {
 
         assert!(service.directory("nope").is_err());
     }
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn storage_overview_lists_cache_and_instance_sizes() {
+    let (dir, core) = temp_core("storage-overview");
+    write_minimal_version(&core, "1.20.4");
+    std::fs::create_dir_all(dir.join("cache/objects")).unwrap();
+    std::fs::write(dir.join("cache/objects/object"), vec![7u8; 4096]).unwrap();
+
+    let (data_dir, directories) = {
+        let service = core.instances.lock().unwrap();
+        (
+            service.data_dir().to_path_buf(),
+            service.directories().to_vec(),
+        )
+    };
+    let overview = rmccc_instance::storage_overview(&data_dir, &directories);
+    assert!(overview.cleanable_bytes >= 4096);
+    assert!(overview.game_bytes > 0);
+    let game = &overview.game_directories[0];
+    assert_eq!(game.instances.len(), 1);
+    assert!(game.instances[0].bytes > 0);
+    assert_eq!(game.instances[0].id, "1.20.4");
+
+    let report = rmccc_instance::clean_caches(&data_dir);
+    assert!(report.freed_bytes >= 4096);
+    assert!(!data_dir.join("cache").exists());
+    // Instance files are untouched.
+    assert!(selected_root(&core)
+        .join("versions/1.20.4/1.20.4.json")
+        .is_file());
     let _ = std::fs::remove_dir_all(&dir);
 }
 

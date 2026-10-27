@@ -10,8 +10,9 @@ import { PageHeader } from "../components/PageHeader";
 import { RmButton, RmIconButton, RmInput, RmSelect, RmSwitch, RmTag } from "../components/rm/controls";
 import { RmDialog, RmMenu } from "../components/rm/overlays";
 import { RmCard, RmSideTabs, RmListRow, RmAdvancedSection, RmFieldRow, RmEmptyState, RmErrorState } from "../components/rm/surfaces";
-import { settings as settingsApi, userSettings, instances, gameDirectories, logs, external, mcp as mcpApi, ai as aiApi, plugins as pluginsApi, dashboard } from "../ipc/api";
-import type { AppInfoView, JavaInfo, InstanceDetail, LocaleInfo, McpToolView, ThemeTokens, GlobalGameSettings, GameDirectory } from "../ipc/types";
+import { settings as settingsApi, userSettings, instances, gameDirectories, logs, external, mcp as mcpApi, ai as aiApi, plugins as pluginsApi, dashboard, storage } from "../ipc/api";
+import type { AppInfoView, JavaInfo, InstanceDetail, LocaleInfo, McpToolView, ThemeTokens, GlobalGameSettings, GameDirectory, StorageOverview } from "../ipc/types";
+import { Icon } from "../components/icons";
 import { settingsStore } from "../stores/settings";
 import { aiStore } from "../stores/ai";
 import { mcpStore } from "../stores/mcp";
@@ -26,11 +27,12 @@ import type { TranslationKey } from "../i18n/locales/messages";
 import { elidePath } from "../lib/format";
 import { useHashTab } from "../lib/useHashTab";
 
-const SECTIONS: { id: string; icon: "list" | "settings" | "download" | "bot" | "extension" | "wrench" | "info" | "sparkles"; label: TranslationKey }[] = [
+const SECTIONS: { id: string; icon: "list" | "settings" | "download" | "bot" | "extension" | "wrench" | "info" | "sparkles" | "hard-drive"; label: TranslationKey }[] = [
   { id: "game-defaults", icon: "list", label: "settings.nav.gameDefaults" },
   { id: "general", icon: "settings" as const, label: "settings.nav.general" },
   { id: "appearance", icon: "sparkles" as const, label: "settings.nav.appearance" },
   { id: "download", icon: "download" as const, label: "settings.nav.download" },
+  { id: "storage", icon: "hard-drive" as const, label: "settings.nav.storage" },
   { id: "ai", icon: "bot" as const, label: "settings.nav.ai" },
   { id: "plugins", icon: "extension" as const, label: "settings.nav.plugins" },
   { id: "advanced", icon: "wrench" as const, label: "settings.nav.advanced" },
@@ -59,6 +61,7 @@ export default function Settings(): JSX.Element {
             <Match when={section() === "general"}><General /></Match>
             <Match when={section() === "appearance"}><Appearance /></Match>
             <Match when={section() === "download"}><DownloadSection /></Match>
+            <Match when={section() === "storage"}><StorageSection /></Match>
             <Match when={section() === "ai"}><AiSection /></Match>
             <Match when={section() === "plugins"}><PluginsHost /></Match>
             <Match when={section() === "advanced"}><Advanced /></Match>
@@ -1210,6 +1213,207 @@ function About(): JSX.Element {
           </div>
         </div>
       </RmCard>
+    </div>
+  );
+}
+
+// ── Storage management ─────────────────────────────────────────────
+
+function StorageSection(): JSX.Element {
+  const navigate = useNavigate();
+  const [overview, setOverview] = createSignal<StorageOverview | null>(null);
+  const [loading, setLoading] = createSignal(false);
+  const [error, setError] = createSignal<string | null>(null);
+  const [cleaning, setCleaning] = createSignal(false);
+  const [expanded, setExpanded] = createSignal<Set<string>>(new Set());
+
+  async function refresh(): Promise<void> {
+    setLoading(true);
+    const res = await storage.overview();
+    setLoading(false);
+    if (res.ok) {
+      setOverview(res.data);
+      setError(null);
+    } else {
+      setError(res.error.message);
+    }
+  }
+
+  onMount(() => void refresh());
+
+  function toggle(id: string): void {
+    setExpanded((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }
+
+  async function cleanCache(): Promise<void> {
+    const allowed = await confirmDanger({
+      title: t("settings.storage.cleanTitle"),
+      body: t("settings.storage.cleanBody"),
+      confirmLabel: t("settings.storage.clean"),
+    });
+    if (!allowed) return;
+    setCleaning(true);
+    const res = await storage.cleanCache();
+    setCleaning(false);
+    if (!res.ok) {
+      toast({ message: res.error.message, tone: "error" });
+      return;
+    }
+    toast({
+      message: t("settings.storage.cleaned", {
+        size: formatBytes(Number(res.data.freed_bytes)),
+      }),
+      tone: "success",
+    });
+    await refresh();
+  }
+
+  async function reveal(id: string): Promise<void> {
+    const res = await gameDirectories.reveal(id);
+    if (!res.ok) toast({ message: res.error.message, tone: "error" });
+  }
+
+  const cleanable = () => Number(overview()?.cleanable_bytes ?? 0);
+
+  return (
+    <div class="tab-stack settings-section">
+      <RmCard
+        title={t("settings.storage.overview")}
+        actions={
+          <RmButton size="sm" icon="refresh" loading={loading()} onClick={() => void refresh()}>
+            {t("common.refresh")}
+          </RmButton>
+        }
+      >
+        <Show when={error()}>
+          <RmErrorState message={error()!} onRetry={() => void refresh()} />
+        </Show>
+        <Show when={overview()}>
+          {(data) => (
+            <>
+              <div class="storage-metrics">
+                <div class="storage-metric">
+                  <span class="storage-metric-label">{t("settings.storage.total")}</span>
+                  <span class="storage-metric-value">{formatBytes(Number(data().total_bytes))}</span>
+                </div>
+                <div class="storage-metric">
+                  <span class="storage-metric-label">{t("settings.storage.launcher")}</span>
+                  <span class="storage-metric-value">{formatBytes(Number(data().launcher_bytes))}</span>
+                </div>
+                <div class="storage-metric">
+                  <span class="storage-metric-label">{t("settings.storage.games")}</span>
+                  <span class="storage-metric-value">{formatBytes(Number(data().game_bytes))}</span>
+                </div>
+                <div class="storage-metric is-accent">
+                  <span class="storage-metric-label">{t("settings.storage.cleanable")}</span>
+                  <span class="storage-metric-value">{formatBytes(cleanable())}</span>
+                </div>
+              </div>
+              <div class="btn-row">
+                <RmButton
+                  variant="primary"
+                  icon="trash"
+                  loading={cleaning()}
+                  disabled={cleanable() === 0}
+                  onClick={() => void cleanCache()}
+                >
+                  {t("settings.storage.clean")}
+                </RmButton>
+                <span class="muted-line">{t("settings.storage.cleanHint")}</span>
+              </div>
+            </>
+          )}
+        </Show>
+        <Show when={loading() && !overview()}>
+          <div class="storage-skeleton" aria-hidden="true">
+            <div /><div /><div />
+          </div>
+        </Show>
+      </RmCard>
+
+      <RmCard title={t("settings.storage.launcherData")}>
+        <div class="storage-entry-list">
+          <For each={overview()?.entries ?? []}>
+            {(entry) => (
+              <div class={`storage-entry${entry.cleanable ? " is-cleanable" : ""}`}>
+                <Icon name={entry.cleanable ? "trash" : "folder"} size={16} />
+                <div class="storage-entry-main">
+                  <span class="storage-entry-label">
+                    {t(`settings.storage.kind.${entry.kind}` as TranslationKey)}
+                    <Show when={entry.cleanable}>
+                      <RmTag tone="accent">{t("settings.storage.cleanableTag")}</RmTag>
+                    </Show>
+                  </span>
+                  <span class="storage-entry-path" title={entry.path}>
+                    {elidePath(entry.path, 82)}
+                  </span>
+                </div>
+                <span class="storage-entry-size">{formatBytes(Number(entry.bytes))}</span>
+              </div>
+            )}
+          </For>
+        </div>
+      </RmCard>
+
+      <For each={overview()?.game_directories ?? []}>
+        {(dir) => (
+          <RmCard
+            title={dir.name}
+            actions={
+              <RmButton size="sm" icon="folder" onClick={() => void reveal(dir.directory_id)}>
+                {t("settings.storage.openDir")}
+              </RmButton>
+            }
+          >
+            <button class="storage-dir-head" onClick={() => toggle(dir.directory_id)}>
+              <Icon name={expanded().has(dir.directory_id) ? "chevron-down" : "chevron-right"} size={15} />
+              <span class="storage-dir-path" title={dir.path}>{elidePath(dir.path, 72)}</span>
+              <span class="storage-dir-size">{formatBytes(Number(dir.bytes))}</span>
+            </button>
+            <Show when={expanded().has(dir.directory_id)}>
+              <div class="storage-entry-list">
+                <div class="storage-entry is-shared">
+                  <Icon name="layers" size={16} />
+                  <div class="storage-entry-main">
+                    <span class="storage-entry-label">{t("settings.storage.shared")}</span>
+                    <span class="storage-entry-path">
+                      {t("settings.storage.sharedHint")}
+                    </span>
+                  </div>
+                  <span class="storage-entry-size">{formatBytes(Number(dir.shared_bytes))}</span>
+                </div>
+                <For each={dir.instances}>
+                  {(instance) => (
+                    <div class="storage-entry">
+                      <Icon name="gamepad" size={16} />
+                      <div class="storage-entry-main">
+                        <span class="storage-entry-label">{instance.display_name}</span>
+                        <span class="storage-entry-path" title={instance.path}>
+                          {instance.id} · {elidePath(instance.path, 64)}
+                        </span>
+                      </div>
+                      <span class="storage-entry-size">{formatBytes(Number(instance.bytes))}</span>
+                      <RmIconButton
+                        icon="external"
+                        label={t("settings.storage.openInstance")}
+                        onClick={() => navigate(`/instances/${encodeURIComponent(instance.key)}`)}
+                      />
+                    </div>
+                  )}
+                </For>
+                <Show when={dir.instances.length === 0}>
+                  <div class="muted-line">{t("settings.storage.noInstances")}</div>
+                </Show>
+              </div>
+            </Show>
+          </RmCard>
+        )}
+      </For>
     </div>
   );
 }

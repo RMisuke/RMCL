@@ -20,6 +20,7 @@ pub mod id;
 pub mod migrate;
 pub mod service;
 pub mod settings;
+pub mod storage;
 pub mod summary;
 
 pub use compat::{
@@ -35,6 +36,10 @@ pub use settings::{
     fields, EffectiveGameSettings, GlobalGameSettings, GraphicsBackend, InstanceIcon,
     InstanceSettings, InstanceSettingsPatch, IsolationPolicy, JavaType, LauncherVisibility,
     ProcessPriority, QuickPlayType, WindowType,
+};
+pub use storage::{
+    clean_caches, dir_size, instances_in, overview as storage_overview, CacheCleanReport,
+    GameDirectoryStorage, InstanceStorage, StorageEntry, StorageKind, StorageOverview,
 };
 pub use summary::{
     InstanceDetail, InstanceManifestInfo, InstancePaths, InstanceSummary, LoaderInfo,

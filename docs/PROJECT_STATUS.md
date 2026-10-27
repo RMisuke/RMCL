@@ -10,6 +10,29 @@
 
 ## 0. 更新记录
 
+**2026-10-28（存储管理：启动器目录/游戏目录/逐实例占用 + 一键清缓存）**：
+
+1. **后端 `rmccc-instance::storage`**：递归统计启动器 data dir 各一级条目（配置/缓存/日志/
+   插件/插件数据/插件状态/运行状态/Agent/Dashboard/私有数据/旧 profile/顶层文件）与
+   macOS WebView 缓存；游戏目录按 `versions/{id}` 拆分逐实例体积并计算共享资源
+   （libraries/assets/其余文件）；`dir_size` 不跟随符号链接、权限错误按 0 处理。
+2. **IPC**：新增 `storage_overview`、`storage_clean_cache`、`instance_sizes`（共 112 条）；
+   三条命令都在 `spawn_blocking` 中做磁盘遍历，不占用 async 运行时/主线程。
+3. **清理**：一键清理只删除 `{data_dir}/cache`（下载对象、版本清单、图标缓存），
+   返回释放字节数；存档、模组、实例、插件、配置一律不动，确认对话框写明。
+4. **设置页新增「存储管理」**：概览四项（总占用/启动器/游戏目录/可清理）、启动器目录列表
+   （可清理项标记）、每个游戏目录可展开查看共享资源与逐实例占用，实例行可直接进详情；
+   清理后刷新概览。
+5. **实例卡片**：列表旁新增 `instance_sizes` 异步统计，卡片（及紧凑列表行）显示当前实例
+   占用，`formatBytes` 自动切换 B/KiB/MiB/GiB。
+6. **门禁**（本机实测全绿）：`cargo fmt --all -- --check` ✅、
+   `cargo clippy --workspace --all-targets -- -D warnings` ✅、
+   `cargo test --workspace` ✅（42 test binary / 690 passed / 0 failed；新增
+   storage 3 例 + storage IPC 1 例）、`pnpm typecheck` ✅、`pnpm test` ✅（34）、
+   `pnpm build` ✅（主 chunk 215.84 kB / gzip 71.94 kB）、
+   `pnpm tauri build --bundles app` ✅；strip 后主可执行 **9,972,720 B ≈ 9.51 MiB**
+   （阈值 20 MiB）。
+
 **2026-10-28（插件系统去留分析报告）**：
 
 - 新增 [`audits/PLUGIN_SYSTEM_REMOVAL_ANALYSIS_2026-10-28.md`](audits/PLUGIN_SYSTEM_REMOVAL_ANALYSIS_2026-10-28.md)：
