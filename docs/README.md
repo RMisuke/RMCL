@@ -28,7 +28,7 @@
 | `PROJECT_STATUS.md` | 按轮次的变更与交接记录（最新轮在最上） | 活文档 |
 | `RMCCC_PLUGIN_PLATFORM_ARCHITECTURE_GUIDE.md` | 插件平台目标架构（§1.4 macOS-only、§5.7 平台适配层、§10 AI/MCP 约束） | 活文档 |
 | `adr/` | 架构决策记录：ADR-002–007、009–011、**013** accepted；001/008/012 proposed；**014** accepted（核心切片） | 活文档 |
-| `audits/` | `AUDIT_2026-10-20.md`（横切全景）+ `AUDIT_2026-10-23.md`（增量台账）+ `PLUGIN_SECURITY_AUDIT_2026-10-27.md`（插件/主题安全审计）；agent 部分已标注被 ADR-013 取代 | 台账（持续销账） |
+| `audits/` | `AUDIT_2026-10-20.md`（横切全景）+ `AUDIT_2026-10-23.md`（增量台账）+ `PLUGIN_SECURITY_AUDIT_2026-10-27.md`（插件/主题安全审计）、`PLUGIN_SYSTEM_REMOVAL_ANALYSIS_2026-10-28.md`（插件系统去留分析）；agent 部分已标注被 ADR-013 取代 | 台账（持续销账） |
 | `guides/` | `OPERATIONS.md`（运维）+ `PLUGIN_AUTHORING.md`（插件编写）+ `THEME_PLUGIN_AUTHORING.md`（主题规范） | 活文档 |
 | `roadmap/` | Phase 0–7 细化执行计划 + `PLATFORM_ADAPTATION.md`；`08_phase6_agent.md` 为历史记录 | 活文档 |
 | `ui-design/` | 前端重设计 15 份（00 总览 … 13 注意事项），前端重构的唯一设计依据 | 活文档 |
