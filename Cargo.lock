@@ -3795,6 +3795,7 @@ name = "rmccc-instance"
 version = "0.1.0"
 dependencies = [
  "chrono",
+ "dirs",
  "rmccc-config",
  "rmccc-error",
  "rmccc-platform",

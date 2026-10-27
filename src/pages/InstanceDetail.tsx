@@ -120,7 +120,12 @@ export default function InstanceDetail(): JSX.Element {
   return (
     <div class="page">
       <PageHeader
-        crumbs={[{ label: t("instances.title"), href: "/instances" }]}
+        crumbs={[
+          { label: t("instances.title"), href: "/instances" },
+          ...(detail()?.directory.name
+            ? [{ label: detail()!.directory.name, href: "/instances" }]
+            : []),
+        ]}
         title={profile()?.name ?? profileId()}
         actions={
           <div class="btn-row">

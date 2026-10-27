@@ -6,6 +6,7 @@
 //! management all go through this type instead of touching `profiles/` or
 //! `versions/` directly.
 
+use crate::compat::{detect_layout, scan_candidates, DirectoryCandidate, GameDirectoryOverview};
 use crate::directory::{GameDirectory, GameDirectoryKind, GameDirectoryStore};
 use crate::global::GlobalGameSettingsStore;
 use crate::id::{GameDirectoryId, InstanceId, InstanceKey};
@@ -109,6 +110,66 @@ impl InstanceService {
         self.directories
             .get(&id)
             .ok_or_else(|| RmcccError::Validation(format!("unknown game directory: {id}")))
+    }
+
+    /// Cheap sidebar overview: each directory with its layout and instance count.
+    ///
+    /// Never fails on a broken/missing directory: the row still shows up (so the
+    /// user can fix or remove it) with a filesystem count fallback.
+    pub fn overviews(&mut self) -> Vec<GameDirectoryOverview> {
+        let selected = self.selected_directory().id.clone();
+        let directories: Vec<GameDirectory> = self.directories.list().to_vec();
+        directories
+            .into_iter()
+            .map(|directory| {
+                let instance_count = match self.repo_for(&directory.id) {
+                    Ok(repo) => repo.get_instance_ids().len(),
+                    Err(e) => {
+                        tracing::warn!(
+                            directory = %directory.id,
+                            path = %directory.path.display(),
+                            error = %e,
+                            "Falling back to filesystem instance count"
+                        );
+                        crate::compat::count_instances(&directory.path)
+                    }
+                };
+                GameDirectoryOverview {
+                    layout: detect_layout(&directory.path),
+                    instance_count,
+                    is_selected: directory.id == selected,
+                    directory,
+                }
+            })
+            .collect()
+    }
+
+    /// Discover standard game directories registered by HMCL/PCL/the official
+    /// launcher, plus portable `.minecraft` locations.
+    pub fn scan_directories(&self) -> Vec<DirectoryCandidate> {
+        let registered: Vec<PathBuf> = self
+            .directories
+            .list()
+            .iter()
+            .map(|d| d.path.clone())
+            .collect();
+        let mut candidates = scan_candidates(&registered);
+        // Registered roots keep their RMCCC display name (the folder name may
+        // be a generic `instances`/`.minecraft`).
+        for candidate in &mut candidates {
+            if !candidate.registered {
+                continue;
+            }
+            if let Some(directory) = self
+                .directories
+                .list()
+                .iter()
+                .find(|d| same_path(&d.path, &candidate.path))
+            {
+                candidate.name = directory.name.clone();
+            }
+        }
+        candidates
     }
 
     /// Register a directory.
@@ -859,6 +920,11 @@ fn pinned_isolation(policy: IsolationPolicy, modded: bool) -> IsolationPolicy {
     }
 }
 
+fn same_path(a: &Path, b: &Path) -> bool {
+    let canon = |p: &Path| std::fs::canonicalize(p).unwrap_or_else(|_| p.to_path_buf());
+    canon(a) == canon(b)
+}
+
 fn paths_for(
     game_dir: &Path,
     id: &str,
@@ -1001,6 +1067,39 @@ mod tests {
         )
         .unwrap();
         (data, service)
+    }
+
+    #[test]
+    fn list_details_is_scoped_to_the_selected_directory() {
+        let (data, mut service) = service("scoped");
+        write_version(&data.join("instances"), "1.20.4", &vanilla("1.20.4"));
+        let external = data.join("external");
+        std::fs::create_dir_all(&external).unwrap();
+        write_version(&external, "1.21", &vanilla("1.21"));
+        let external_dir = service
+            .add_directory("External", &external, GameDirectoryKind::External)
+            .unwrap();
+        let default_id = service.selected_directory().id.clone();
+        service.refresh(Some(default_id.as_str()), true).unwrap();
+
+        let default_list = service
+            .list_details(Some(default_id.as_str()), false, false)
+            .unwrap();
+        assert_eq!(default_list.len(), 1);
+        assert_eq!(default_list[0].summary.id, "1.20.4");
+
+        let external_list = service
+            .list_details(Some(external_dir.id.as_str()), false, false)
+            .unwrap();
+        assert_eq!(external_list.len(), 1);
+        assert_eq!(external_list[0].summary.id, "1.21");
+
+        assert_eq!(service.list_details(None, true, false).unwrap().len(), 2);
+
+        service.select_directory(external_dir.id.as_str()).unwrap();
+        let selected = service.list_details(None, false, false).unwrap();
+        assert_eq!(selected.len(), 1);
+        assert_eq!(selected[0].summary.id, "1.21");
     }
 
     #[test]

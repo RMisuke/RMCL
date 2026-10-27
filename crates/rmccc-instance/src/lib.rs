@@ -13,6 +13,7 @@
 //! - [`InstanceService`] is the single read/write facade used by IPC, CLI,
 //!   launch, and mod management.
 
+pub mod compat;
 pub mod directory;
 pub mod global;
 pub mod id;
@@ -21,6 +22,10 @@ pub mod service;
 pub mod settings;
 pub mod summary;
 
+pub use compat::{
+    count_instances, detect_layout, scan_candidates, scan_candidates_in, DirectoryCandidate,
+    DirectoryLayout, DirectorySource, GameDirectoryOverview,
+};
 pub use directory::{directories_schema, GameDirectory, GameDirectoryKind, GameDirectoryStore};
 pub use global::{game_settings_schema, GlobalGameSettingsStore, DEFAULT_PRESET_ID};
 pub use id::{validate_instance_id, GameDirectoryId, InstanceId, InstanceKey, MAX_INSTANCE_ID_LEN};

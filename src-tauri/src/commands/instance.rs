@@ -7,8 +7,9 @@
 use crate::state::AppState;
 use rmccc_error::IpcError;
 pub use rmccc_instance::{
-    GameDirectory, GameDirectoryKind, GlobalGameSettings, InstanceDetail, InstancePaths,
-    InstanceSettingsPatch, InstanceSummary, ResolvedInstanceSettings,
+    DirectoryCandidate, GameDirectory, GameDirectoryKind, GameDirectoryOverview,
+    GlobalGameSettings, InstanceDetail, InstancePaths, InstanceSettingsPatch, InstanceSummary,
+    ResolvedInstanceSettings,
 };
 use serde::Serialize;
 use std::path::PathBuf;
@@ -114,6 +115,46 @@ pub async fn game_directory_select(
     let core = state.core.read().await;
     let mut service = core.instances.lock().map_err(|_| locked_error())?;
     Ok(service.select_directory(&id)?)
+}
+
+#[tauri::command]
+#[tracing::instrument(skip(state))]
+pub async fn game_directory_overview(
+    state: tauri::State<'_, AppState>,
+) -> Result<Vec<GameDirectoryOverview>, IpcError> {
+    let core = state.core.read().await;
+    let mut service = core.instances.lock().map_err(|_| locked_error())?;
+    Ok(service.overviews())
+}
+
+/// Scan standard launcher locations (HMCL / PCL / official `.minecraft`).
+#[tauri::command]
+#[tracing::instrument(skip(state))]
+pub async fn game_directory_scan(
+    state: tauri::State<'_, AppState>,
+) -> Result<Vec<DirectoryCandidate>, IpcError> {
+    let core = state.core.read().await;
+    let service = core.instances.lock().map_err(|_| locked_error())?;
+    Ok(service.scan_directories())
+}
+
+/// Reveal a registered game directory in the system file manager.
+#[tauri::command]
+#[tracing::instrument(skip(state))]
+pub async fn game_directory_reveal(
+    state: tauri::State<'_, AppState>,
+    id: String,
+) -> Result<(), IpcError> {
+    let path = {
+        let core = state.core.read().await;
+        let service = core.instances.lock().map_err(|_| locked_error())?;
+        service.directory(&id)?.path.clone()
+    };
+    tauri_plugin_opener::open_path(&path, None::<&str>).map_err(|e| IpcError {
+        code: rmccc_error::ErrorCode::Unknown,
+        message: format!("Failed to open game directory: {e}"),
+        retryable: false,
+    })
 }
 
 // ── Instances ───────────────────────────────────────────────────────

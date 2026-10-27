@@ -10,6 +10,32 @@
 
 ## 0. 更新记录
 
+**2026-10-27（实例前端 v2.1：目录抽屉 + 卡片/列表 + HMCL/PCL 目录兼容）**：
+
+1. **目录侧边栏**：`/instances` 改为左侧游戏目录抽屉（名称/路径/实例数/外部标记/当前高亮），
+   右侧是当前目录的实例列表，和设置页/下载页的 `RmSideTabs` 同构；目录头提供打开目录、
+   刷新、移除；底部「目录管理」。
+2. **卡片/列表切换重做**：两种视图共用同一份 `items()` 和滚动容器，用 `Switch` 只换呈现层；
+   列表改为表格化行（实例 / 版本 / 最近游玩 / 操作 + 窄屏降级），切换不再重新请求或丢状态。
+3. **目录管理**：`DirectoryManageDialog`（重命名、打开、设为默认、移除，移除仅取消登记）；
+   `DirectoryScanDialog` 读取 HMCL `game-directories.json`/`user-game-directories.json`/旧
+   `hmcl.json`、PCL `PCL/Setup.ini` 的 `LaunchFolders`、官方 `.minecraft` 位置，勾选导入，
+   只登记不复制文件；空目录添加时补建 `versions/`。
+4. **后端**：新增 `rmccc-instance::compat`（目录布局探测、HMCL/PCL 读取、候选扫描）、
+   `GameDirectoryOverview`；新增 IPC `game_directory_overview/scan/reveal`（109 条）。
+5. **主页**：实例选择器与实例卡片只显示当前目录实例，显示目录名/数量；目录切换后自动
+   选中新目录最近游玩的实例；实例详情面包屑带目录名。
+6. **兼容性**：游戏目录保持标准 `.minecraft` 结构；RMCCC 私有数据只在
+   `config/game-directories.json` 与 `versions/{id}/.rmccc/instance.json`，与 HMCL/PCL 的私有
+   元数据同级，互不阻塞。ADR-016 增补 §8。
+7. **门禁**（本机实测全绿）：`cargo fmt --all -- --check` ✅、
+   `cargo clippy --workspace --all-targets -- -D warnings` ✅、
+   `cargo test --workspace` ✅（42 个 test binary / 686 passed / 0 failed；
+   新增 compat 4 例、目录概览/扫描 IPC 1 例、多目录实例隔离 1 例）、
+   `pnpm typecheck` ✅、`pnpm test` ✅（5 files / 34 tests）、`pnpm build` ✅
+   （主 chunk 211.31 kB / gzip 70.62 kB）、`pnpm tauri build --bundles app` ✅；
+   strip 后主可执行 **9,922,976 B ≈ 9.46 MiB**（阈值 20 MiB）。
+
 **2026-10-27（实例管理 v2：目录注册表 + 版本即实例 + 设置覆盖，ADR-016 accepted）**：
 
 1. **领域重构**：新增 `rmccc-instance`，删除 `rmccc-profile`。实例不再有 UUID Profile：

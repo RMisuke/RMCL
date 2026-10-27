@@ -227,6 +227,14 @@ impl GameDirectoryStore {
                 path.display()
             )));
         }
+        // An empty folder is a new game directory: create the standard
+        // `versions/` marker so HMCL/PCL/the official launcher recognize it.
+        let empty = std::fs::read_dir(path)
+            .map(|mut entries| entries.next().is_none())
+            .unwrap_or(false);
+        if empty {
+            std::fs::create_dir_all(path.join("versions"))?;
+        }
         let canonical = canonical_or_self(path);
         if let Some(existing) = self.find_by_path(&canonical) {
             return Err(RmcccError::Validation(format!(
@@ -500,6 +508,7 @@ mod tests {
         let added = store
             .add("Other", &other, GameDirectoryKind::External)
             .unwrap();
+        assert!(other.join("versions").is_dir(), "empty root gets versions/");
 
         // Duplicate path rejected.
         assert!(store

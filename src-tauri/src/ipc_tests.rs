@@ -150,7 +150,8 @@ fn ipc_command_count_is_stable() {
     // → 98：profile_import_version（外置目录版本导入为可启动实例）
     // → 99：dashboard_get_theme_skin（主题 v2 皮肤，ADR-014）
     //        （前端审计 B3-1；hero 主页布局改走 localStorage）。
-    assert_eq!(crate::handlers::IPC_COMMANDS.len(), 106);
+    // → 109：game_directory_overview / scan / reveal（目录侧边栏与 HMCL/PCL 兼容）。
+    assert_eq!(crate::handlers::IPC_COMMANDS.len(), 109);
 }
 
 // ────────────────────────── 2. 错误码契约 ──────────────────────────
@@ -475,6 +476,34 @@ fn instance_service_starts_with_one_directory_and_no_instances() {
     let mut service = core.instances.lock().unwrap();
     assert_eq!(service.directories().len(), 1);
     assert!(service.list(None, false, false).unwrap().is_empty());
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn game_directory_overview_and_scan_see_the_managed_root() {
+    let (dir, core) = temp_core("directory-overview");
+    write_minimal_version(&core, "1.20.4");
+    let root = selected_root(&core);
+    {
+        let mut service = core.instances.lock().unwrap();
+        service.refresh(Some("default"), true).unwrap();
+        let overview = service.overviews();
+        assert_eq!(overview.len(), 1);
+        assert_eq!(overview[0].instance_count, 1);
+        assert!(overview[0].layout.has_versions);
+        assert!(overview[0].is_selected);
+
+        let scanned = service.scan_directories();
+        let managed = scanned
+            .iter()
+            .find(|c| c.path == std::fs::canonicalize(&root).unwrap())
+            .expect("managed root appears in the scan");
+        assert!(managed.registered);
+        assert_eq!(managed.instance_count, 1);
+        assert!(managed.layout.standard);
+
+        assert!(service.directory("nope").is_err());
+    }
     let _ = std::fs::remove_dir_all(&dir);
 }
 

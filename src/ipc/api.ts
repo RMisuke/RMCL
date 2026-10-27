@@ -32,6 +32,10 @@ export type {
   InstanceIcon,
   GameDirectory,
   GameDirectoryKind,
+  GameDirectoryOverview,
+  DirectoryCandidate,
+  DirectoryLayout,
+  DirectorySource,
   GlobalGameSettings,
   EffectiveGameSettings,
   IsolationPolicy,
@@ -74,6 +78,10 @@ import type { AppInfoView,
   InstanceIcon,
   GameDirectory,
   GameDirectoryKind,
+  GameDirectoryOverview,
+  DirectoryCandidate,
+  DirectoryLayout,
+  DirectorySource,
   GlobalGameSettings,
   EffectiveGameSettings,
   IsolationPolicy,
@@ -210,7 +218,13 @@ export const instances = {
 
 export const gameDirectories = {
   list: () => safeInvoke<GameDirectory[]>("game_directory_list"),
+  /** Sidebar rows: directory + standard layout + instance count. */
+  overview: () => safeInvoke<GameDirectoryOverview[]>("game_directory_overview"),
   selected: () => safeInvoke<GameDirectory>("game_directory_selected"),
+  /** Discover HMCL/PCL/official `.minecraft` directories on this machine. */
+  scan: () => safeInvoke<DirectoryCandidate[]>("game_directory_scan"),
+  /** Reveal the directory in Finder/Explorer. */
+  reveal: (id: string) => safeInvoke<void>("game_directory_reveal", { id }),
   add: (path: string, name?: string, external = true) =>
     safeInvoke<GameDirectory>("game_directory_add", { path, name, external }),
   update: (id: string, name?: string, path?: string) =>

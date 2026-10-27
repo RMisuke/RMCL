@@ -410,7 +410,7 @@ export default function Home(): JSX.Element {
   const [addOpen, setAddOpen] = createSignal(false);
 
   onMount(() => {
-    void instancesStore.refresh();
+    void instancesStore.rescan();
     void authStore.refresh();
     void dashboard.listWidgets().then((res) => {
       if (res.ok) setCatalog(res.data);
@@ -425,14 +425,17 @@ export default function Home(): JSX.Element {
     )
   );
 
-  // 默认选中最近游玩的实例。Effects, not memos, own side effects (perf audit 2.8).
+  // 默认选中最近游玩的实例；切换游戏目录后旧 key 不属于当前目录时也自动重选。
+  // Effects, not memos, own side effects (perf audit 2.8).
   createEffect(() => {
-    if (!instancesStore.selectedKey() && (instancesStore.items() ?? []).length > 0) {
-      const latest = [...(instancesStore.items() ?? [])].sort((a, b) =>
-        (b.summary.last_played ?? "").localeCompare(a.summary.last_played ?? "")
-      )[0];
-      if (latest) instancesStore.setSelectedKey(latest.summary.key);
-    }
+    const items = instancesStore.items() ?? [];
+    if (items.length === 0) return;
+    const key = instancesStore.selectedKey();
+    if (key && items.some((item) => item.summary.key === key)) return;
+    const latest = [...items].sort((a, b) =>
+      (b.summary.last_played ?? "").localeCompare(a.summary.last_played ?? "")
+    )[0];
+    if (latest) instancesStore.selectInstance(latest.summary.key);
   });
 
   const selected = () => instancesStore.selected() ?? null;
@@ -745,6 +748,17 @@ export default function Home(): JSX.Element {
 
         <div class="hero-card hero-module hero-launch">
           <div class="hero-launch-main">
+            <button
+              class="hero-dir-chip"
+              title={t("home.currentDirectory")}
+              onClick={() => navigate("/instances")}
+            >
+              <Icon name="folder" size={13} />
+              <span>{instancesStore.selectedDirectory()?.directory.name ?? t("instances.sidebar.title")}</span>
+              <span class="hero-dir-chip-count">
+                {instancesStore.selectedDirectory()?.instance_count ?? 0}
+              </span>
+            </button>
             {/* B3-1 salvage: no instances yet → guide CTA instead of a dead
                 launch button (delegates to the install wizard). */}
             <Show
@@ -765,7 +779,7 @@ export default function Home(): JSX.Element {
                   ...sortedByLastPlayed().map((p) => ({
                       label: `${p.summary.display_name} · ${p.summary.game_version}`,
                       icon: "gamepad" as const,
-                      onSelect: () => instancesStore.setSelectedKey(p.summary.key),
+                      onSelect: () => instancesStore.selectInstance(p.summary.key),
                     })),
                   { label: t("download.wizard.bindLocal"), icon: "download" as const, onSelect: () => navigate("/download#install") },
                   ...(selected()
@@ -969,13 +983,22 @@ function AnnouncementsCard(): JSX.Element {
 }
 
 function InstancesCard(): JSX.Element {
+  const navigate = useNavigate();
+  const directory = () => instancesStore.selectedDirectory();
   return (
     <div class="hero-list">
+      <Show when={directory()}>
+        <button class="hero-list-dir" onClick={() => navigate("/instances")}>
+          <Icon name="folder" size={12} />
+          <span>{directory()!.directory.name}</span>
+          <span class="hero-dir-chip-count">{directory()!.instance_count}</span>
+        </button>
+      </Show>
       <For each={instancesStore.items() ?? []}>
         {(profile) => (
           <button
             class={`hero-row${(instancesStore.selected()?.summary.key ?? null) === profile.summary.key ? " is-selected" : ""}`}
-            onClick={() => instancesStore.setSelectedKey(profile.summary.key)}
+            onClick={() => instancesStore.selectInstance(profile.summary.key)}
           >
             <span class="hero-row-icon"><Icon name="gamepad" size={16} /></span>
             <span class="hero-row-main">

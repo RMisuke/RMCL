@@ -1161,8 +1161,13 @@ export const auth = {
 // composite `{directory_id}/{instance_id}` key.
 export const gameDirectories = {
   list: () => invoke<GameDirectory[]>("game_directory_list"),
+  overview: () => invoke<GameDirectoryOverview[]>("game_directory_overview"),
   selected: () => invoke<GameDirectory>("game_directory_selected"),
+  scan: () => invoke<DirectoryCandidate[]>("game_directory_scan"),
+  reveal: (id: string) => invoke<void>("game_directory_reveal", { id }),
   add: (path: string, name?: string) => invoke<GameDirectory>("game_directory_add", { path, name }),
+  update: (id: string, name?: string, path?: string) =>
+    invoke<GameDirectory>("game_directory_update", { id, name, path }),
   select: (id: string) => invoke<GameDirectory>("game_directory_select", { id }),
   remove: (id: string) => invoke<void>("game_directory_remove", { id }),
 };
@@ -1454,8 +1459,11 @@ ai_* 5 条 + mods 纯逻辑 2 条取代，S4/S5 再加 mcp_* 9 条）。
 | `mods_dependency_scan` | `mods.rs` | 纯逻辑依赖扫描（缺失必需/冲突/未解析，ADR-013 §4.4） |
 | `mods_apply_plan` | `mods.rs` | 一键补装缺失前置（Modrinth 匹配 + SHA1 校验，纯逻辑无 AI） |
 | `game_directory_list` | `instance.rs` | List registered game roots |
+| `game_directory_overview` | `instance.rs` | Sidebar rows: layout markers + instance count + selected flag |
 | `game_directory_selected` | `instance.rs` | The active game root |
-| `game_directory_add` / `update` / `remove` / `select` | `instance.rs` | Registry CRUD (never deletes files) |
+| `game_directory_scan` | `instance.rs` | Discover HMCL/PCL/official `.minecraft` directories |
+| `game_directory_reveal` | `instance.rs` | Open a game root in Finder/Explorer |
+| `game_directory_add` / `update` / `remove` / `select` | `instance.rs` | Registry CRUD (never deletes files; empty root gets `versions/`) |
 | `instance_list` | `instance.rs` | Detailed instances for a directory (settings + paths, no completeness scan) |
 | `instance_get` | `instance.rs` | Instance detail by `{directory}/{id}` |
 | `instance_refresh` | `instance.rs` | Rescan a directory, emit `instances://refreshed` |

@@ -176,6 +176,9 @@ HMCL 当前实例可配置项（`HMCL/.../setting/GameSettings.java`）：
 | 命令 | 语义 |
 |---|---|
 | `game_directory_list/add/update/remove/select` | 目录注册表 |
+| `game_directory_overview` | 侧边栏行：目录 + 标准布局标记 + 实例数 + 是否选中 |
+| `game_directory_scan` | 读取 HMCL / PCL / 官方 `.minecraft` 位置，返回待导入候选 |
+| `game_directory_reveal(id)` | 在 Finder/资源管理器中打开目录 |
 | `instance_list(directory_id?, all?)` | 聚合视图（版本 + 设置 + loader + 路径），**不做完整性全量扫描** |
 | `instance_get(key)` | 详情（summary + 存储设置 + 生效设置 + 路径 + manifest 诊断） |
 | `instance_update_settings(key, patch)` | 设置/覆盖名单/显示名/图标/隔离 |
@@ -205,6 +208,34 @@ HMCL 当前实例可配置项（`HMCL/.../setting/GameSettings.java`）：
 实例列表只显示实例（不再有"版本仓库"平行页），实例详情五 tab 的数据全部来自
 `instance_get` / `instance_resolved_settings` / `instance_paths`；"新建实例"进入安装向导，
 完成后自动选中新实例。运行态 key 使用 `{directory_id}/{instance_id}`，事件 payload 同步改键。
+
+### 8. 目录发现与 HMCL/PCL 兼容
+
+实例目录本身**不引入私有格式**：一个游戏目录就是标准 `.minecraft`：
+`versions/{id}/{id}.json` + `{id}.jar`、`libraries/`、`assets/`、`mods/`、`saves/` 等。
+RMCCC 的私有物只有两层，且都放在启动器自己的配置区/版本目录内，其他启动器会直接忽略：
+
+| 层 | RMCCC | HMCL | PCL |
+|---|---|---|---|
+| 目录注册表 | `{data_dir}/config/game-directories.json` | `{HMCL_HOME}/config/game-directories.json` | `PCL/Setup.ini` 的 `LaunchFolders` |
+| 实例覆盖设置 | `versions/{id}/.rmccc/instance.json` | `versions/{id}/.hmcl/config/instance-game-settings.json` | `versions/{id}/PCL/Setup.ini` |
+| 目录选择 | `selected` 字段 | `launcher-settings.json` 的 `selectedGameDirectory` | `LaunchFolderSelect` |
+
+因此目录结构完全互通：HMCL/PCL 建的游戏目录可以直接在 RMCCC 打开（`game_directory_add`），
+RMCCC 建的 `versions/{id}` 也能被 HMCL/PCL 识别。为了让互换更省事：
+
+- `game_directory_scan` 读取 HMCL 的 `game-directories.json` / `user-game-directories.json`
+  （含本地化 `name`）与旧 `hmcl.json` 的 `gameDir`，读取 PCL `PCL/Setup.ini` 的
+  `LaunchFolders`（`名称>路径|…`，`$` 展开为 PCL 根目录）以及官方启动器位置；
+- 扫描结果带 `sources`（rmccc/hmcl/pcl/mojang）、`registered`、`preferred`、标准布局标记
+  和实例数；导入只登记路径，不复制/移动文件；
+- 添加空目录时补建 `versions/`，使其立刻成为标准游戏目录（PCL 同样会创建
+  `.minecraft/versions`）；
+- 目录行显示 HMCL（`.hmcl/`）与 PCL（`PCL/`）实例元数据标记，便于用户确认来源；
+- 不写 HMCL/PCL 的注册表，避免两个启动器同时改写对方配置。
+
+`DirectoryLayout`（`has_versions/libraries/assets/launcher_profiles/hmcl/pcl`）是"能否被
+其他启动器读取"的唯一判定来源，前端只展示、不猜测。
 
 ## 选项
 
@@ -257,3 +288,5 @@ HMCL 当前实例可配置项（`HMCL/.../setting/GameSettings.java`）：
 ## 状态变更记录
 
 - 2026-10-27：accepted，取代 ADR-002；作为实例管理 v2 的设计基线。
+- 2026-10-27：补充 §8 目录发现与 HMCL/PCL 兼容；新增 `game_directory_overview/scan/reveal`，
+  前端改为左侧目录抽屉 + 右侧实例列表（卡片/列表同数据）。
