@@ -19,6 +19,8 @@ import App from "./App";
 import "./styles/app.css";
 import "./styles/visual-system.css";
 import "./styles/theme-skin.css";
+import "./styles/soft-dashboard.css";
+import "./lib/glass";
 
 const Home = lazy(() => import("./pages/Home"));
 const Instances = lazy(() => import("./pages/Instances"));

@@ -152,7 +152,8 @@ fn ipc_command_count_is_stable() {
     //        （前端审计 B3-1；hero 主页布局改走 localStorage）。
     // → 109：game_directory_overview / scan / reveal（目录侧边栏与 HMCL/PCL 兼容）。
     // → 112：storage_overview / storage_clean_cache / instance_sizes（存储管理）。
-    assert_eq!(crate::handlers::IPC_COMMANDS.len(), 112);
+    // → 114：dialog_pick_background_video / background_video_allow（本地 MP4 动态背景）。
+    assert_eq!(crate::handlers::IPC_COMMANDS.len(), 114);
 }
 
 // ────────────────────────── 2. 错误码契约 ──────────────────────────

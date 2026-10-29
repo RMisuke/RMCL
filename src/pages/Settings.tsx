@@ -19,6 +19,15 @@ import { mcpStore } from "../stores/mcp";
 import { pluginsStore } from "../stores/plugins";
 import { uiStore, toast, confirmDanger, promptText } from "../stores/ui";
 import { listThemes, visualPaletteFor } from "../theme";
+import {
+  adaptiveEnabled,
+  adaptivePalette,
+  adaptiveSource,
+  adaptiveStatus,
+  disableAdaptive,
+  enableAdaptive,
+  refreshAdaptivePalette,
+} from "../lib/adaptiveTheme";
 import { cacheStore } from "../stores/cache";
 import { formatBytes } from "../lib/format";
 import { t } from "../i18n";
@@ -26,6 +35,15 @@ import { loaderLabel } from "../lib/loaders";
 import type { TranslationKey } from "../i18n/locales/messages";
 import { elidePath } from "../lib/format";
 import { useHashTab } from "../lib/useHashTab";
+import { homeCardOpacity, panelOpacity, setHomeCardOpacity, setPanelOpacity } from "../lib/glass";
+import {
+  backgroundVideo,
+  backgroundVideoIssue,
+  clearBackgroundVideo,
+  pickBackgroundVideo,
+  setBackgroundVideoDim,
+  setBackgroundVideoEnabled,
+} from "../lib/backgroundVideo";
 
 const SECTIONS: { id: string; icon: "list" | "settings" | "download" | "bot" | "extension" | "wrench" | "info" | "sparkles" | "hard-drive"; label: TranslationKey }[] = [
   { id: "game-defaults", icon: "list", label: "settings.nav.gameDefaults" },
@@ -481,20 +499,73 @@ function Appearance(): JSX.Element {
 
   onMount(async () => setThemes(await listThemes()));
 
+  const adaptiveColors = () =>
+    adaptivePalette()?.colors ?? ["#6f91ca", "#8aa583", "#e4ce83"];
+  const adaptivePanel = () => adaptivePalette()?.vars["--adaptive-raised"] ?? "#f8f8f4";
+  const adaptiveSourceLabel = () => {
+    const source = adaptiveSource();
+    return t(
+      `settings.appearance.adaptive.source.${source ?? "default"}` as TranslationKey
+    );
+  };
+  const adaptiveSubtitle = () => {
+    if (!adaptiveEnabled()) return t("settings.appearance.adaptive.subtitle");
+    if (adaptiveStatus() === "sampling") return t("settings.appearance.adaptive.sampling");
+    return t("settings.appearance.adaptive.active");
+  };
+  const adaptiveDetailText = () => {
+    if (adaptiveStatus() === "sampling") return t("settings.appearance.adaptive.sampling");
+    if (adaptiveStatus() === "fallback") return t("settings.appearance.adaptive.fallback");
+    const palette = adaptivePalette();
+    if (!palette) return t("settings.appearance.adaptive.sampling");
+    const base = t("settings.appearance.adaptive.sampled", {
+      source: adaptiveSourceLabel(),
+      n: palette.colors.length,
+    });
+    return `${base} · ${
+      palette.readable
+        ? t("settings.appearance.adaptive.contrastOk")
+        : t("settings.appearance.adaptive.lowContrast")
+    }`;
+  };
+
+  async function chooseTheme(key: string): Promise<void> {
+    const res = await settingsStore.setTheme(key);
+    if (!res.ok) {
+      toast({ message: res.message ?? "", tone: "error" });
+      return;
+    }
+    if (adaptiveEnabled()) await disableAdaptive(false);
+  }
+
   return (
     <div class="tab-stack narrow">
       <RmCard title={t("settings.general.appearance")}>
         {/* 「跟随系统」已按需求移除：只保留显式选择的主题卡片 */}
         <div class="theme-grid">
+          <button
+            class={`theme-card is-adaptive${adaptiveEnabled() ? " is-active" : ""}`}
+            onClick={() => void enableAdaptive()}
+          >
+            <div class="adaptive-swatch" aria-hidden="true">
+              <span style={{ background: adaptiveColors()[0] }} />
+              <span style={{ background: adaptiveColors()[1] }} />
+              <span style={{ background: adaptiveColors()[2] }} />
+              <span class="adaptive-swatch-light" style={{ background: adaptivePanel() }} />
+            </div>
+            <span class="adaptive-title">
+              <Icon name="sparkles" size={13} />
+              {t("settings.appearance.adaptive.title")}
+            </span>
+            <small class="adaptive-subtitle">{adaptiveSubtitle()}</small>
+          </button>
           <For each={themes()}>
             {(info) => (
               <button
-                class={`theme-card${settingsStore.themePreference() === info.key ? " is-active" : ""}`}
-                onClick={() =>
-                  void settingsStore.setTheme(info.key).then((res) => {
-                    if (!res.ok) toast({ message: res.message ?? "", tone: "error" });
-                  })
-                }
+                class={`theme-card${
+                  !adaptiveEnabled() && settingsStore.themePreference() === info.key ? " is-active" : ""
+                }`}
+                onClick={() => void chooseTheme(info.key)}
               >
                 <ThemeSwatch key_={info.key} />
                 <span>{info.name}</span>
@@ -502,6 +573,39 @@ function Appearance(): JSX.Element {
             )}
           </For>
         </div>
+        <Show when={adaptiveEnabled()}>
+          <div
+            class={`adaptive-detail${
+              adaptiveStatus() === "fallback" || adaptivePalette()?.readable === false
+                ? " is-warning"
+                : ""
+            }`}
+          >
+            <span class="adaptive-dots" aria-hidden="true">
+              <For each={adaptiveColors()}>
+                {(color) => <i style={{ background: color }} />}
+              </For>
+            </span>
+            <span class="adaptive-detail-text">{adaptiveDetailText()}</span>
+            <span class="adaptive-detail-actions">
+              <RmButton
+                size="sm"
+                icon="refresh"
+                loading={adaptiveStatus() === "sampling"}
+                onClick={() => void refreshAdaptivePalette()}
+              >
+                {t("settings.appearance.adaptive.resample")}
+              </RmButton>
+              <RmButton
+                size="sm"
+                variant="ghost"
+                onClick={() => void disableAdaptive()}
+              >
+                {t("settings.appearance.adaptive.disable")}
+              </RmButton>
+            </span>
+          </div>
+        </Show>
         <RmAdvancedSection title={t("settings.general.themeJson")}>
           <RmButton
             size="sm"
@@ -516,6 +620,121 @@ function Appearance(): JSX.Element {
             <pre class="logic-result">{themeJson()}</pre>
           </Show>
         </RmAdvancedSection>
+      </RmCard>
+
+      <RmCard title={t("settings.appearance.glass.title")}>
+        <RmFieldRow
+          label={t("settings.appearance.glass.opacity")}
+          hint={<span class="muted-line">{t("settings.appearance.glass.hint")}</span>}
+        >
+          <div class="glass-opacity-control">
+            <input
+              type="range"
+              min="0"
+              max="100"
+              step="1"
+              value={panelOpacity()}
+              aria-label={t("settings.appearance.glass.opacity")}
+              onInput={(event) => setPanelOpacity(Number(event.currentTarget.value))}
+            />
+            <output>{panelOpacity()}%</output>
+          </div>
+        </RmFieldRow>
+      </RmCard>
+
+      <RmCard title={t("settings.appearance.cards.title")}>
+        <RmFieldRow
+          label={t("settings.appearance.cards.opacity")}
+          hint={<span class="muted-line">{t("settings.appearance.cards.hint")}</span>}
+        >
+          <div class="glass-opacity-control">
+            <input
+              type="range"
+              min="0"
+              max="100"
+              step="1"
+              value={homeCardOpacity()}
+              aria-label={t("settings.appearance.cards.opacity")}
+              onInput={(event) => setHomeCardOpacity(Number(event.currentTarget.value))}
+            />
+            <output>{homeCardOpacity()}%</output>
+          </div>
+        </RmFieldRow>
+      </RmCard>
+
+      <RmCard title={t("settings.appearance.video.title")}>
+        <RmFieldRow
+          label={t("settings.appearance.video.toggle")}
+          hint={<span class="muted-line">{t("settings.appearance.video.hint")}</span>}
+        >
+          <RmSwitch
+            checked={backgroundVideo().enabled}
+            disabled={!backgroundVideo().path}
+            onChange={(value) => setBackgroundVideoEnabled(value)}
+          />
+        </RmFieldRow>
+        <RmFieldRow label={t("settings.appearance.video.file")}>
+          <div class="video-background-control">
+            <span
+              class={`video-background-path${backgroundVideo().path ? "" : " is-empty"}`}
+              title={backgroundVideo().path || undefined}
+            >
+              {backgroundVideo().path
+                ? elidePath(backgroundVideo().path, 44)
+                : t("settings.appearance.video.empty")}
+            </span>
+            <RmButton
+              size="sm"
+              icon="folder"
+              onClick={() => {
+                void pickBackgroundVideo().then((res) => {
+                  if (!res.ok) toast({ message: res.message ?? "", tone: "error" });
+                });
+              }}
+            >
+              {backgroundVideo().path
+                ? t("settings.appearance.video.replace")
+                : t("settings.appearance.video.pick")}
+            </RmButton>
+            <Show when={backgroundVideo().path}>
+              <RmIconButton
+                icon="trash"
+                label={t("settings.appearance.video.clear")}
+                danger
+                onClick={() => clearBackgroundVideo()}
+              />
+            </Show>
+          </div>
+        </RmFieldRow>
+        <Show when={backgroundVideo().path}>
+          <RmFieldRow
+            label={t("settings.appearance.video.dim")}
+            hint={<span class="muted-line">{t("settings.appearance.video.dimHint")}</span>}
+          >
+            <div class="glass-opacity-control">
+              <input
+                type="range"
+                min="0"
+                max="80"
+                step="1"
+                value={backgroundVideo().dim}
+                aria-label={t("settings.appearance.video.dim")}
+                onInput={(event) => setBackgroundVideoDim(Number(event.currentTarget.value))}
+              />
+              <output>{backgroundVideo().dim}%</output>
+            </div>
+          </RmFieldRow>
+        </Show>
+        <Show when={backgroundVideoIssue()}>
+          <p class="video-background-note is-error">
+            {backgroundVideoIssue() === "decode"
+              ? t("settings.appearance.video.issue")
+              : backgroundVideoIssue()}
+          </p>
+        </Show>
+        <Show when={!settingsStore.motionEnabled()}>
+          <p class="video-background-note">{t("settings.appearance.video.motionOff")}</p>
+        </Show>
       </RmCard>
 
       <RmCard title={t("settings.general.motion")}>

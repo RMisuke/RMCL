@@ -14,6 +14,8 @@ use crate::commands;
 pub const IPC_COMMANDS: &[&str] = &[
     "open_external_url",
     "dialog_pick_directory",
+    "dialog_pick_background_video",
+    "background_video_allow",
     "cache_icon_fetch",
     "cache_icon_stats",
     "cache_icon_set_config",
@@ -141,6 +143,8 @@ pub fn invoke_handlers() -> impl Fn(tauri::ipc::Invoke<tauri::Wry>) -> bool + Se
         // ── external ──
         commands::external::open_external_url,
         commands::external::dialog_pick_directory,
+        commands::external::dialog_pick_background_video,
+        commands::external::background_video_allow,
         commands::cache::cache_icon_fetch,
         commands::cache::cache_icon_stats,
         commands::cache::cache_icon_set_config,

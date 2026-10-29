@@ -1,7 +1,7 @@
 /**
- * Application shell (ui/home-hero-dock 试验分支): TitleBar（含中央 Dock 导航）
+ * Application shell (ui/soft-skeuo-dashboard 试验分支): 底部浮动 Dock 导航
  * + content area + global overlays (task center, log drawer, launch bubble,
- * toasts, confirm host). 左侧 Rail 已移除，导航收进标题栏 Dock。
+ * toasts, confirm host) + optional local-video wallpaper. 左侧 Rail 已移除。
  *
  * The window is borderless/hidden at creation; this shell owns the reveal
  * handshake (unchanged from the previous design).
@@ -9,6 +9,8 @@
 import { ParentComponent, onMount } from "solid-js";
 import { availableMonitors, getCurrentWindow } from "@tauri-apps/api/window";
 import TitleBar from "./components/TitleBar";
+import { AccountDock } from "./components/AccountDock";
+import { LaunchDock } from "./components/LaunchDock";
 import { ToastContainer } from "./components/Toast";
 import { TaskCenterPanel } from "./components/TaskCenter";
 import { LogDrawer } from "./components/LogDrawer";
@@ -17,8 +19,10 @@ import { RmConfirmHost, RmPromptHost } from "./components/rm/overlays";
 import { initStores } from "./stores/init";
 import { initI18n } from "./i18n";
 import { initTheme } from "./theme";
+import { initAdaptiveTheme } from "./lib/adaptiveTheme";
 import { reportFrontendMessage } from "./ipc/api";
 import { ThemeBackdrop } from "./components/ThemeSurface";
+import { BackgroundVideo } from "./components/BackgroundVideo";
 
 type AppWindow = Awaited<ReturnType<typeof getCurrentWindow>>;
 
@@ -50,6 +54,7 @@ const App: ParentComponent = (props) => {
       // Theme and locale both gate the first visible paint; load them in
       // parallel instead of paying two serial IPC round-trips.
       await Promise.all([initI18n(), initTheme()]);
+      await initAdaptiveTheme();
       initStores();
       await win.show();
       await win.setFocus();
@@ -63,9 +68,13 @@ const App: ParentComponent = (props) => {
   return (
     <div class="app-root">
       <ThemeBackdrop />
+      <BackgroundVideo />
+      <div class="window-drag-strip" data-tauri-drag-region="deep" />
       <TitleBar />
+      <AccountDock />
+      <LaunchDock />
       <div class="app-body">
-        {/* 导航已上移到标题栏中央 Dock，左侧不再有 Rail */}
+        {/* 导航在窗口底部浮动 Dock 中，左侧不再有 Rail */}
         <main class="app-content">{props.children}</main>
       </div>
       <TaskCenterPanel />

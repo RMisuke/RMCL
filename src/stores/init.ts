@@ -62,6 +62,10 @@ export function initStores(): void {
       // Abnormal exit: open the log drawer with the crash highlighted (10 §4).
       uiStore.openLogDrawer(event.payload.key ?? event.payload.profile_id ?? "");
     }
+    // The backend persists this session's play time while handling the exit;
+    // refresh shortly after so the account/launch docks pick it up without a
+    // page reload (the list command itself is cheap — no completion scan).
+    setTimeout(() => void instancesStore.refresh(true), 1200);
   });
   void listen<{ profile_id: string; version: string }>(EVENTS.DOWNLOAD_COMPLETE, () => {
     void instancesStore.refresh(true);

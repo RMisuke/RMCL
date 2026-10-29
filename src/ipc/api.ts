@@ -373,6 +373,15 @@ export const dialog = {
   pickDirectory: () => safeInvoke<string | null>("dialog_pick_directory"),
 };
 
+// ── 本地视频背景（Appearance）──
+
+export const backgroundMedia = {
+  /** Native MP4 picker; the backend whitelists the file for this session. */
+  pickVideo: () => safeInvoke<string | null>("dialog_pick_background_video"),
+  /** Re-grant asset-protocol access to a remembered path; returns the resolved path. */
+  allow: (path: string) => safeInvoke<string>("background_video_allow", { path }),
+};
+
 // ── Plugins（Phase 2 声明式插件）──
 
 export const plugins = {
