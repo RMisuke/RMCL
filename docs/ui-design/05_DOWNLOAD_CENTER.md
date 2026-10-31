@@ -85,13 +85,15 @@
 
 ### 2.5 步骤 ④：安装执行 → 完成页
 
-- 提交序列：`profile_create(name, game_version)` → 拿到 profile.id →
-  `version_install(version, profile_id)` →（若选了 loader）等 `download://complete`
-  后 `modloader_install(profile_id, loader_type, loader_version)`。
-  > 后端约束：`version_install` 立即返回、后台执行；loader 安装需在游戏文件就绪后发起，
-  > 前端按 `download://complete(batch)` 事件串联（无 loader 则跳过）。
-- 执行页显示阶段清单（下载游戏文件 → 安装 Modloader → 完成），进度数据来自任务中心；
-  本步可离开页面（进度进 Rail 徽标），不强制等待。
+- **单命令**：`instance_install(directoryId, mcVersion, instanceId, loaderType?, loaderVersion?)`
+  立即返回，后台完成「下载原版 → 提交实例 →（可选）安装 loader → 改名/选中」。
+  - 无 loader：原版资源直接写入 `versions/{实例名}`，实例名可以不是 MC 版本号。
+  - 有 loader：原版先装到 `versions/{mcVersion}`（loader 的父版本必须可解析），
+    loader 产物（如 `1.21.1-fabric-0.16.9`）成功后再改名为向导里填的实例名。
+  - 命令立即返回 `{ task_id }`；任务在**后端同步创建**，前端不再创建 pending 行，
+    也不需要按 batch id 重新绑定。loader 阶段是同一任务的第 3 步，不另起一行。
+- 执行页显示阶段清单（下载游戏文件 → 安装 Modloader → 提交实例），进度数据来自
+  统一任务快照（任务中心）；本步可离开页面，不强制等待。
 - 完成页三按钮：**立即启动**（launch_start）/ 查看实例（→ /instances/:id）/ 去装 Mod
   （→ `#mods?instance=<id>`，带上下文）。完成后 profilesStore.refresh()。
 
@@ -104,51 +106,61 @@ InstanceInfo（game_version + has_jar/has_json + modded）→ 选中后跳过下
 
 ## 3. 分类二：Mod 仓库（Modrinth）
 
+> 2026-10-29 重构（对齐 HMCL 下载页）：搜索卡片压缩为「来源 / 结果数 / 翻页」+ 单行筛选，
+> 结果行直接展示兼容游戏版本与加载器；详情按游戏版本折叠分组，显示版本类型、日期、文件大小
+> 与已安装标记。以下为现行设计。
+
 ### 3.1 列表视图
 
 ```
 ┌──────────────────────────────────────────────────────┐
-│ 🔍 [sodium________]  游戏版本[1.20.4▾] 加载器[fabric▾] │
-│    来源: Modrinth（CurseForge 即将支持）   [搜索]      │
+│ Modrinth  CurseForge(即将)  14 个 Mod   ‹ 第1/1页 ›   │
+│ 🔍 [sodium______] [游戏版本▾] [加载器▾] [排序▾] [搜索] │
 ├──────────────────────────────────────────────────────┤
-│ ⚓ 正在为实例「sodium 实验存档」浏览 · [退出上下文 ✕]    │  ← 有 instance 参数时
+│ ⚓ 正在为实例「sodium 实验存档」浏览 · 1.20.4·Fabric ✕ │  ← 有 instance 参数时
 ├──────────────────────────────────────────────────────┤
-│ [🖼] Sodium                    [性能] [fabric]        │
-│      CaffeineMC · 1.2M 下载                          │
-│      现代化的渲染引擎，大幅提升帧率…                    │
-│ [🖼] Iris Shaders              [光影] [fabric]        │
-│ …                                                    │
-├──────────────────────────────────────────────────────┤
-│ [|‹] [‹]  第 1/12 页 [›] [›|]     每页 20 ▾           │
+│ [🖼] Sodium  CaffeineMC             [fabric]          │
+│      现代化的渲染引擎…      支持 [1.20.4] [1.20.3] +2  ↓46M › │
+│ [🖼] Iris Shaders …                                  │
 └──────────────────────────────────────────────────────┘
 ```
 
-- 搜索参数映射 `mod_search(query, game_version, loader, page, limit)`；**筛选变化即自动搜索**
-  （300ms 防抖 + 请求序号防竞态，HMCL 模式）；结果虚拟滚动。
-- 实例上下文（`?instance=`）：版本/loader 筛选锁定为实例值（下拉禁用 + ⚓ 提示条）；
-  「退出上下文」回全库模式。
-- 结果行：icon（缺省占位字母块）、name、authors、download_count 缩写、description 一行截断、
-  categories → RmTag。
+- 搜索参数映射 `mod_search(query, game_version, loader, page, limit, index)`；**筛选变化即自动搜索**
+  （300ms 防抖 + 请求序号防竞态，HMCL 模式）。
+- 实例上下文（`?instance=`）：版本/loader 筛选锁定为实例值（下拉禁用 + 一行 ⚓ 提示条）；
+  「退出上下文」回全库模式；筛选版本在结果行版本标签中置顶。
+- 结果行：icon（缺省占位字母块）、name、authors、description 一行截断、下载量、
+  **兼容游戏版本（前 2 个 +N）与 loader 标签**；categories 仅在详情展示。
+- 分页在搜索卡片右上角（`‹ 第 x/y 页 ›`），不再占用结果区底部一行。
+- 搜索卡片与结果面板为 82% 磨砂玻璃（`backdrop-filter`），壁纸仍可见；密集小字使用
+  比 `--rmccc-text-muted` 更深的 `--store-muted`，避免在视频背景上失去对比度。
+- 搜索命中新增 `game_versions`（Modrinth `versions`）与 `loaders`；后者缺失时从
+  `categories` 中提取 loader 分类（`fabric/forge/neoforge/quilt/liteloader/…`）。
 
 ### 3.2 详情视图（点击结果进入，页内二级视图，面包屑 ‹返回结果）
 
 ```
-[🖼] Sodium
-     CaffeineMC · 1,234,567 下载 · fabric 性能
-     完整描述（可滚动）…                    [在浏览器打开 ↗]
+[🖼] Sodium                                 [项目主页 ↗]
+     CaffeineMC · 46.1M 下载 · optimization / fabric
+     现代化渲染引擎…（两行，超出省略）
 ────────────────────────────────────────────
-⚓ 推荐用于 1.20.4 · fabric          ← 有实例上下文时置顶
-  ▸ sodium-fabric 0.5.8+mc1.20.4   2026-xx-xx [fabric]
-     [安装到本实例] [复制链接] [浏览器下载]
+⚓ 推荐版本 · Minecraft 1.21.1              [目标实例]
+  ●稳定版 0.6.9+mc1.21.1  ✓已安装 推荐   [安装] [链接] [↗]
 ────────────────────────────────────────────
-▸ 1.21.x（折叠组，按游戏版本倒序）
-  ▸ sodium-fabric 0.6.x+mc1.21  …
-▸ 1.20.x
-  ▸ …
+版本列表 5 个版本   [全部版本▾] [全部加载器▾] [全部|稳定|测试|快照]
+▾ Minecraft 1.21.5   2 个版本              2026-06-04
+  ●稳定版 0.6.9+…     日期·大小·[Fabric]   支持[1.21.4] [安装]…
+  ●测试版 0.7.0-beta… …
+▸ Minecraft 1.21.1（默认收起，点开）
+▸ Minecraft 1.20.4（默认收起）
 ```
 
-- 版本数据 `mod_get_versions(mod_id)`；推荐版本 = 首个满足
-  `game_versions ∋ 实例版本 && loaders ∋ 实例 loader` 的版本（前端筛选）。
+- 版本数据 `mod_get_versions(mod_id)`；新增 `published` / `version_type` / `file_size`。
+  推荐版本 = 首个满足 `game_versions ∋ 实例版本 && loaders ∋ 实例 loader` 的版本（前端筛选）。
+- 版本按一个主游戏版本折叠分组（默认展开最新 2 组；有游戏版本筛选时聚焦该版本），
+  组内按发布日期倒序；顶部提供游戏版本 / 加载器 / 版本类型筛选。
+- 版本行显示发布通道（稳定 / 测试 / 快照）、版本名/版本号、日期、文件大小、loader、
+  额外兼容版本；有实例上下文时对照 `mod_list` 显示 ✓ 已安装。
 - 版本行操作：
   - **安装到实例**：有上下文直接装；无上下文 → `RmDialog` 选实例（列表 + 兼容性标注：
     `version.loaders` 与 `profile.mod_loader` 不匹配的实例行内黄条警告，仍可强行装
@@ -173,14 +185,16 @@ CurseForge zip 一键导入：选包 → 预览内容 → 下载全部文件 →
 - `version_list` 失败：步骤 ① 空态 + 重试（后端有 1h 缓存兜底，命中时顶部提示「离线缓存，
   数据可能滞后」）。
 - modloader 列表加载失败：卡片网格骨架 + 重试。
-- 安装失败（download://error）：任务中心失败详情 + 本页 toast「安装失败：{人话原因}」，
+- 安装失败（`task://updated` 的 `failed` 终态）：任务中心失败详情 + 本页 toast
+  「安装失败：{人话原因}」，
   完成页提供「重试缺失文件」（对已建 profile 再发 version_install，幂等补缺）。
 
 ## 6. 接口与事件映射
 
 `versions.list/install`、`profiles.create`、`modloader.list/install`、`mods.search/get_versions/
-install/get_download_url`、`instance.list`（绑定本地版本）、`open_external_url`；
-事件 `download://progress/complete/error`、`modloader://progress`、`instances://refreshed`。
+install/get_download_url`、`instance.list`（绑定本地版本）、`open_external_url`、
+`task_list` / `task_cancel` / `task_pause` / `task_resume`；
+事件 `task://updated` / `task://sync`、`instances://refreshed`。
 
 ## 7. 渐进披露自查
 

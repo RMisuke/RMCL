@@ -16,6 +16,7 @@ export interface HostContext {
   type: "init";
   pluginId: string;
   cardId?: string;
+  card?: { title: string; width: number; height: number };
   theme: ThemeTokens;
   limits: { maxRequestBytes: number; maxResponseBytes: number; timeoutMs: number };
 }
@@ -37,6 +38,9 @@ export interface PluginHost {
   theme(): Promise<ThemeTokens>;
   settings(): Promise<unknown>;
   instances(): Promise<unknown>;
+  tasks(): Promise<unknown>;
+  launch(): Promise<unknown>;
+  server(params: { host: string; port?: number }): Promise<unknown>;
   network(params: { url: string; method?: "GET" | "POST"; body?: string }): Promise<unknown>;
   dispose(): void;
 }

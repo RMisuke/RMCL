@@ -4,7 +4,7 @@
 
 ## 1. 红线
 
-### 体积红线（ADR-011：strip 后主可执行 < 10 MiB）
+### 体积红线（ADR-011：strip 后主可执行 < 20 MiB）
 
 - 前端影响的是 **JS bundle**（现状 182 KB），不直接进二进制，但 WebView 内存与启动时间
   受影响。本设计预算：**增量 ≤ +150 KB**：
@@ -47,16 +47,81 @@
 5. Tauri 入参 camelCase→snake_case 自动转换仅对**命名参数**生效；`plugin_ui_invoke` 的
    `request` 是原始 JSON 字符串（≤64 KiB），内部字段名以桥 schema 为准。
 
+## 2.5 主题 v3 / Noctis（2026-10-31，ADR-021）
+
+- **唯一视觉层**：`theme-core.css`（token/控件/页面）、`ambient-stage.css`（默认动态
+  背景）、`home-stage.css`（主页/dock）替换旧 `visual-system.css` 与
+  `soft-dashboard.css`；不要再往 `app.css` 追加视觉覆盖。
+- **强调色角色**：accent 只做“主操作/当前导航/焦点/一个关键数字”；secondary 只进
+  启动面板氛围与背景；tertiary 只做粒子。新增页面禁止把 accent 同时用于卡片描边、
+  普通 hover、图标和进度条。
+- **默认动态背景**：`AmbientStage` 只在没有用户图片/视频壁纸且没有 v2 app 背景时
+  创建；它是纯 CSS、aria-hidden、pointer-events:none，动画受 `data-motion` 与
+  `prefers-reduced-motion` 双闸门。关闭动效后保留静态渐变和少量粒子剪影。
+- **场景派生**：`src/theme/presets.ts` 为内置主题提供 atmosphere/三色/粒子；
+  插件主题按 accent HSL 派生，不新增主题 schema。未知主题不得抛错。
+- **自适应 v2**：图片 4 区域 / 视频 5 帧 + 当前帧，k=6 后按覆盖度×色度×中心
+  偏置选代表色；dark/light 跟随当前主题。调色板版本 2，旧 v1 数据失效。
+- **验收陷阱**：检查“无壁纸 + 深色/浅色 + 动效关”三态；检查视频性能模式只降低
+  模糊、不隐藏内容；检查关闭自适应后 `--adaptive-*` 变量与 `data-adaptive` 均清除。
+
 ## 3. 事件与性能
 
 - `listen()` 只在 stores 注册一次；页面销毁不留订阅（SolidJS `onCleanup`）。
-- `download://progress` 已 100ms 节流，前端再合并渲染（同一帧的多次更新 batch）；
+- `task://updated` 已按 100ms/任务节流，前端按 task id 合并渲染；
   任务中心列表行数多时对 `current_file` 文本做 `memo`。
 - 虚拟滚动用于：版本列表（700+）、Mod 搜索结果（分页 20–100/页其实不需要，
   但保留组件位）、Modrinth 详情版本分组、版本仓库表。
 - iframe 卡片懒加载（IntersectionObserver）；编辑模式给 iframe 加遮罩避免拖拽误触。
 - 日志环形缓冲 1000 行/实例；退出后清理（内存红线意识）。
 - 图片（Mod 图标）：`loading="lazy"` + 缺省字母占位（不请求占位服务，离线可用）。
+
+### Local image wallpaper (2026-10-31, ADR-020 addendum)
+
+- **Placement**: the still-image card sits directly above the dynamic-video card
+  in Settings → Appearance. The image layer is rendered after the video layer, so
+  it is the top wallpaper layer (below every foreground surface).
+- **Upload contract**: the native picker accepts PNG / JPEG / WebP / GIF / BMP /
+  AVIF up to 32 MiB. The backend canonicalizes the file, checks it is a regular
+  file, and grants asset-protocol access to exactly that path. The file is read in
+  place; it is never copied, re-encoded or uploaded.
+- **Lifecycle**: one `background_image_prepare` call per path (bootstrap and
+  selection) grants access; the WebView owns decode and `object-fit: cover`
+  scaling. No ImageBitmap/JPEG cache is kept in the frontend.
+- **Layering and exclusivity**: image and video are mutually exclusive in the UI.
+  Enabling the image turns the video off (and pauses its layer); enabling or
+  picking a video turns the image off. The image layer still paints above the
+  video layer so a stale preference can never hide the selected image.
+- **Adaptive palette**: user image is sampled before user video and theme media,
+  so the shell palette follows the visible top layer.
+- **Static permanence**: a still image ignores the motion-effects switch and does
+  not trigger `data-video-wallpaper` performance mode; normal glass remains.
+
+### Local video wallpaper (2026-10-31, ADR-020)
+
+- **GPU path**: the system WebView owns decode and composition. Keep the video in
+  its own composited layer (`translate3d(0,0,0)` / `will-change`), with no
+  per-frame scale or filter. macOS uses VideoToolbox; Windows uses WebView2 and
+  Media Foundation/D3D11 when the codec, GPU and driver support it.
+- **Native resolution**: H.264 within 4096×2304 and HEVC play directly. Oversized
+  H.264 is converted once to native-resolution HEVC, never reduced to 1080p.
+  Codec, exact dimensions, exact rational frame rate and frame count are checked;
+  duration drift is limited to 200 ms for container rounding.
+- **Platform boundary**: shared probing/decision/cache/validation lives in
+  `rmccc-platform::video`. macOS uses `avconvert PresetHEVCHighestQuality`;
+  Windows uses hardware-accelerated WinRT `MediaTranscoder`. Neither UI nor IPC
+  contains platform branches.
+- **Failure contract**: preparation or decode failure is visible in Settings.
+  Never silently fall back to an oversized H.264 source that may use software
+  decoding. Windows HEVC codec/GPU availability is a real prerequisite, not an
+  assumed guarantee.
+- **Simple lifecycle**: `main.tsx` starts one prepare-and-grant IPC. One persistent
+  muted/looping/inline video uses the returned URL. Route changes never touch it.
+  Only `ended` and visibility recovery remain; no watchdog, route nudge, forced
+  `load()`, proxy-upgrade swap or poster/IndexedDB frame cache.
+- **Glass fallback**: `<html data-video-wallpaper="on">` removes the full-page
+  backdrop filter and caps card/titlebar/dock blur at 8–12 px. Normal glass is
+  restored when wallpaper or motion is disabled.
 
 ## 4. 平台注意（当前 macOS-only，保留跨平台能力）
 
@@ -97,7 +162,7 @@
 
 ## 8. 测试策略
 
-- 单测（vitest，可选但推荐）：stores 的事件归约逻辑（downloadStore 的批次状态机、
+- 单测（vitest，可选但推荐）：stores 的事件归约逻辑（tasksStore 的终态入 recent、
   launchStore 缓冲清理）抽纯函数测；
 - 契约：`ipc_tests.rs` 已保证命令注册；前端对 api.ts 的 casing 断言可以做一个
   「全 wrapper 调用 mock invoke 参数快照」测试（防止再犯 AgentRunOutput 类错误）；

@@ -26,6 +26,11 @@
 | [ADR-013](ADR-013-lightweight-ai-and-external-mcp.md) | 轻干预 AI 架构：内部 LLM 服务 + 外部 MCP 控制（内建 Agent 退役） | **accepted**（2026-10-23） | Phase 6→AI/MCP | `../AI_AND_MCP_ARCHITECTURE.md`；ADR-009/010（修订）/011；`../ui-design/07_AI_AND_MCP.md` |
 | [ADR-014](ADR-014-theme-v2-appearance-skin.md) | 主题 v2：外观皮肤（字体/形状/间距/背景/视频/组件槽/特效）+ 用户覆盖 | **accepted**（2026-10-27 核心切片） | Phase 3+ | ADR-003/004/005/006；`../audits/PLUGIN_SECURITY_AUDIT_2026-10-27.md`；`../guides/THEME_PLUGIN_AUTHORING.md` |
 | [ADR-016](ADR-016-instance-management-v2.md) | 实例管理 v2：目录注册表 + 版本即实例 + `.rmccc` 设置覆盖 | **accepted**（2026-10-27） | Phase 2+ | ADR-002（取代）/011；`ARCHITECTURE.md` §3.3/§3.4/§15；`ui-design/03`/`04` |
+| [ADR-017](ADR-017-cross-platform-video-decode.md) | 本地视频壁纸的跨平台硬件解码代理（H.264 1080p，保留帧率/帧数） | **superseded by ADR-020**（2026-10-31） | Phase 3+ | 指南 §5.7；ADR-014/020；`ui-design/13` |
+| [ADR-018](ADR-018-modpack-installation.md) | 整合包安装子系统（HMCL 格式兼容 + 版本即实例） | **accepted**（2026-10-30） | Phase 4+ | ADR-016；`ARCHITECTURE.md` §2/§11；`crates/rmccc-modpack`、`crates/rmccc-core/src/modpack.rs` |
+| [ADR-019](ADR-019-unified-task-center.md) | 统一任务中心与下载事务模型 | **accepted**（2026-10-30） | Phase 4+ | ADR-013/016/018；`crates/rmccc-tasks`；`ui-design/10` |
+| [ADR-020](ADR-020-native-resolution-wallpaper-engine.md) | 原生分辨率 GPU 动态壁纸引擎（同尺寸 HEVC + 极简常驻播放） | **accepted**（2026-10-31；Windows 原生验证 deferred） | Phase 3+ | ADR-014/017（取代）；`ARCHITECTURE.md` §26；`ui-design/13` |
+| [ADR-021](ADR-021-noctis-theme-v3.md) | Noctis 主题系统 v3：氛围背景/粒子、强调色角色、自适应多帧代表性取色 | **accepted**（2026-10-31） | Phase 3+ | ADR-005/014/020；`ui-design/01`/`08`/`13`；`src/theme/presets.ts` |
 
 > ADR-008 已于 2026-10-26 建立草案（proposed）；ADR-014 于 2026-10-27 建立主题 v2 草案；
 > accepted 前均不得据此改协议。

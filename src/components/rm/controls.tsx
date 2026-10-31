@@ -122,9 +122,19 @@ export function RmSelect(props: SelectProps): JSX.Element {
   // options 重建（如探测刷新模型列表）时原生 <select> 会丢选中项；
   // Solid 只在 value 变化时写 DOM，这里显式跟随 options 重设一次。
   createEffect(() => {
-    void props.options.length;
+    // Track the option values, not only the count: dynamic lists (e.g. the
+    // game-version filter rebuilt from the manifest) can replace their options
+    // without changing length, leaving the native select on the placeholder.
+    const values = props.options.map((o) => o.value).join("|");
+    void values;
     const value = props.value;
-    if (el && el.value !== value) el.value = value;
+    if (!el) return;
+    if (el.value !== value) el.value = value;
+    // The <option> children may commit after this effect during a context
+    // change; re-assert once the DOM has settled.
+    queueMicrotask(() => {
+      if (el && el.value !== value) el.value = value;
+    });
   });
   return (
     <select
@@ -190,6 +200,78 @@ export function RmSwitch(props: {
 // ── Tags / progress ──
 
 type TagTone = "neutral" | "accent" | "success" | "warning" | "danger";
+
+// ── Slider / segmented choice ──
+
+interface SliderProps {
+  value: number;
+  min: number;
+  max: number;
+  step?: number;
+  onInput: (value: number) => void;
+  disabled?: boolean;
+  label: string;
+}
+
+/** Native range mapped onto the design tokens (memory allocation). */
+export function RmSlider(props: SliderProps): JSX.Element {
+  const percent = () => {
+    const span = props.max - props.min;
+    if (span <= 0) return 0;
+    return Math.min(100, Math.max(0, ((props.value - props.min) / span) * 100));
+  };
+  return (
+    <input
+      class="rm-slider"
+      type="range"
+      min={props.min}
+      max={props.max}
+      step={props.step ?? 1}
+      value={props.value}
+      disabled={props.disabled}
+      aria-label={props.label}
+      style={{ "--rm-slider-fill": `${percent()}%` }}
+      onInput={(e) => props.onInput(Number(e.currentTarget.value))}
+    />
+  );
+}
+
+interface SegmentedProps {
+  value: string;
+  options: { value: string; label: string; disabled?: boolean }[];
+  onChange: (value: string) => void;
+  disabled?: boolean;
+  label: string;
+  class?: string;
+}
+
+/**
+ * Compact mutually-exclusive choice. Used where HMCL uses a radio list
+ * (Java mode / window mode / quick-play target) but the option count is small.
+ */
+export function RmSegmented(props: SegmentedProps): JSX.Element {
+  return (
+    <div
+      class={`rm-segmented${props.class ? ` ${props.class}` : ""}`}
+      role="group"
+      aria-label={props.label}
+    >
+      {props.options.map((option) => (
+        <button
+          type="button"
+          class={`rm-segmented-item${props.value === option.value ? " is-active" : ""}`}
+          aria-pressed={props.value === option.value}
+          disabled={props.disabled || option.disabled}
+          onClick={() => props.onChange(option.value)}
+        >
+          {option.label}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+// ── Tags / progress ──
 
 export function RmTag(props: {
   tone?: TagTone;

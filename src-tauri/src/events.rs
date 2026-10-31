@@ -1,26 +1,29 @@
-//! Event name constants and throttled emitter for Rust → Frontend communication.
+//! Event name constants for Rust → Frontend communication.
 //!
-//! Constants and types here are declared for future use in download progress,
-//! auth device code flow, and mod loader installation progress events.
+//! Installation/download progress no longer has per-feature event families:
+//! every transaction is a `rmccc_tasks::TaskSnapshot` broadcast as
+//! `task://updated`, with `task://sync` for a full-board resync after the
+//! frontend reloads or the broadcast channel lags.
+//!
 //! P2-24：移除 crate 级 allow(dead_code)，仅对预留常量保留单项 allow。
 
 use serde::Serialize;
-use std::sync::Mutex;
-use std::time::{Duration, Instant};
-use tauri::{AppHandle, Emitter};
 
 // ── Event name constants ──
 
-pub const DOWNLOAD_PROGRESS: &str = "download://progress";
-pub const DOWNLOAD_COMPLETE: &str = "download://complete";
-pub const DOWNLOAD_ERROR: &str = "download://error";
+/// One task snapshot changed (payload: `TaskSnapshot`).
+pub const TASK_UPDATED: &str = "task://updated";
+/// Full board after a lag or frontend reload (payload: `TaskBoard`).
+pub const TASK_SYNC: &str = "task://sync";
+
 pub const AUTH_DEVICE_CODE: &str = "auth://device-code";
 
 pub const LAUNCH_STARTED: &str = "launch://started";
 pub const LAUNCH_OUTPUT: &str = "launch://output";
 pub const LAUNCH_EXITED: &str = "launch://exited";
-
-pub const MODLOADER_INSTALL_PROGRESS: &str = "modloader://progress";
+/// Real launch-stage progress. `100` is emitted only after the game window
+/// readiness marker appears in the game's stdout, never on process spawn.
+pub const LAUNCH_PROGRESS: &str = "launch://progress";
 
 /// Emitted after the game repository re-scans `versions/`
 /// (HMCL `RefreshedGameInstancesEvent`).
@@ -32,24 +35,21 @@ pub const AI_DELTA: &str = "ai://delta";
 pub const AI_DONE: &str = "ai://done";
 pub const AI_ERROR: &str = "ai://error";
 
-// ── Download progress payload ──
-
-#[derive(Debug, Clone, Serialize, ts_rs::TS)]
-#[ts(export_to = "types.ts")]
-pub struct DownloadProgressPayload {
-    pub batch_id: String,
-    #[ts(type = "number")]
-    pub completed_files: u64,
-    #[ts(type = "number")]
-    pub total_files: u64,
-    #[ts(type = "number")]
-    pub downloaded_bytes: u64,
-    #[ts(type = "number")]
-    pub total_bytes: u64,
-    pub current_file: Option<String>,
-}
-
 // ── AI analysis payloads（ADR-013 S2）──
+
+/// Launch progress shown by the home status card and launch bubble.
+#[derive(Debug, Clone, Serialize, ts_rs::TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "types.ts")]
+pub struct LaunchProgressPayload {
+    pub profile_id: String,
+    pub percent: u8,
+    /// `checking` / `repairing` / `checking-java` / `spawning` /
+    /// `waiting-window` / `window-open`.
+    pub stage: String,
+    pub message: String,
+    pub window_opened: bool,
+}
 
 #[derive(Debug, Clone, Serialize, ts_rs::TS)]
 #[serde(rename_all = "camelCase")]
@@ -126,43 +126,4 @@ pub struct PluginPushPayload {
     /// 完整的宿主→插件消息（`{v, type: "llm.delta"|"llm.done"|"llm.error", ...}`）。
     #[ts(type = "unknown")]
     pub message: serde_json::Value,
-}
-
-// ── Throttled emitter ──
-
-/// Emits download progress events at a controlled rate to avoid flooding the frontend.
-///
-/// Events are throttled to at most one per `interval` (default 100ms).
-/// Completion events (100%) are always emitted immediately.
-pub struct ThrottledEmitter {
-    app: AppHandle,
-    last_emit: Mutex<Instant>,
-    interval: Duration,
-}
-
-impl ThrottledEmitter {
-    pub fn new(app: AppHandle, interval_ms: u64) -> Self {
-        Self {
-            app,
-            last_emit: Mutex::new(Instant::now() - Duration::from_millis(interval_ms)),
-            interval: Duration::from_millis(interval_ms),
-        }
-    }
-
-    /// Emit a download progress event (throttled).
-    pub fn emit_progress(&self, payload: &DownloadProgressPayload) {
-        // 容忍 poisoned mutex（P1-07：禁 unwrap_used），退化为立即发射
-        let mut last = match self.last_emit.lock() {
-            Ok(guard) => guard,
-            Err(poisoned) => poisoned.into_inner(),
-        };
-
-        // Always emit 100% completion
-        let is_complete = payload.completed_files >= payload.total_files && payload.total_files > 0;
-
-        if is_complete || last.elapsed() >= self.interval {
-            let _ = self.app.emit(DOWNLOAD_PROGRESS, payload);
-            *last = Instant::now();
-        }
-    }
 }

@@ -108,7 +108,8 @@
 > **已达成**：实例设置页 `/instances/:id` 的「加载器」分区已可选择 loader 类型、列出稳定/预览版本并安装
 > （`modloader_list` / `modloader_install` 已在 `InstanceSettings.tsx` 调用）；安装路由已统一为
 > `rmccc-core::modloader::install_loader`（Phase 1.4 单体系，Forge/NeoForge → installer JAR，其余 → patch）。
-> **未达成**：`modloader://progress` 在 `src-tauri/src/events.rs` 与 `src/ipc/events.ts` 两侧已定义、后端逐阶段 emit，
+> **未达成**：loader 安装阶段进度曾用 `modloader://progress`；ADR-019 后统一并入
+> `task://updated` 的 `modloader-install` 任务（该历史欠账已关闭）。
 > 但页面尚未订阅（目前只有 toast 结果）；Cleanroom 既未实现也未在 UI 禁用。
 
 **目标**：支持 Fabric / Forge / NeoForge 安装。
@@ -179,6 +180,29 @@
 - [ ] 缺失依赖时有提示
 
 ---
+
+## Phase 4.5: Modpacks（2026-10-30）
+
+> **状态：✅ 本地整合包安装完成（在线仓库/导出除外）**
+> 新增 `rmccc-modpack`（解析 + 解压 + Curse 元数据 + `modpack.cfg`）与
+> `rmccc-core::modpack`（编排）；支持 HMCL 的全部本地整合包类型：
+> CurseForge、Modrinth、MCBBS、Server、MultiMC/Prism、HMCL 自有导出、手动 `.minecraft` zip。
+> 主界面拖入 `.zip`/`.mrpack` 即弹安装向导（实例名 + 游戏目录），安装链路覆盖
+> 原版 → loader → 额外库 → overrides → manifest 文件 → `modpack.cfg`/图标/启动设置。
+> 进度走统一任务模型（`task://updated`），任务中心可取消。设计记录见
+> [ADR-018](adr/ADR-018-modpack-installation.md) 与 [ADR-019](adr/ADR-019-unified-task-center.md)。
+> **未达成**：整合包导出、在线整合包浏览器、多 loader 叠加安装、MultiMC 未知组件
+> 的无损 JSON-Patch 变换；Curse 无 API key 时依赖 `mod.mcimirror.top` 只读镜像。
+
+## Phase 4.6: Unified task center（2026-10-30）
+
+> **状态：✅ 完成**
+> 新增 `rmccc-tasks`（TaskRegistry / TaskHandle / TaskSnapshot）作为所有下载与安装
+> 事务的唯一事实源；实例、整合包、loader、Mod、依赖补装、修复全部接入。
+> 下载批次、loader 阶段、整合包阶段变成任务内部步骤，前端只认 `task_id`。
+> 删除 `download://*`、`modloader://progress`、`modpack://progress` 与三个前端
+> store；任务中心重做为“任务卡 + 加权步骤轨道 + 完整过程/日志”。设计记录见
+> [ADR-019](adr/ADR-019-unified-task-center.md)。
 
 ## Phase 5: Polish & Ship（Week 9–10）
 

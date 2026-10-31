@@ -12,6 +12,9 @@ export type {
   AuthSession,
   AccountMetadata,
   ModLoaderType,
+  ModpackInspectView,
+  ModpackLoaderView,
+  ModpackInstallStart,
   ModVersion,
   VersionInfo,
   ReleaseType,
@@ -23,6 +26,7 @@ export type {
   ErrorCode,
   ResolvedInstanceSettings,
   JavaInfo,
+  SystemMemoryInfo,
   MissingFileInfo,
   InstanceSummary,
   InstanceDetail,
@@ -45,7 +49,18 @@ export type {
   GlobalGameSettings,
   EffectiveGameSettings,
   IsolationPolicy,
-  DownloadProgressPayload,
+  TaskBoard,
+  TaskSnapshot,
+  ServerStatus,
+  TaskStart,
+  TaskKind,
+  TaskState,
+  TaskStepState,
+  TaskDownloadView,
+  TaskStepView,
+  TaskCapabilities,
+  TaskErrorView,
+  TaskResultView,
   PluginList,
   PluginDetail,
   InstallReport,
@@ -77,6 +92,20 @@ import type { AppInfoView,
   ModVersion,
   ModInfo,
   ModSearchResult,
+  ModpackInspectView,
+  ModpackInstallStart,
+  TaskBoard,
+  TaskSnapshot,
+  ServerStatus,
+  TaskStart,
+  TaskKind,
+  TaskState,
+  TaskStepState,
+  TaskDownloadView,
+  TaskStepView,
+  TaskCapabilities,
+  TaskErrorView,
+  TaskResultView,
   InstanceSummary,
   InstanceDetail,
   InstanceSettingsPatch,
@@ -104,6 +133,7 @@ import type { AppInfoView,
   LocaleInfo,
   IpcError,
   JavaInfo,
+  SystemMemoryInfo,
   MissingFileInfo,
   ModList,
   LoaderVersion,
@@ -130,6 +160,8 @@ import type { AppInfoView,
   McpConfirmationView,
   McpRecentCallView,
 } from "./types";
+
+import type { InstanceFolder } from "../lib/instanceFolders";
 
 // Input DTOs: partial updates. The fields come from the ts-rs generated types
 // (so they can never drift from the Rust structs), wrapped in `Partial` because
@@ -194,6 +226,9 @@ export const instances = {
   resolvedSettings: (key: string) =>
     safeInvoke<ResolvedInstanceSettings>("instance_resolved_settings", { key }),
   paths: (key: string) => safeInvoke<InstancePaths>("instance_paths", { key }),
+  /** Open one of the instance's well-known folders in Finder/Explorer. */
+  reveal: (key: string, folder: InstanceFolder) =>
+    safeInvoke<void>("instance_reveal", { key, folder }),
   select: (key: string | null) => safeInvoke<void>("instance_select", { key }),
   rename: (key: string, newId: string) =>
     safeInvoke<InstanceDetail>("instance_rename", { key, newId }),
@@ -271,6 +306,23 @@ export const launch = {
   status: () => safeInvoke<string[]>("launch_status"),
 };
 
+// ── Modpacks（整合包，HMCL 兼容）──
+
+export const modpack = {
+  /** Parse a local .zip/.mrpack and return the install-wizard metadata. */
+  inspect: (path: string) =>
+    safeInvoke<ModpackInspectView>("modpack_inspect", { path }),
+  /** Native file picker; null on cancel. */
+  pickFile: () => safeInvoke<string | null>("modpack_pick_file"),
+  /** Schedule an install. Progress arrives through `task://updated`. */
+  install: (path: string, directoryId: string, instanceName?: string) =>
+    safeInvoke<ModpackInstallStart>("modpack_install", {
+      path,
+      directoryId,
+      instanceName,
+    }),
+};
+
 // ── Mods ──
 
 export const mods = {
@@ -315,10 +367,25 @@ export const modLoader = {
 
 // ── Downloads ──
 
-export const downloads = {
-  cancel: (batchId: string) => safeInvoke<void>("download_cancel", { batchId }),
-  pause: (batchId: string) => safeInvoke<void>("download_pause", { batchId }),
-  resume: (batchId: string) => safeInvoke<void>("download_resume", { batchId }),
+// ── Unified task center ──
+
+export const tasks = {
+  /** Active tasks + bounded recent history (survives a WebView reload). */
+  list: () => safeInvoke<TaskBoard>("task_list"),
+  get: (taskId: string) => safeInvoke<TaskSnapshot | null>("task_get", { taskId }),
+  log: (taskId: string) => safeInvoke<string[]>("task_log", { taskId }),
+  pause: (taskId: string) => safeInvoke<void>("task_pause", { taskId }),
+  resume: (taskId: string) => safeInvoke<void>("task_resume", { taskId }),
+  cancel: (taskId: string) => safeInvoke<void>("task_cancel", { taskId }),
+  clearHistory: () => safeInvoke<void>("task_clear_history"),
+};
+
+// ── Home server card（真实 SLP 查询）──
+
+export const servers = {
+  /** Query a Minecraft server with the Server List Ping protocol. */
+  status: (address: string) =>
+    safeInvoke<ServerStatus>("server_status", { address }),
 };
 
 // ── Settings ──
@@ -327,6 +394,7 @@ export const settings = {
   get: () => safeInvoke<AppConfig>("settings_get"),
   set: (opts: SettingsUpdate) => safeInvoke<AppConfig>("settings_set", { opts }),
   detectJava: () => safeInvoke<JavaInfo[]>("java_detect"),
+  systemMemory: () => safeInvoke<SystemMemoryInfo>("system_memory"),
   appInfo: () =>
     safeInvoke<AppInfoView>("settings_app_info", {}),
 };
@@ -373,13 +441,19 @@ export const dialog = {
   pickDirectory: () => safeInvoke<string | null>("dialog_pick_directory"),
 };
 
-// ── 本地视频背景（Appearance）──
+// ── 本地壁纸（Appearance）──
 
 export const backgroundMedia = {
-  /** Native MP4 picker; the backend whitelists the file for this session. */
+  /** Native MP4 picker; null on cancel. */
   pickVideo: () => safeInvoke<string | null>("dialog_pick_background_video"),
-  /** Re-grant asset-protocol access to a remembered path; returns the resolved path. */
-  allow: (path: string) => safeInvoke<string>("background_video_allow", { path }),
+  /** Prepare, validate and authorize one native-resolution hardware-safe asset. */
+  prepare: (path: string) =>
+    safeInvoke<import("./types").BackgroundVideoAsset>("background_video_prepare", { path }),
+  /** Native still-image picker; null on cancel. */
+  pickImage: () => safeInvoke<string | null>("dialog_pick_background_image"),
+  /** Validate the image and grant asset-protocol access; returns canonical path. */
+  prepareImage: (path: string) =>
+    safeInvoke<string>("background_image_prepare", { path }),
 };
 
 // ── Plugins（Phase 2 声明式插件）──

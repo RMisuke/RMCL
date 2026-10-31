@@ -15,7 +15,7 @@
 | 插件 → 宿主 | `{ v: 1, type: "cancel", id }` | 放弃一条 in-flight 请求（宿主丢弃 pending，迟到结果不再回包） |
 | 宿主 → 插件 | `{ v: 1, id, ok: true, result }` | 成功 |
 | 宿主 → 插件 | `{ v: 1, id, ok: false, error: { code, message, retryable } }` | 失败 |
-| 宿主 → 插件 | `{ v: 1, type: "init", pluginId, cardId?, theme, limits }` | 容器初始化（一次） |
+| 宿主 → 插件 | `{ v: 1, type: "init", pluginId, cardId?, card?, theme, limits }` | 容器初始化（一次）；`card` 含标题与宽高档位 |
 | 宿主 → 插件 | `{ v: 1, type: "theme", theme }` | 主题切换 |
 | 宿主 → 插件 | `{ v: 1, type: "revoke", capability }` | 依赖的能力被撤销 |
 
@@ -47,6 +47,22 @@
 
 ### `instances.list` → `{ instances: [{ id, name, gameVersion, loader, memoryMb, lastPlayed }] }`
 需要 `instance.read`。`loader` 为 `{ type, version } | null`。
+
+### `tasks.list` → `{ active, recent, generatedAt }`
+需要 `tasks.read`（低风险，安装时自动授予）。返回统一任务中心的活动/最近任务快照，
+最多各 8 条；已去掉 detail 日志、手动目录和路径，`currentFile` 只保留文件名。
+
+### `launch.status` → `{ running: string[] }`
+需要 `launch.read`（低风险）。返回当前运行中的实例 key，不含 PID 或命令行。
+
+### `server.status` → `ServerStatus`
+需要 `network.request`，且 `params.host` 必须在该能力的声明白名单里。宿主执行真实
+Minecraft Server List Ping；返回 MOTD、在线人数、样本玩家、版本、协议、延迟和 PNG
+favicon。`params.port` 缺省 25565。不支持 SRV 记录。
+
+```js
+const status = await host.server({ host: "mc.example.com", port: 25565 });
+```
 
 ### `network.request` → `{ status, body }`
 需要 `network.request`，且**目标域名**必须在该能力的声明白名单里（宿主按 host 授权）。

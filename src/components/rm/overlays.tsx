@@ -6,6 +6,7 @@
  */
 import type { JSX } from "solid-js";
 import { Show, For, onMount, onCleanup, createSignal, createEffect } from "solid-js";
+import { Portal } from "solid-js/web";
 import { Icon, type IconName } from "../icons";
 import { RmButton, RmInput } from "./controls";
 import { t } from "../../i18n";
@@ -187,51 +188,86 @@ export function RmMenu(props: {
   align?: "left" | "right";
   /** `below` (default) | `right`（侧栏/工具栏向右弹出）| `up`（向上弹出，不遮住按钮）。 */
   side?: "below" | "right" | "up";
+  /**
+   * Render the popup in a body portal with fixed positioning. Needed inside
+   * `overflow` containers (the instance sidebar clips a normally-positioned
+   * menu). The menu is right-aligned to the trigger and bottom-aligned to it.
+   */
+  portal?: boolean;
 }): JSX.Element {
   const [open, setOpen] = createSignal(false);
+  const [anchor, setAnchor] = createSignal<{ left: number; bottom: number } | null>(null);
   let root: HTMLDivElement | undefined;
+  let menu: HTMLDivElement | undefined;
   const close = () => setOpen(false);
+  const toggle = () => {
+    if (!open() && props.portal && root) {
+      const rect = root.getBoundingClientRect();
+      setAnchor({
+        left: rect.right + 6,
+        bottom: Math.max(8, window.innerHeight - rect.bottom),
+      });
+    }
+    setOpen(!open());
+  };
   const onDocClick = (e: MouseEvent) => {
-    if (open() && root && !root.contains(e.target as Node)) close();
+    const target = e.target as Node;
+    if (open() && root && !root.contains(target) && !menu?.contains(target)) close();
   };
   onMount(() => document.addEventListener("mousedown", onDocClick));
   onCleanup(() => document.removeEventListener("mousedown", onDocClick));
 
+  const menuNode = () => (
+    <div
+      ref={menu}
+      class={`rm-menu rm-menu-${props.align ?? "left"}${
+        props.side && props.side !== "below" ? ` rm-menu-pop-${props.side}` : ""
+      }${props.portal ? " rm-menu-portal" : ""}`}
+      style={
+        props.portal && anchor()
+          ? {
+              position: "fixed",
+              left: `${anchor()!.left}px`,
+              bottom: `${anchor()!.bottom}px`,
+              top: "auto",
+              right: "auto",
+            }
+          : undefined
+      }
+      role="menu"
+    >
+      <For each={props.items}>
+        {(item) => (
+          <button
+            class={`rm-menu-item${item.danger ? " is-danger" : ""}`}
+            disabled={item.disabled}
+            onClick={() => {
+              close();
+              item.onSelect?.();
+            }}
+          >
+            <Show when={item.icon}>
+              <Icon name={item.icon!} size={15} />
+            </Show>
+            {item.label}
+          </button>
+        )}
+      </For>
+    </div>
+  );
+
   return (
     <div class="rm-menu-root" ref={root}>
       <div
-        onClick={() => setOpen(!open())}
-        onKeyDown={(e) => e.key === "Enter" && setOpen(!open())}
+        onClick={toggle}
+        onKeyDown={(e) => e.key === "Enter" && toggle()}
         role="button"
         tabindex={0}
       >
         {props.children}
       </div>
       <Show when={open()}>
-        <div
-          class={`rm-menu rm-menu-${props.align ?? "left"}${
-            props.side && props.side !== "below" ? ` rm-menu-pop-${props.side}` : ""
-          }`}
-          role="menu"
-        >
-          <For each={props.items}>
-            {(item) => (
-              <button
-                class={`rm-menu-item${item.danger ? " is-danger" : ""}`}
-                disabled={item.disabled}
-                onClick={() => {
-                  close();
-                  item.onSelect?.();
-                }}
-              >
-                <Show when={item.icon}>
-                  <Icon name={item.icon!} size={15} />
-                </Show>
-                {item.label}
-              </button>
-            )}
-          </For>
-        </div>
+        {props.portal ? <Portal>{menuNode()}</Portal> : menuNode()}
       </Show>
     </div>
   );

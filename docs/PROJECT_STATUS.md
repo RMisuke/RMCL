@@ -1,4 +1,4 @@
-# RMCCC 项目现状与继续开发交接（2026-10-27 更新）
+# RMCCC 项目现状与继续开发交接（2026-10-31 更新）
 
 > 本文档是**变更记录与交接入口**，按轮次记录"这轮改了什么"。
 > **完整架构说明 + 功能矩阵 + 技术债台账**见 [`audits/AUDIT_2026-10-20.md`](audits/AUDIT_2026-10-20.md)（横切全景，不按轮次组织）。
@@ -9,6 +9,390 @@
 ---
 
 ## 0. 更新记录
+
+**2026-10-31（底部 Dock 与账号/启动面板：自适应浅白玻璃）**：
+
+1. 底部导航 Dock、左侧账号 Dock、右侧启动 Dock 统一改为**浅白半透明玻璃**：
+   白色渐变底 + 白色高光内描边 + 柔和深色外阴影 + 30px 背景模糊/饱和度提升，
+   不再使用深墨 chrome 底。
+2. 自适应主题开启时（`html[data-adaptive="on"]`）通过 CSS 变量把当前 accent
+   （当前为黄色）以约 30% 混入白色玻璃，形成淡黄渐变；非自适应状态只混入约 9%，
+   保留中性白玻璃。主题切换、壁纸切换时随令牌自动变化，不需要 JS 重算。
+3. 账号 Dock 的文字、头像底、provider 标签，启动 Dock 的主按钮/图标/箭头，
+   以及两者展开后的 popover 全部切换为深色文字 + 白色玻璃表面，避免浅色面板上
+   出现白字不可读。
+4. 实机 1280×760 验证：底部三组 Dock、账号 popover、启动面板均可见且可读；
+   `pnpm typecheck` ✅、`pnpm build` ✅、`pnpm tauri build --bundles app` ✅。
+   产物仍为 `target/release/bundle/macos/SNGL.app`，主可执行 **10,684,960 B**。
+5. 修复 Dock 文字被点击/拖拽选中后出现的米黄色选区底色：Dock、popover 与窗口
+   控制键统一 `user-select: none`，并把这些区域的 `::selection` 背景设为透明。
+   右上角窗口控制键（最小化/最大化/关闭）同步改为同款自适应白色玻璃 + 深色图标。
+
+**2026-10-31（主界面卡片系统 v3 + 真实服务器查询 + 真实启动进度 + 任务中心联动）**：
+
+1. **卡片系统契约**：新增 [ui-design/14_CARD_SYSTEM.md](ui-design/14_CARD_SYSTEM.md)，
+   12 列网格固定五档宽度 `3/4/6/8/12`、四档高度 `1/2/3/4`（92px 行高 + 14px 间隔）。
+   布局迁移到 `rmccc.softDashboard.v3`，隐藏卡片保留尺寸；编辑态支持 W/H 循环调整。
+2. **插件卡片**：manifest 支持 `maxSize`，`WidgetDescriptor` 将插件尺寸吸附到合法档位；
+   插件卡实例 id 为 `plugin:<pluginId>/<cardId>`，同插件多卡可独立添加/调整/初始化。
+   新增 Host Bridge 方法 `tasks.list`（`tasks.read`）、`launch.status`（`launch.read`）、
+   `server.status`（`network.request` + 声明 host），并同步 schema / SDK / 文档。
+3. **真实服务器信息**：新增 `rmccc_core::server_status` + IPC `server_status`，实现
+   Minecraft SLP（handshake/status request/VarInt/JSON），解析 MOTD、人数、样本玩家、
+   版本、协议、延迟与 PNG favicon；服务器卡不再有 mock 数据，支持持久化地址、90s 自动刷新、
+   favicon 与错误重试。实机 `mc.hypixel.net` 返回 **18,976/200,000 在线、681ms**。
+4. **真实启动进度**：新增 `launch://progress`，由修复下载回调、Java/进程编排边界和
+   游戏 stdout 窗口标记驱动；`100%` 只在 `Backend library: LWJGL` /
+   `OpenAL initialized` / `Sound engine started` 出现后上报。进程 spawn 只到 88%，
+   启动状态卡与启动气泡共用该进度。实机 1.20.1：**88% 等待窗口 → 100% 游戏窗口已打开**；
+   失败的 26.1 NeoForge 实例在窗口前异常退出，未误报 100%。
+5. **下载卡联动任务中心**：首页下载卡直接消费 `tasksStore` 的同一 `TaskSnapshot`，
+   展示活动任务、速度、文件/字节、暂停/恢复/取消，并可直接打开任务中心。
+6. **验证**：`pnpm typecheck` ✅、`pnpm test` ✅ **67 passed**、`pnpm build` ✅、
+   `pnpm tauri build --bundles app` ✅；`cargo fmt --check` ✅、
+   `cargo clippy --workspace --all-targets -- -D warnings` ✅、
+   `cargo test --workspace` ✅ **740 passed / 0 failed / 3 ignored**；
+   plugin-sdk 契约测试 ✅ **14 passed**。产物
+   `target/release/bundle/macos/SNGL.app`，主可执行 **10,684,960 B ≈ 10.19 MiB**。
+   实机清理了测试期间写入的服务器地址与卡片尺寸；应用当前停留在首页。
+
+**2026-10-31（视频壁纸消失修复：DOM canvas 合成 + 实时抽帧）**：
+
+1. **根因**：实机诊断确认 `video ready=4 / paused=false / currentTime` 持续推进，
+   画布抽帧也能读取帧，但 WKWebView 的原生 `<video>` 合成面始终透明；把视频层
+   临时涂红可见整层存在，说明不是被卡片或遮罩盖住。Noctis 新增的
+   `contain/isolation/transform` 与不透明根背景均不是充分条件，原生视频合成在
+   当前 WebView 下不可依赖。
+2. **渲染改为 DOM canvas**：`BackgroundVideo` 保留隐藏的 `<video>` 负责解码，
+   新增 `.app-video-canvas`，用 2D canvas 按 `cover` 把当前帧绘制到窗口分辨率
+   （DPR ≤1.5，约 30fps）。canvas 与卡片/文字同属普通页面绘制路径，不再依赖
+   原生视频平面，因此路由切换、打开设置/实例页、切换窗口后都不会消失。
+3. **实时抽帧**：自适应主题对播放中的壁纸不再创建第二个 4K 隐藏视频并 seek，
+   改为从正在播放的可见视频按 420ms 间隔取 5 帧；暂停/未就绪时才回退到隐藏
+   clone，避免两个 4K 解码器争抢硬件。
+4. **保活**：仍保留窗口 `focus`/`visibilitychange`/`pageshow` 恢复；新增基于
+   `requestVideoFrameCallback` 的播放看门狗，连续 2.6s 无合成帧时重载同一资源，
+   连续失败则重挂 `<video>`。
+5. **验证**：`pnpm typecheck` ✅、`pnpm test` ✅ **59 passed**、`pnpm build` ✅、
+   `pnpm tauri build --bundles app` ✅。实机 1280×760 连续播放 45s、切换
+   Finder/启动器、首页→设置→实例→首页后画面持续更新；纯背景开关测试后已恢复为
+   原来的 `0`。最终产物 `target/release/bundle/macos/SNGL.app`，主可执行
+   **10,635,248 B ≈ 10.14 MiB**。本轮未改 Rust，沿用上一轮
+   `cargo fmt/clippy/test`（**733 passed / 0 failed / 3 ignored**）门禁结果。
+
+**2026-10-31（外观玻璃、圆角与壁纸保活修复）**：
+
+1. **主框体圆角**：`html` / `body` 不再绘制不透明底色，窗口圆角由 `.app-root`
+   的 18px 圆角真正裁切；主页 `.app-body` 从直角恢复为 18px。
+2. **卡片四角圆角**：移除所有卡片左上角 3px 的斜角规则，`.soft-card`、
+   `.soft-launch-card`、`.rm-card`、`.instance-card`、`.loader-card`、`.skin-panel`
+   统一使用 `--rmccc-radius-card`（14px）。
+3. **视频壁纸保活**：窗口隐藏时不再主动 `pause()`；窗口 `focus`、
+   `visibilitychange` 与 `pageshow` 时恢复播放，`readyState` 不足时重新加载同一
+   资源并做一次 180ms 重试，图片壁纸激活时仍卸载视频层。
+4. **玻璃真正生效**：主面板使用 `--rmccc-panel-alpha`、卡片使用
+   `--rmccc-card-alpha`，卡片使用 `--rmccc-card-blur`；此前设置页写入的
+   `--soft-*` 变量没有任何宿主样式消费，是“滑块失效”的根因。
+5. **壁纸下的模糊度**：图片/视频壁纸激活时主页卡片取设置值的约 55%；设置页
+   新增「主面板卡片模糊度」0–40 px 滑块。
+6. **兼容**：继续发布旧 `--soft-*` 变量给第三方皮肤，但宿主只消费
+   `--rmccc-*`。
+7. **验证**：`pnpm typecheck` ✅、`pnpm test` ✅ **59 passed**、`pnpm build` ✅、
+   `pnpm tauri build --bundles app` ✅；`cargo fmt --check` ✅、`cargo clippy
+   --workspace --all-targets -- -D warnings` ✅、`cargo test --workspace` ✅
+   **733 passed / 0 failed / 3 ignored**。实机 1280×760 锁屏前确认卡片 15% 透明度
+   下的玻璃、四角圆角与视频 `ready=4 paused=false`；随后 macOS 锁屏，最终主框体
+   外圆角无法再次截图，已用构建 CSS 确认 `html/body` 透明、`.app-root` 18px 圆角。
+   产物 `target/release/bundle/macos/SNGL.app`，主可执行 **10,635,248 B ≈ 10.14 MiB**。
+
+**2026-10-31（主题系统 v3 · Noctis：默认动态背景 / 强调色角色 / 自适应 v2）**：
+
+1. **视觉语言整体替换**：以 Noctis（深墨 chrome + 墨色玻璃 + 圆角卡片 + 单焦点
+   强调色）替换 Chromatic Voxel。accent 只用于主操作、当前导航、焦点和单个关键
+   数字；secondary 只进入背景/启动面板氛围；tertiary 只用于粒子。旧的
+   `visual-system.css` 与 `soft-dashboard.css` 删除，新增 `theme-core.css`、
+   `ambient-stage.css`、`home-stage.css`。
+2. **默认动态背景**：新增 `AmbientStage`，在没有用户图片/视频壁纸且没有 v2 app
+   背景时，按主题渲染渐变 wash、缓动 veil、地平线、透视网格和主题粒子；用户壁纸
+   存在时不创建。主题场景由 `src/theme/presets.ts` 派生，未知插件主题从 accent
+   确定性生成，不扩展 8-token 主题 schema。
+3. **主页重构**：hero 改为左侧大「当前冒险」+ 右侧启动面板/状态条的纵向结构；
+   启动面板使用深墨底 + accent 主按钮，底部 dock 保持深墨，激活项只保留一个 accent。
+   卡片统一为四角 14px 圆角，细描边、低对比阴影。
+4. **内置主题更新**：8 套内置主题的 8 个颜色令牌更新为 Noctis 调色板（键名不变）：
+   Dark·曜石 / Light·晨雾 / 林间 / 深海 / 熔岩 / 樱吹雪 / 纸墨 / 晴空。
+5. **自适应 v2**：图片采样整图 + 中心 + 左上/右下 4 区域；视频采样时间轴
+   8%/30%/52%/74%/90% 5 帧 + 可见当前帧；多帧 OKLab k-means（k=6）后按
+   `coverage^0.72 × 色度 × 明度平衡` 选代表色，secondary/tertiary 至少相隔 30°；
+   dark/light 跟随当前主题，关键对比度 ≥4.5:1。调色板键升级
+   `rmccc.adaptivePalette.v2`，v1 自动失效。
+6. **缺陷修复**：关闭自适应时，`--rmccc-*` 基础变量此前会被一并清除，导致主题
+   变成黑字透明底；现在会同步恢复当前主题 token，并在 `theme-core.css` 增加安全
+   默认值。主题切换时先应用新 token 再关闭自适应。
+7. **验证（本轮实测）**：
+   - `cargo fmt --all -- --check` ✅；
+   - `cargo clippy --workspace --all-targets -- -D warnings` ✅；
+   - `cargo test --workspace` ✅ **733 passed / 0 failed / 3 ignored**；
+   - `pnpm typecheck` ✅、`pnpm test` ✅ **59 passed**、`pnpm build` ✅；
+   - `pnpm tauri build --bundles app` ✅，产物
+     `target/release/bundle/macos/SNGL.app`；主可执行 **10,635,248 B ≈ 10.14 MiB**
+     （阈值 20 MiB）。
+8. **视觉检查**：实机 1280×760 验证无壁纸浅色主页、主题卡、设置/实例/下载页、
+   深色启动面板与底部 dock；验证自适应开关、主题切换和无壁纸 fallback。自适应
+   实机日志为 `frames=6 samples=18816 mode=light confidence=0.99 readable=true`。
+9. **边界**：粒子为纯 CSS，关闭动态效果后只保留静态渐变/少量剪影；视频多帧采样
+   会短暂创建隐藏 video 并 seek，失败时退回当前帧；Windows/Linux 的
+   `requestVideoFrameCallback` 与色彩表现仍待平台实测。
+
+**2026-10-31（图片壁纸：静态图片 / 视频上方图层 / 只读上传）**：
+
+1. **外观新增图片壁纸**：设置 → 外观新增「图片壁纸」卡片，位于「动态背景视频」
+   上方。选择本地 PNG / JPEG / WebP / GIF / BMP / AVIF（≤32 MiB）后立即作为
+   全窗口背景；遮罩 0–80%，可替换/移除，文件只读，不复制、不转码、不上传。
+2. **新增 IPC（123 → 125）**：`dialog_pick_background_image` 负责原生选择与
+   路径规范化；`background_image_prepare` 校验普通文件、扩展名、非空与 32 MiB
+   上限，并只对选中文件授予 asset-protocol 访问。未引入图像解码依赖，解码和
+   `object-fit: cover` 缩放全部由系统 WebView 完成。
+3. **图层与互斥**：`BackgroundImage` 在 `BackgroundVideo` 之后渲染，位于视频层
+   之上、所有前景内容之下；图片与动态视频互斥，启用/选择其一会关闭另一个，
+   图片激活时视频停止准备与解码。遮罩使用 `--image-dim`，静态图片不受
+   「动态效果」开关影响，也不触发视频性能降级模式。
+4. **自适应取色**：用户图片优先于用户视频和主题媒体采样；图片 `onLoad` 后
+   触发一次重采样，保证外壳配色跟随最上层可见壁纸。
+5. **验证（本轮实测）**：
+   - `cargo fmt --all -- --check` ✅；
+   - `cargo clippy --workspace --all-targets -- -D warnings` ✅；
+   - `cargo test --workspace` ✅ **732 passed / 0 failed / 3 ignored**
+     （新增图片扩展名、非法扩展名、空文件、超 32 MiB 4 条）；
+   - `pnpm typecheck` ✅、`pnpm test` ✅（54）、`pnpm build` ✅；
+   - `pnpm tauri build --bundles app` ✅，产物
+     `target/release/bundle/macos/SNGL.app`；strip 后主可执行
+     **10,635,248 B ≈ 10.14 MiB**（阈值 20 MiB）。
+6. **边界**：图片能否解码取决于系统 WebView 对该格式的支持；超过 32 MiB 的
+   图片会被拒绝，移动/删除原文件后需要在设置中重新选择；GIF 按图片层渲染，
+   不参与视频的硬件解码/代理缓存链路。
+7. **文档**：更新 [ADR-020](adr/ADR-020-native-resolution-wallpaper-engine.md)、
+   `ARCHITECTURE.md` §11/§26、`ui-design/08_SETTINGS.md`、`ui-design/11_IPC_COVERAGE.md`
+   与 `ui-design/13_NOTES.md`。
+
+**2026-10-31（动态壁纸引擎重做：原生分辨率 HEVC / 单视频生命周期 / 显式失败）**：
+
+1. **架构替换**：新增 [ADR-020](adr/ADR-020-native-resolution-wallpaper-engine.md)，
+   取代 ADR-017 的 1080p H.264 代理。系统 WebView 继续负责解码与合成；公共策略、
+   缓存和校验收敛到 `rmccc-platform::video`，不引入 FFmpeg/mpv 或原生纹理运行时。
+2. **原生画质与时序**：H.264 ≤4096×2304 和 HEVC 直接播放；超规格 H.264 一次性
+   转换为同分辨率 HEVC。宽高、有理数帧率和总帧数必须精确一致，时长容差仅 200ms；
+   MP4 `stts`/`stsz` 样本数不一致时拒绝处理。缓存配方升级为 `hevc-native-timing-v1`。
+3. **平台边界**：macOS 使用 `avconvert PresetHEVCHighestQuality`；Windows 使用 WinRT
+   `MediaTranscoder::CreateHevc` 并强制硬件加速。转换、探测或校验失败直接返回 UI，
+   不再静默回退可能软解的超规格原片。
+4. **播放链简化**：`background_video_prepare` 合并准备与 asset scope 授权，删除
+   `background_video_allow`，IPC 总数 123；前端只保留一个常驻 `<video>`、可见性
+   恢复和循环边界，删除海报/IndexedDB、代理升级、watchdog 与路由补偿。
+5. **本机实测**：超 4K 短片 `4126×2596 / 30000/1001 / 12 帧 / 0.400400s` 转换为
+   同参数 HEVC，3 项真实 MP4 集成测试通过；`ffmpeg -hwaccel videotoolbox` 解码无错误。
+   `cargo fmt`、`cargo clippy --workspace --all-targets -- -D warnings`、
+   `cargo test --workspace`、`pnpm typecheck`、`pnpm test`（54）、`pnpm build` 全部通过。
+6. **交付与限制**：`pnpm tauri build --bundles app` 通过，strip 后主可执行
+   **10,618,656 B ≈ 10.13 MiB**（<20 MiB）。Windows 原生编译、HEVC 转码与 WebView2
+   GPU 实测仍为 deferred / release-blocked，依赖本机编解码器、GPU 和驱动。
+
+**2026-10-31（实例配置界面重写：HMCL 紧凑行 / 分组继承 / 内存占用条）**：
+
+1. **整页重写**：设置 tab 从 `InstanceDetail.tsx` 中约 600 行的字段堆叠表单拆出为
+   `src/components/instance-settings/`；按 HMCL GameSettingsPage 的「分区标题 →
+   卡片 → 左标签 / 右控件」组织，标准行最小高 52px、内边距 10×16、控件基准宽
+   300px，长文本改为整行，≤760px 自动上下堆叠。内容最大宽 780px。
+2. **控件按语义选择**：Java 用 4 段模式（自动 / 指定主版本 / 已检测 / 自定义）+
+   对应内联编辑器；内存用滑条 + 数字框 + 4px 系统/实例占用条；窗口用模式分段 +
+   常用分辨率下拉 + 宽高数字框；快速进入用分段 + 单行输入；优先级/隔离用下拉；
+   JVM/参数/Agents/本地库/调试收进「高级」折叠区。
+3. **分组继承**：每张卡一个 `RmInheritLock`，编辑组内任意项自动把整组字段写入
+   `override_properties` 并冻结当前生效值；锁回继承时整组移除并回填全局值。
+   不再出现“先点锁、控件全灰”的旧交互。
+4. **保存链路**：直接使用 ts-rs 的 `InstanceSettingsPatch`，绕过 `InstanceView`
+   旧适配器（旧适配器会丢失 `max_memory_mb` 等字段名）；离散控件立即保存，
+   文本/数字 420ms 防抖，切 tab 时 flush；底部悬浮状态显示自动保存/保存失败。
+5. **系统内存**：`rmccc-platform` 新增 `SystemMemory` 能力，macOS 用
+   `sysctl hw.memsize` + `vm_stat` 解析总/可用内存；新增 `system_memory` IPC
+   （124 条）。不可用平台只显示实例分配，不伪造系统占用。
+6. **只暴露实际生效字段**：`auto_memory`、`launcher_visibility`、
+   `graphics_backend` 等尚未接入启动链路的字段不进入 UI，避免假控件。
+7. **验证（本轮实测）**：
+   - `cargo fmt --all -- --check` ✅；
+   - `cargo clippy --workspace --all-targets -- -D warnings` ✅；
+   - `cargo test --workspace` ✅ **726 passed / 0 failed / 3 ignored**
+     （新增 platform `system` 3 条：vm_stat 解析、坏输入、可用量钳制）；
+   - `pnpm typecheck` ✅、`pnpm test` ✅（54，新增 `instanceSettings` 10 条）、
+     `pnpm build` ✅；
+   - `pnpm tauri build --bundles app` ✅，产物
+     `target/release/bundle/macos/SNGL.app`；主可执行 **10,635,280 B ≈ 10.14 MiB**
+     （阈值 20 MiB）。
+8. **文档**：重写 `ui-design/04_INSTANCE_DETAIL.md` §6–§7、§9–§12，记录控件映射、
+   尺寸、分组继承、内存条与验收要点。
+
+**2026-10-30（任务中心彻底重构：统一任务模型 / 完整安装过程 / 控制面收敛）**：
+
+1. **统一任务 crate**：新增 `crates/rmccc-tasks`（`TaskRegistry` / `TaskHandle` /
+   `TaskSnapshot` / `TaskBoard`）。任务由编排层同步创建，id 在命令返回前确定；
+   下载批次、loader 阶段、整合包阶段都变成任务的加权步骤，不再各起一行。
+2. **完整过程展示**：快照包含 `steps[]`（pending/running/done/failed/skipped）、
+   `currentStep`、总体加权进度、文件/字节计数、EMA 速度、ETA、当前文件、最近 8 行
+   细节；`task_log` 提供每任务 240 行完整安装器日志。任务中心重做为“任务卡 +
+   步骤轨道 + 可展开过程/日志/警告”。
+3. **控制面收敛**：删除 `download_cancel/pause/resume` 与 `modpack_cancel`，新增
+   `task_list/get/log/pause/resume/cancel/clear_history`；暂停/取消只认 `task_id`，
+   取消经 `cancelling` 由 worker 落定终态。MCP `downloads.control` 改为 `tasks.control`。
+4. **事件收敛**：删除 `download://progress/complete/error`、`modloader://progress`、
+   `modpack://progress` 与 `DownloadProgressPayload`/`ModpackProgressPayload`/
+   `ThrottledEmitter`；只剩 `task://updated`（100ms/任务节流）与 `task://sync`
+   （广播落后/刷新整板恢复）。
+5. **所有入口接入**：`instance_install`、`modpack_install`、`modloader_install`、
+   `mod_install`、`mods_apply_plan`、`instance_repair` 均创建任务；`mod_install`
+   增加流式字节进度。`instance_install` 返回 `TaskStart`，前端不再合成 pending 行/
+   按 batch id re-key。
+6. **前端**：删除 `downloadsStore`、`modloadersStore`；`modpacksStore` 只保留
+   inspect/start；新增 `tasksStore`（活动快照 + 最近完成 + 完成副作用集中处理）。
+   Home/TitleBar/Download/InstanceDetail 全部迁移到任务快照。
+7. **文档**：新增 [ADR-019](adr/ADR-019-unified-task-center.md)，更新 `ui-design/00`、
+   `05`、`10`、`11`、`ARCHITECTURE.md`、`DEVELOPMENT_PLAN.md`。
+8. **验证（本轮实测）**：
+   - `cargo fmt --all -- --check` ✅；
+   - `cargo clippy --workspace --all-targets -- -D warnings` ✅；
+   - `cargo test --workspace` ✅ **723 passed / 0 failed / 3 ignored**（新增
+     `rmccc-tasks` 6 条单测：加权进度、完成入 history、暂停动作、取消标志、
+     日志环形缓冲、终态忽略迟到进度）；
+   - `pnpm typecheck` ✅、`pnpm test` ✅（44）、`pnpm build` ✅；
+   - `pnpm tauri build --bundles app` ✅，产物
+     `target/release/bundle/macos/SNGL.app`；strip 后主可执行 **10,618,720 B ≈ 10.13 MiB**
+     （阈值 20 MiB）。
+
+**2026-10-30（动态壁纸 v4：循环播放 / 代理帧率帧数一致 / 跨平台硬解架构）**：
+
+1. **循环播放**：`loop` 同时保留模板属性与 DOM 属性；`playVideo()` 在 `ended`
+   时先归零 `currentTime`，`onEnded` 与 watchdog 都走 `restartPlayback()`。
+   这覆盖 WKWebView 在代理 `src` 切换后不重播、停在末帧的路径。
+2. **代理帧率/帧数**：新增纯 Rust MP4 `moov` 探测（`rmccc-platform::video`），
+   解析 `tkhd/mdhd/hdlr/stsd/stts/stsz` 得到有理数帧率与总帧数。代理改回
+   **H.264**（Windows 不依赖 HEVC 扩展），目标 1920×1208，保持宽高比；
+   转码后用同一解析器校验：帧数必须完全相等、帧率误差 ≤0.02 fps、时长误差
+   ≤200 ms，否则删除代理并回退原视频。实测源 4126×2596 / 30000/1001 /
+   3840 帧 / 128128 ms → 代理 1920×1208 / 30000/1001 / 3840 帧 / 128128 ms，
+   转码 144.8s。v3 记录的“HEVC 30fps”是 ffprobe 显示取整；实际 v3 代理也是
+   30000/1001 / 3840 帧，本轮把该性质变成显式契约与校验。
+3. **跨平台架构**：`/usr/bin/avconvert`、`#[cfg(target_os = "macos")]` 与缓存
+   逻辑从 Tauri 命令移入 `rmccc-platform::video`，通过 `Platform::video`
+   注入。Tauri 命令只做路径校验、MP4 探测和 `spawn_blocking`。Windows 后端用
+   WinRT `MediaTranscoder` 并开启 `HardwareAccelerationEnabled`，输出 H.264
+   1080p；Linux/其它返回 `UnsupportedPlatform` 并回退。详见
+   [ADR-017](adr/ADR-017-cross-platform-video-decode.md)。
+4. **Windows 播放路径**：WebView2（Chromium + Media Foundation）对 1080p
+   H.264 走 D3D11/DXVA 硬解，不需要 HEVC Video Extensions；代理转码优先用
+   GPU 编码器，没有时软件编码仍产出标准 H.264。Windows 后端尚未在本机原生
+   编译/实测，按项目规范记 deferred（原生 Windows CI 触达后销账）。
+5. **接口**：`background_video_prepare` 从 `(path, width, height)` 改为
+   `(path)`；前端 `backgroundMedia.prepare(path)` 同步。缓存键加入配方
+   `h264-1080-fps-v3`，旧 HEVC 缓存不会被命中。
+6. **验证（本轮实测）**：
+   - 纯 Rust MP4 探测：源 `4126×2596 / 30000/1001 / 3840 帧 / 128128 ms / h264`；
+   - `avconvert Preset1920x1080`：`1920×1208 / 30000/1001 / 3840 帧 / 128128 ms / h264`，
+     转码 144.8s；`CachedVideoProxy` 端到端（缓存 + 校验）247.5s 通过；
+   - 循环：临时把播放位置跳到 `duration - 1.2s`，日志实测 `restart t=63.97` 后
+     `tick t=1.55`，确认回到开头继续播放；诊断代码已移除；
+   - 失焦恢复：真实 `.app` 日志确认 `onFocusChanged` 在窗口重新获得焦点时
+     `resume`，并用 `sawWindowFocus` 忽略启动期 false 事件，启动视频正常播放；
+   - Windows 后端：代码已按 WinRT `MediaTranscoder` + 硬件加速落地；本机按项目
+     规范不做 Windows 实测，原生 Windows CI 编译/运行前记为 deferred；
+   - 门禁：`pnpm typecheck` ✅、`pnpm test` ✅（44）、`pnpm build` ✅（主 chunk
+     268.26 kB / gzip 88.96 kB）、`cargo fmt --all -- --check` ✅、
+     `cargo clippy --workspace --all-targets -- -D warnings` ✅、
+     `cargo test --workspace` ✅、`pnpm tauri build --bundles app` ✅；strip 后主
+     可执行 **10,072,256 B ≈ 9.61 MiB**（阈值 20 MiB）。
+
+**2026-10-30（动态壁纸 v3：全分辨率海报 / 失焦恢复 / 4K 硬解代理）**：
+
+1. **全分辨率海报**：不再使用 480px localStorage data URL。首帧按 `videoWidth ×
+   videoHeight`（当前视频 4126×2596）绘制为 JPEG Blob，存入 IndexedDB
+   `rmccc-wallpaper/posters`，用 object URL 显示；旧 480px key 会被清理。实测
+   WebKit IndexedDB 中海报为 **4126×2596、1.0 MB**。这样即使视频暂停/合成层短暂
+   冻结，看到的也是源分辨率静态帧，而不是糊成 480p 的缓存图。
+2. **切出窗口再回来不播放**：`document.visibilityState` 在 WKWebView 从 Space/其他
+   App 返回时可能保持 hidden。改为独立的 `suspended` 状态：`blur/hidden` 暂停，
+   `focus/visible/pageshow` 清除并 `play()`；watchdog 在 `visible + document.hasFocus()`
+   时自愈；恢复时做两次合成层 opacity nudge。暂停用 `preload` 保留解码器状态。
+3. **真正的硬解**：源视频是 H.264 **4126×2596**，超过 VideoToolbox 单轴 4096 限制；
+   `ffmpeg -hwaccel videotoolbox` 实测报 `Failed setup for format videotoolbox_vld`，
+   确认之前是软件解码。新增 `background_video_prepare`：用 macOS 内置
+   `/usr/bin/avconvert` 一次性生成 **HEVC 1920×1208 @30fps** 代理，存放在
+   `{data_dir}/cache/background-video/<hash>.mp4`；实测代理 147 MB、生成耗时
+   115.8s，`ffmpeg -hwaccel videotoolbox` 验证可硬解。前端在 `loadedmetadata`
+   检测超限后暂停原片、显示全分辨率海报/准备提示，代理就绪后切换播放；已缓存代理时
+   跳过原始 4K 解码（启动日志只多一次 proxy allow，无重新转码）。
+4. **资源与清理**：代理只在超限时生成；`storage_clean_cache` 会清理该缓存目录；
+   后端启动 prepare 前清理上次中断留下的 `.tmp.mp4*`（含 avconvert `.sb-*` 侧车）。
+5. **门禁**（本机实测）：`pnpm typecheck` ✅、`pnpm test` ✅（44）、`pnpm build` ✅
+   （主 chunk 267.56 kB / gzip 88.65 kB）、`cargo fmt --all -- --check` ✅、
+   `cargo clippy --workspace --all-targets -- -D warnings` ✅、`cargo test --workspace` ✅、
+   `pnpm tauri build --bundles app` ✅；strip 后主可执行 **10,072,192 B ≈ 9.61 MiB**
+   （阈值 20 MiB）。真实 `.app` 验证：首次代理生成 115.8s / 147 MB，之后启动只
+   allow 原视频 + 代理（无重复转码）；`ffprobe` 代理为 HEVC 1920×1208 30fps，
+   `ffmpeg -hwaccel videotoolbox` 通过；IndexedDB 海报为 4126×2596 / 1.0 MB。
+
+**2026-10-29（动态壁纸：GPU 合成 + 路由恢复 + 首帧预热）**：
+
+1. **CPU 占用定位**：本地 MP4 本身由 WKWebView 解码，但视频上方每帧重算的整页
+   `backdrop-filter`（非 Home 页 `app-body` 的 28px 全屏模糊）+ 卡片 38px 模糊 +
+   `scale(1.005)` 逐帧重采样，才是主要合成/CPU 成本；在路由切换重建 layer tree 时还可能
+   留下冻结的 backdrop 快照，表现为视频不再重绘。
+2. **GPU/合成层**：`.app-video-layer` 独立合成（`contain`、`isolation`、
+   `translate3d(0,0,0)`），video 去掉逐帧 scale、加 `backface-visibility`/`will-change`；
+   不再在视频路径上放 filter/animation。
+3. **按需玻璃**：`<html data-video-wallpaper="on">` 时：非 Home 页取消整页 live blur
+   （改为 0.8 静态底色），Home 卡片模糊按 `--soft-card-opacity` 压到 ≤12px，
+   dock/titlebar 12px；关闭壁纸或动效后恢复原玻璃。设置页增加说明。
+4. **路由稳定**：视频元素不再因页面切换重建；`visibilitychange` / `focus` / `pageshow`
+   恢复播放；路由 pathname/search/hash 变化后做两次合成层 nudge；watchdog 每 1.6s 检查
+   `currentTime`/`readyState`，停滞时做有 4s 冷却的 `load()` 恢复，失败重试最多 2 次。
+5. **首帧速度**：`main.tsx` 在 render 前启动 asset-scope grant + preload；上次首帧缓存为
+   480px JPEG poster，并用独立 `<img>` 垫底。窗口不再等待视频解码（避免增加启动延迟），
+   有缓存时首帧海报立即显示；首次无缓存时先显示现有渐变，播放成功后写入缓存，下次启动不再弹出。
+   关闭/切换不会重新申请 asset grant；同路径重新启用直接走已缓存的 URL。
+6. **门禁**（本机实测）：`pnpm typecheck` ✅、`pnpm test` ✅（44）、`pnpm build` ✅
+   （主 chunk 263.82 kB / gzip 87.36 kB）、`cargo fmt --all -- --check` ✅、
+   `cargo clippy --workspace --all-targets -- -D warnings` ✅、`cargo test --workspace` ✅、
+   `pnpm tauri build --bundles app` ✅；strip 后主可执行 **10,055,568 B ≈ 9.59 MiB**
+   （阈值 20 MiB）。另修复 `vault::test_encrypt_payload_is_versioned` 的随机误报
+   （旧断言 `contains("v\"")` 会命中 base64 密文的尾部，现检查完整明文 JSON）。
+   浏览器演示实测：Home → 实例 → 下载 → Home 连续切换期间
+   `video.currentTime` 持续推进、`data-video-wallpaper` 保持 on、刷新后 poster 命中。
+   真实 `.app` 冷启动日志：`background_video_allow` 在启动后 1.98s 完成，首帧采样在
+   3.36s 完成；WebKit localStorage 中 `rmccc.backgroundPoster.v1` 已落盘 86,626 B。
+
+**2026-10-29（下载器自定义实例名修复 + 实例文件夹 HMCL 化）**：
+
+1. **下载无进度定位**：`logs/rmccc.2026-10-29.log` 21:17（UTC 13:17）出现
+   `Instance install failed: Version not found: 测试0`。向导把用户输入的实例名
+   `测试0` 当成 MC 版本号传给 `install_game`，在第一个下载批次之前就失败；同时后台
+   `download://error` 只带空 `batch_id`、没有 `profile_id`，前端无法关闭 pending 任务，
+   任务中心因此一直停在 0/0 的不确定进度。
+2. **安装链路修复**：新增 `pipeline::install_game_into(source_version, target_id)`，
+   来源版本用于解析元数据、target 用于落盘并改写版本 JSON `id`；无 loader 时直接装到
+   `versions/{实例名}`。有 loader 时先把原版装到 `versions/{mcVersion}`（保证 loader
+   父版本可解析），loader 产物成功后再改名为向导实例名。loader 阶段复用原下载任务显示
+   阶段文案，不再出现「原版 100% 后长时间无变化」。
+3. **事件契约**：`download://progress` 增加 `profile_id`；`complete/error` 同时携带
+   `batch_id` + `profile_id` + `key`。失败即使发生在首批下载前，前端也能按 profile 关闭
+   pending 行并展示错误。去掉重复的 progress 事件发射。
+4. **实例文件夹**：新增 `instance_reveal(key, folder)`（受限枚举，拒绝任意路径；
+   缺失叶子目录先创建）。实例概览改为 HMCL 同款 10 个文件夹按钮（运行目录 / 模组 /
+   资源包 / 世界 / 原理图 / 光影包 / 截图 / 配置 / 日志 / 崩溃报告），点击直接打开；
+   侧栏「浏览」改为同款图标菜单（body portal 避免 overflow 裁切）；设置页隔离卡片
+   的运行目录改为「实例运行文件夹」按钮。移除路径复制对话框与复制按钮。
+5. **门禁**（本机实测）：`pnpm typecheck` ✅、`pnpm test` ✅（44）、`pnpm build` ✅、
+   `cargo fmt --all -- --check` ✅、`cargo clippy --workspace --all-targets -- -D warnings` ✅、
+   `cargo test --workspace` ✅、`pnpm tauri build --bundles app` ✅；strip 后主可执行
+   **10,055,568 B ≈ 9.59 MiB**（阈值 20 MiB）。截图：`target/ui-verify/instance-folders.png`、
+   `instance-browse-menu.png`、`instance-settings-folder.png`。
 
 **2026-10-28（只留主题+卡片的收益评估）**：
 
@@ -1446,3 +1830,47 @@ export CARGO_HOME=$HOME/.cargo
 - 未运行 `pnpm tauri dev` / `pnpm build`，GUI 端到端表现未验证。
 - 未做任何联网行为验证（版本下载、Modrinth、MS 登录）。
 - `failing` 的 7 项测试中，判定"测试过期"的 4 项依据是 `ErrorCode` 的 `rename_all = "snake_case"` 与生成的 `types.ts` 契约；若产品口径要求 PascalCase，则应改生产代码而非测试。
+
+---
+
+## 10. 2026-10-30：整合包安装（HMCL 1:1 本地功能面）
+
+### 交付
+
+- 新 crate `rmccc-modpack`：
+  - 七种格式解析：CurseForge、Modrinth、MCBBS、Server、MultiMC/Prism、HMCL 导出、手动 `.minecraft` zip；
+  - ZIP 读取：UTF-8→GBK 文件名回退、zip-slip/symlink/控制字符拒绝、manifest 16 MiB 上限；
+  - overrides 解压 + HMCL `ModpackInstallTask` 的用户修改保留语义；
+  - CurseForge `projectID/fileID` 元数据解析（`CURSEFORGE_API_KEY`，无 key 走 HMCL 已用的只读镜像）；
+  - `modpack.cfg`（`ModpackConfiguration`）读写与 provider manifest 落盘。
+- `rmccc-core::modpack`：
+  - inspect + 安装编排（原版 → loader → 额外库 → settings/icon → overrides → 文件 → metadata）；
+  - 手动整合包解压到 `{data_dir}/externalgames/{name}` 并注册为外部游戏目录；
+  - `modpack://progress` 阶段/计数事件与协作取消。
+- Tauri：`modpack_inspect` / `modpack_pick_file` / `modpack_install` / `modpack_cancel`（IPC 116 → 120）。
+- 前端：
+  - App 根节点拖放 overlay；`ModpackInstallDialog` 向导（名称/目录/格式/loader/警告/图标）；
+  - 下载中心「整合包」页签从占位卡改为可用入口 + 进行中/已安装列表；
+  - 任务中心整合包进度行与取消按钮；`stores/modpacks.ts` 事件驱动状态。
+
+### 设计记录
+
+- [ADR-018](adr/ADR-018-modpack-installation.md)：格式识别顺序、版本即实例目标、
+  overrides 更新语义、下载策略、设置/图标映射、IPC 与拖拽边界。
+- [ARCHITECTURE.md](ARCHITECTURE.md) §2/§3.1/§11 已同步新 crate、core 模块与 4 条 IPC。
+
+### 验证（2026-10-30 本机）
+
+- `cargo fmt --all -- --check` ✅
+- `cargo clippy --workspace --all-targets -- -D warnings` ✅
+- `cargo test --workspace`：**717 passed / 0 failed**（44 个 test binary / doc-test）
+- `pnpm typecheck` / `pnpm test`（44）/ `pnpm build` ✅
+- `pnpm tauri build --bundles app` ✅；`SNGL.app` 主可执行 **10,552,400 B ≈ 10.06 MiB**（< 20 MiB，ADR-011）
+
+### 已知边界
+
+- 整合包更新 UI 未暴露（overrides 更新保留语义已在 `extract_overrides` 落地）；
+- 一次只安装一个主 loader（多 loader 包给出 warning；Forge/NeoForge 官方安装器不支持叠加）；
+- 不支持整合包导出、在线整合包市场、MultiMC 未知组件的无损 JSON-Patch 变换；
+- Curse 无 API key 时依赖 `mod.mcimirror.top` 只读镜像（与 HMCL BMCLAPI 回退规则一致）；
+- 非 macOS 的 GUI 拖放/安装实测按平台指南 §1.4 记为 deferred。

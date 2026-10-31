@@ -11,10 +11,20 @@
 > 插件卡 ErrorBoundary、下载行取消、无实例引导、粘贴版本号、正版换肤入口
 > 已回捞并入 hero 版。ADR-005 的主题令牌体系不受影响。
 >
-> **视觉更新（2026-10-26 · Chromatic Voxel）**：hero 双栏与卡片编辑能力保持不变；
-> 空白视觉区增加漂浮体素方块、三色轨道环、透视网格与品牌标记，卡片补充常驻模块标题。
-> 背景仍按主题呈现叶落/花瓣/气泡/火星/星辰等意象，新增装饰色由宿主按主题派生，
-> 不改变主题 JSON、布局存储或启动链路。所有新增图形均为 `aria-hidden` 且不接管输入。
+> **架构更新（2026-10-31 · 卡片系统 v3）**：主页卡片统一到
+> [14_CARD_SYSTEM.md](14_CARD_SYSTEM.md) 的 12 列五档宽度（3/4/6/8/12）与
+> 四档高度（1/2/3/4，92px 行高 + 14px 间隔），布局键改为 `rmccc.softDashboard.v3`，
+> 编辑态支持宽高循环；默认服务器卡改为真实 SLP 查询，启动状态 100% 只在游戏窗口
+> 打开后出现，下载卡与统一任务中心共用同一份 TaskSnapshot。本文下文旧网格尺寸/
+> 布局键作为历史设计保留。
+
+> **视觉更新（2026-10-31 · Noctis / 主题 v3）**：主页改为「左侧大当前冒险 +
+> 右侧启动面板/状态条」的纵向 hero；启动面板是深墨底，accent 只用于主按钮/版本
+> 标签，当前冒险卡与模块保持中性表面。没有用户壁纸时，宿主按主题渲染
+> `AmbientStage`（wash/veil/地平线/网格/粒子）；用户图片/视频壁纸存在时不创建。
+> 卡片统一四角 14px 圆角，去掉每张卡都发光的三色渐变。布局存储键
+> `rmccc.softDashboard.v2`、卡片编辑能力和启动链路不变。图片/视频壁纸激活时
+> 主页卡片模糊度按设置值的约 55% 渲染，卡片仍保持透明玻璃与描边。
 
 ## 1. 设计目标
 
@@ -116,7 +126,7 @@
            └────────────────────────────────────────────┘
 ```
 
-- 数据源：downloadStore（事件驱动，无轮询）；操作 = `download_pause/resume/cancel`。
+- 数据源：tasksStore（`task://updated` 事件驱动，无轮询）；操作 = `task_pause/resume/cancel`。
 - 行点击 → 展开任务中心面板（见 10_TASKS_AND_FEEDBACK）。
 - 后端 P4 未就绪前的过渡：功能由 PageHeader 临时按钮承担，卡片注册后迁移。
 
@@ -162,7 +172,7 @@ PageHeader「编辑布局」进入，与现状能力对齐并按 01 规范化：
 | 账号操作 | `auth_switch_account` / `auth_logout` / `auth_offline_login` |
 | 实例列表 | `profiles.list`（profilesStore） |
 | 版本捷径 | `versions.list` |
-| 下载卡 | downloadStore + `downloads.pause/resume/cancel` |
+| 下载卡 | tasksStore + `task.pause/resume/cancel` |
 
 ## 7. 渐进披露自查
 

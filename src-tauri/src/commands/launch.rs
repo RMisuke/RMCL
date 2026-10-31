@@ -11,8 +11,9 @@
 //! - process group termination for `launch_kill`.
 
 use crate::state::AppState;
+use rmccc_core::pipeline::{ProgressCb, ProgressMsg};
 use rmccc_error::IpcError;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use tauri::Emitter;
 
@@ -26,6 +27,42 @@ const GAME_OUTPUT_CAP: usize = 2000;
 /// one line behind at low rates, and emits are capped at ~10/s at high rates.
 const LOG_FLUSH_LINES: usize = 50;
 const LOG_FLUSH_WINDOW_MS: u64 = 100;
+
+/// Send one launch progress snapshot. Percentages are clamped to 0..=100 and
+/// the frontend additionally enforces monotonicity.
+fn emit_launch_progress(
+    app_handle: &tauri::AppHandle,
+    profile_id: &str,
+    percent: u8,
+    stage: &str,
+    message: impl Into<String>,
+    window_opened: bool,
+) {
+    let _ = app_handle.emit(
+        crate::events::LAUNCH_PROGRESS,
+        crate::events::LaunchProgressPayload {
+            profile_id: profile_id.to_string(),
+            percent: percent.min(100),
+            stage: stage.to_string(),
+            message: message.into(),
+            window_opened,
+        },
+    );
+}
+
+/// Markers that the render thread has created the game window. Minecraft
+/// logs `Backend library: LWJGL` once the render backend is initialised;
+/// `OpenAL initialized` / `Sound engine started` are later fallbacks for
+/// versions whose log format differs. Plain process spawn (`LAUNCH_STARTED`)
+/// must never count as window-ready.
+fn is_window_ready_log(line: &str) -> bool {
+    const MARKERS: &[&str] = &[
+        "Backend library: LWJGL",
+        "OpenAL initialized",
+        "Sound engine started",
+    ];
+    MARKERS.iter().any(|marker| line.contains(marker))
+}
 
 /// Forwards game process events to the UI (HMCL `ProcessListener`).
 ///
@@ -44,6 +81,8 @@ struct TauriProcessListener {
     created: std::time::Instant,
     /// Milliseconds since `created` of the last flush (atomic: sync trait).
     last_flush_ms: AtomicU64,
+    /// Set once the game window readiness marker is observed.
+    window_opened: AtomicBool,
 }
 
 impl TauriProcessListener {
@@ -69,6 +108,18 @@ impl TauriProcessListener {
 
 impl rmccc_launch::ProcessListener for TauriProcessListener {
     fn on_log(&self, line: String, _is_stderr: bool) {
+        if !self.window_opened.load(Ordering::Relaxed) && is_window_ready_log(&line) {
+            self.window_opened.store(true, Ordering::Relaxed);
+            emit_launch_progress(
+                &self.app_handle,
+                &self.key,
+                100,
+                "window-open",
+                "游戏窗口已打开",
+                true,
+            );
+            tracing::info!(key = %self.key, "Game window is ready");
+        }
         if let Some(buf) = self.game_output.get(&self.key) {
             let mut lines = buf.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
             lines.push(line.clone());
@@ -147,6 +198,73 @@ pub async fn launch_start(state: tauri::State<'_, AppState>, key: String) -> Res
         pending: std::sync::Mutex::new(Vec::new()),
         created: std::time::Instant::now(),
         last_flush_ms: AtomicU64::new(0),
+        window_opened: AtomicBool::new(false),
+    });
+
+    // 启动进度：修复阶段来自真实下载回调，Java/进程阶段来自编排边界；
+    // 100% 只由 TauriProcessListener 的窗口就绪日志触发。
+    let progress_key = key.clone();
+    let progress_app = state.app_handle.clone();
+    let progress: ProgressCb = Arc::new(move |msg| match msg {
+        ProgressMsg::Stage(message) => {
+            let (percent, stage) = if message.contains("🚀") {
+                (55, "spawning")
+            } else {
+                (8, "repairing")
+            };
+            emit_launch_progress(
+                &progress_app,
+                &progress_key,
+                percent,
+                stage,
+                message.clone(),
+                false,
+            );
+        }
+        ProgressMsg::Download { progress, .. } => {
+            let total = if progress.total_bytes > 0 {
+                progress.total_bytes
+            } else {
+                progress.total_files.max(1)
+            };
+            let done = if progress.total_bytes > 0 {
+                progress.downloaded_bytes
+            } else {
+                progress.completed_files
+            };
+            let ratio = if total > 0 {
+                (done as f64 / total as f64).clamp(0.0, 1.0)
+            } else {
+                0.0
+            };
+            let percent = 8 + (ratio * 26.0) as u8;
+            emit_launch_progress(
+                &progress_app,
+                &progress_key,
+                percent,
+                "repairing",
+                format!(
+                    "补齐游戏文件 · {}/{} 个文件",
+                    progress.completed_files, progress.total_files
+                ),
+                false,
+            );
+        }
+        ProgressMsg::StageDone(message) => {
+            let (percent, stage) = if message.contains("游戏已启动") {
+                (84, "spawning")
+            } else {
+                (34, "checking")
+            };
+            emit_launch_progress(
+                &progress_app,
+                &progress_key,
+                percent,
+                stage,
+                message.clone(),
+                false,
+            );
+        }
     });
 
     // 新一轮启动：清掉上一轮的捕获输出（进程退出后保留供事后分析）。
@@ -178,8 +296,17 @@ pub async fn launch_start(state: tauri::State<'_, AppState>, key: String) -> Res
             service.get(&key)?
         };
 
+        emit_launch_progress(
+            &state.app_handle,
+            &key,
+            2,
+            "checking",
+            "检查游戏文件",
+            false,
+        );
         // 启动前完整性检查与自动补齐（HMCL checkGameCompletionAsync）。
-        let repaired = rmccc_core::pipeline::ensure_launch_ready(&core, &instance, None).await?;
+        let repaired =
+            rmccc_core::pipeline::ensure_launch_ready(&core, &instance, Some(&progress)).await?;
         if !repaired.is_noop() {
             tracing::info!(
                 key = %key,
@@ -188,12 +315,28 @@ pub async fn launch_start(state: tauri::State<'_, AppState>, key: String) -> Res
             );
         }
 
-        rmccc_core::pipeline::launch_game(&core, &instance, listener, None)
+        emit_launch_progress(
+            &state.app_handle,
+            &key,
+            36,
+            "checking-java",
+            "检测 Java 与启动参数",
+            false,
+        );
+        rmccc_core::pipeline::launch_game(&core, &instance, listener, Some(&progress))
             .await?
             .pid()
     };
 
     state.running_games.insert(key.clone(), pid);
+    emit_launch_progress(
+        &state.app_handle,
+        &key,
+        88,
+        "waiting-window",
+        "游戏进程已启动，等待游戏窗口",
+        false,
+    );
     let _ = state.app_handle.emit(
         crate::events::LAUNCH_STARTED,
         serde_json::json!({ "key": key, "profile_id": key, "pid": pid }),
@@ -234,4 +377,26 @@ pub async fn launch_status(state: tauri::State<'_, AppState>) -> Result<Vec<Stri
         .map(|r| r.key().clone())
         .collect();
     Ok(keys)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_window_ready_log;
+
+    #[test]
+    fn window_ready_markers_are_specific() {
+        assert!(is_window_ready_log(
+            "[Render thread/INFO]: Backend library: LWJGL version 3.3.3+5"
+        ));
+        assert!(is_window_ready_log(
+            "[Render thread/INFO]: OpenAL initialized on device Built-in Audio"
+        ));
+        assert!(is_window_ready_log(
+            "[Render thread/INFO]: Sound engine started"
+        ));
+        assert!(!is_window_ready_log("[main/INFO]: Setting user: Steve"));
+        assert!(!is_window_ready_log(
+            "[main/INFO]: Launching target 'fabricclient'"
+        ));
+    }
 }

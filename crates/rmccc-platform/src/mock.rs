@@ -216,3 +216,16 @@ mod tests {
         assert!(!mock.did_call(&MockCall::OpenUrl("javascript:alert(1)".into())));
     }
 }
+
+/// 测试用物理内存后端（固定 16 GiB / 可用 8 GiB）。
+#[derive(Default)]
+pub struct MockSystemMemory;
+
+impl crate::system::SystemMemory for MockSystemMemory {
+    fn physical_memory(&self) -> Result<crate::system::PhysicalMemory> {
+        Ok(crate::system::PhysicalMemory {
+            total_bytes: 16 * 1024 * 1024 * 1024,
+            available_bytes: 8 * 1024 * 1024 * 1024,
+        })
+    }
+}

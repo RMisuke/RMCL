@@ -153,6 +153,22 @@ pub const CAPABILITIES: &[CapabilitySpec] = &[
         executable: true,
     },
     CapabilitySpec {
+        name: "tasks.read",
+        description: "读取统一任务中心的活动/最近任务快照（已脱敏）",
+        risk: CapabilityRisk::Low,
+        requires_hosts: false,
+        instance_scoped: false,
+        executable: true,
+    },
+    CapabilitySpec {
+        name: "launch.read",
+        description: "读取当前运行中的游戏实例列表",
+        risk: CapabilityRisk::Low,
+        requires_hosts: false,
+        instance_scoped: false,
+        executable: true,
+    },
+    CapabilitySpec {
         name: "downloads.submit",
         description: "创建受控下载任务",
         risk: CapabilityRisk::Medium,

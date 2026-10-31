@@ -46,6 +46,14 @@ pub struct ModInfo {
     pub download_count: u64,
     pub icon_url: Option<String>,
     pub categories: Vec<String>,
+    /// Minecraft versions advertised by the search hit (Modrinth `versions`).
+    /// Empty for sources / older responses that do not expose compatibility.
+    #[serde(default)]
+    pub game_versions: Vec<String>,
+    /// Mod loaders for the search hit. Modrinth exposes these through
+    /// categories (with an optional explicit `loaders` field on mirrors).
+    #[serde(default)]
+    pub loaders: Vec<String>,
 }
 
 /// A specific version of a mod.
@@ -64,6 +72,16 @@ pub struct ModVersion {
     /// SHA1 完整性校验（P3-11）；远端未声明时为 None（跳过校验）。
     #[serde(default)]
     pub sha1: Option<String>,
+    /// ISO-8601 publish timestamp (Modrinth `date_published`).
+    #[serde(default)]
+    pub published: Option<String>,
+    /// Upstream release channel: `release` | `beta` | `alpha`.
+    #[serde(default)]
+    pub version_type: Option<String>,
+    /// Primary file size in bytes, when the source reports it.
+    #[serde(default)]
+    #[ts(type = "number | null")]
+    pub file_size: Option<u64>,
 }
 
 /// Mod dependency.
@@ -110,12 +128,25 @@ pub trait ModSource: Send + Sync {
     /// hashing, then publishes by rename — no full-file memory buffer, and a
     /// hash mismatch can never leave a corrupt jar at `dest` (P1-8 semantics).
     async fn install(&self, version: &ModVersion, dest: &Path) -> Result<()> {
+        self.install_with_progress(version, dest, None).await
+    }
+
+    /// Progress-aware variant of [`Self::install`]. The callback receives
+    /// `(downloaded_bytes, total_bytes)` after every network chunk, so the
+    /// task center can show a real byte bar for single-jar installs.
+    async fn install_with_progress(
+        &self,
+        version: &ModVersion,
+        dest: &Path,
+        progress: Option<&(dyn Fn(u64, Option<u64>) + Send + Sync)>,
+    ) -> Result<()> {
         let url = match &version.download_url {
             Some(u) => u.clone(),
             None => self.get_download_url(&version.id).await?,
         };
 
         let mut response = self.fetch_stream(&url).await?;
+        let total_bytes = response.content_length();
         if let Some(parent) = dest.parent() {
             tokio::fs::create_dir_all(parent)
                 .await
@@ -132,11 +163,16 @@ pub trait ModSource: Send + Sync {
         let mut writer =
             tokio::io::BufWriter::with_capacity(128 * 1024, tokio::fs::File::create(&part).await?);
         let mut hasher = Sha1::new();
+        let mut downloaded: u64 = 0;
         loop {
             match response.chunk().await {
                 Ok(Some(chunk)) => {
                     hasher.update(&chunk);
                     writer.write_all(&chunk).await.map_err(RmcccError::Io)?;
+                    downloaded = downloaded.saturating_add(chunk.len() as u64);
+                    if let Some(progress) = progress {
+                        progress(downloaded, total_bytes);
+                    }
                 }
                 Ok(None) => break,
                 Err(e) => {
@@ -202,6 +238,9 @@ mod tests {
             download_url: Some(url),
             filename: Some("test-mod-1.0.0.jar".into()),
             sha1: None,
+            published: None,
+            version_type: Some("release".into()),
+            file_size: Some(4),
         };
 
         let dest = std::env::temp_dir().join(format!(

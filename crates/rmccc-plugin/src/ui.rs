@@ -95,6 +95,21 @@ pub const BRIDGE_METHODS: &[BridgeMethod] = &[
         timeout_ms: DEFAULT_TIMEOUT_MS,
     },
     BridgeMethod {
+        name: "tasks.list",
+        capability: Some("tasks.read"),
+        timeout_ms: DEFAULT_TIMEOUT_MS,
+    },
+    BridgeMethod {
+        name: "launch.status",
+        capability: Some("launch.read"),
+        timeout_ms: 5_000,
+    },
+    BridgeMethod {
+        name: "server.status",
+        capability: Some("network.request"),
+        timeout_ms: MAX_TIMEOUT_MS,
+    },
+    BridgeMethod {
         name: "network.request",
         capability: Some("network.request"),
         timeout_ms: MAX_TIMEOUT_MS,
@@ -586,6 +601,9 @@ mod tests {
                 "theme.get",
                 "settings.get",
                 "instances.list",
+                "tasks.list",
+                "launch.status",
+                "server.status",
                 "network.request",
                 "llm.chat"
             ]

@@ -6,6 +6,7 @@
 //! encryption or storage paths directly.
 
 use std::sync::Arc;
+use tauri::Emitter;
 use tokio::sync::RwLock;
 
 /// One plugin's logic runtime (ADR-007).
@@ -51,6 +52,9 @@ pub struct AppState {
     /// 都要按 PID 终止进程，短锁克隆后不再依赖 core RwLock。
     pub platform: Arc<rmccc_core::rmccc_platform::Platform>,
 
+    /// 统一任务注册表：所有下载 / 安装事务的唯一事实源。
+    pub tasks: Arc<rmccc_tasks::TaskRegistry>,
+
     /// 进行中的 AI 日志分析（analysis_id → 取消令牌，ADR-013 S2）。
     /// 并发上限见 `commands/ai.rs`；任务结束自摘除。
     pub ai_cancels:
@@ -83,6 +87,30 @@ impl AppState {
         // 平台句柄在 core 移入 RwLock 前克隆（kill 路径免等 core 锁）。
         let platform = core.platform.clone();
 
+        // 任务快照桥：注册表只负责状态，Tauri 层负责把它变成事件。
+        // 事件通道容量有限；一旦前端落后（Lagged），补发整张任务板，
+        // 而不是让某些进度永久丢失。
+        let tasks = Arc::new(rmccc_tasks::TaskRegistry::new());
+        {
+            let bridge = tasks.clone();
+            let emitter = app_handle.clone();
+            tauri::async_runtime::spawn(async move {
+                let mut receiver = bridge.subscribe();
+                loop {
+                    match receiver.recv().await {
+                        Ok(snapshot) => {
+                            let _ = emitter.emit(crate::events::TASK_UPDATED, snapshot);
+                        }
+                        Err(tokio::sync::broadcast::error::RecvError::Lagged(skipped)) => {
+                            tracing::warn!(skipped, "task event bridge lagged; resyncing board");
+                            let _ = emitter.emit(crate::events::TASK_SYNC, bridge.board());
+                        }
+                        Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+                    }
+                }
+            });
+        }
+
         Ok(Self {
             core: Arc::new(RwLock::new(core)),
             http_client,
@@ -91,6 +119,7 @@ impl AppState {
             game_output: Arc::new(dashmap::DashMap::new()),
             logic: dashmap::DashMap::new(),
             platform,
+            tasks,
             ai_cancels: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
             mcp,
             llm_rate: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),

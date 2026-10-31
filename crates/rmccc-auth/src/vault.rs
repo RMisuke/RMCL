@@ -193,8 +193,10 @@ mod tests {
         assert!(parsed["nonce"].is_string());
         assert!(parsed["ciphertext"].is_string());
 
-        // No plaintext leakage in the envelope.
-        assert!(!encrypted.contains("v\""));
+        // No plaintext leakage in the envelope. Checking the complete JSON
+        // fragment avoids a flaky match when base64 ciphertext happens to end
+        // in `v` (the old `contains("v\"")` could fail randomly).
+        assert!(!encrypted.contains(r#"{"k":"v"}"#));
 
         let _ = std::fs::remove_file(&tmp);
     }

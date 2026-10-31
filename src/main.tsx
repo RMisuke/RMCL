@@ -16,10 +16,14 @@ import { render } from "solid-js/web";
 import { Router, Route, Navigate } from "@solidjs/router";
 import { lazy } from "solid-js";
 import App from "./App";
+import { primeBackgroundVideo } from "./lib/backgroundVideo";
+import { primeBackgroundImage } from "./lib/backgroundImage";
 import "./styles/app.css";
-import "./styles/visual-system.css";
+import "./styles/theme-core.css";
 import "./styles/theme-skin.css";
-import "./styles/soft-dashboard.css";
+import "./styles/ambient-stage.css";
+import "./styles/home-stage.css";
+import "./styles/instance-settings.css";
 import "./lib/glass";
 
 const Home = lazy(() => import("./pages/Home"));
@@ -29,6 +33,10 @@ const Download = lazy(() => import("./pages/Download"));
 const Accounts = lazy(() => import("./pages/Accounts"));
 const Plugins = lazy(() => import("./pages/Plugins"));
 const Settings = lazy(() => import("./pages/Settings"));
+
+// Start the asset-scope grants + wallpaper preload while the shell initializes.
+primeBackgroundImage();
+primeBackgroundVideo();
 
 render(
   () => (

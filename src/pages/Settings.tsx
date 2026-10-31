@@ -35,7 +35,7 @@ import { loaderLabel } from "../lib/loaders";
 import type { TranslationKey } from "../i18n/locales/messages";
 import { elidePath } from "../lib/format";
 import { useHashTab } from "../lib/useHashTab";
-import { homeCardOpacity, panelOpacity, setHomeCardOpacity, setPanelOpacity } from "../lib/glass";
+import { homeCardBlur, homeCardOpacity, panelOpacity, setHomeCardBlur, setHomeCardOpacity, setPanelOpacity } from "../lib/glass";
 import {
   backgroundVideo,
   backgroundVideoIssue,
@@ -44,6 +44,14 @@ import {
   setBackgroundVideoDim,
   setBackgroundVideoEnabled,
 } from "../lib/backgroundVideo";
+import {
+  backgroundImage,
+  backgroundImageIssue,
+  clearBackgroundImage,
+  pickBackgroundImage,
+  setBackgroundImageDim,
+  setBackgroundImageEnabled,
+} from "../lib/backgroundImage";
 
 const SECTIONS: { id: string; icon: "list" | "settings" | "download" | "bot" | "extension" | "wrench" | "info" | "sparkles" | "hard-drive"; label: TranslationKey }[] = [
   { id: "game-defaults", icon: "list", label: "settings.nav.gameDefaults" },
@@ -500,8 +508,8 @@ function Appearance(): JSX.Element {
   onMount(async () => setThemes(await listThemes()));
 
   const adaptiveColors = () =>
-    adaptivePalette()?.colors ?? ["#6f91ca", "#8aa583", "#e4ce83"];
-  const adaptivePanel = () => adaptivePalette()?.vars["--adaptive-raised"] ?? "#f8f8f4";
+    adaptivePalette()?.colors ?? ["#efb35e", "#d96b4f", "#73c9d4"];
+  const adaptivePanel = () => adaptivePalette()?.vars["--adaptive-raised"] ?? "#1a1d24";
   const adaptiveSourceLabel = () => {
     const source = adaptiveSource();
     return t(
@@ -522,11 +530,29 @@ function Appearance(): JSX.Element {
       source: adaptiveSourceLabel(),
       n: palette.colors.length,
     });
-    return `${base} · ${
-      palette.readable
-        ? t("settings.appearance.adaptive.contrastOk")
-        : t("settings.appearance.adaptive.lowContrast")
-    }`;
+    const sample =
+      palette.frames > 0
+        ? t("settings.appearance.adaptive.frames", {
+            frames: palette.frames,
+            samples: palette.samples.toLocaleString(),
+          })
+        : null;
+    const mode = t(
+      palette.mode === "dark"
+        ? "settings.appearance.adaptive.mode.dark"
+        : "settings.appearance.adaptive.mode.light"
+    );
+    const confidence =
+      palette.frames > 0
+        ? t("settings.appearance.adaptive.confidence", {
+            value: Math.round(palette.confidence * 100),
+          })
+        : null;
+    return [base, sample, mode, confidence, palette.readable
+      ? t("settings.appearance.adaptive.contrastOk")
+      : t("settings.appearance.adaptive.lowContrast")]
+      .filter(Boolean)
+      .join(" · ");
   };
 
   async function chooseTheme(key: string): Promise<void> {
@@ -606,6 +632,7 @@ function Appearance(): JSX.Element {
             </span>
           </div>
         </Show>
+        <p class="wallpaper-note">{t("settings.appearance.adaptive.multiHint")}</p>
         <RmAdvancedSection title={t("settings.general.themeJson")}>
           <RmButton
             size="sm"
@@ -660,6 +687,104 @@ function Appearance(): JSX.Element {
             <output>{homeCardOpacity()}%</output>
           </div>
         </RmFieldRow>
+        <RmFieldRow
+          label={t("settings.appearance.cards.blur")}
+          hint={<span class="muted-line">{t("settings.appearance.cards.blurHint")}</span>}
+        >
+          <div class="glass-opacity-control">
+            <input
+              type="range"
+              min="0"
+              max="40"
+              step="1"
+              value={homeCardBlur()}
+              aria-label={t("settings.appearance.cards.blur")}
+              onInput={(event) => setHomeCardBlur(Number(event.currentTarget.value))}
+            />
+            <output>{homeCardBlur()} px</output>
+          </div>
+        </RmFieldRow>
+      </RmCard>
+
+      <RmCard title={t("settings.appearance.image.title")}>
+        <RmFieldRow
+          label={t("settings.appearance.image.toggle")}
+          hint={<span class="muted-line">{t("settings.appearance.image.hint")}</span>}
+        >
+          <RmSwitch
+            checked={backgroundImage().enabled}
+            disabled={!backgroundImage().path}
+            onChange={(value) => {
+              setBackgroundImageEnabled(value);
+              if (value) setBackgroundVideoEnabled(false);
+            }}
+          />
+        </RmFieldRow>
+        <RmFieldRow label={t("settings.appearance.image.file")}>
+          <div class="wallpaper-file-control">
+            <span
+              class={`wallpaper-file-path${backgroundImage().path ? "" : " is-empty"}`}
+              title={backgroundImage().path || undefined}
+            >
+              {backgroundImage().path
+                ? elidePath(backgroundImage().path, 44)
+                : t("settings.appearance.image.empty")}
+            </span>
+            <RmButton
+              size="sm"
+              icon="folder"
+              onClick={() => {
+                void pickBackgroundImage().then((res) => {
+                  if (!res.ok) {
+                    toast({ message: res.message ?? "", tone: "error" });
+                  } else if (res.selected) {
+                    setBackgroundVideoEnabled(false);
+                  }
+                });
+              }}
+            >
+              {backgroundImage().path
+                ? t("settings.appearance.image.replace")
+                : t("settings.appearance.image.pick")}
+            </RmButton>
+            <Show when={backgroundImage().path}>
+              <RmIconButton
+                icon="trash"
+                label={t("settings.appearance.image.clear")}
+                danger
+                onClick={() => clearBackgroundImage()}
+              />
+            </Show>
+          </div>
+        </RmFieldRow>
+        <Show when={backgroundImage().path}>
+          <RmFieldRow
+            label={t("settings.appearance.image.dim")}
+            hint={<span class="muted-line">{t("settings.appearance.image.dimHint")}</span>}
+          >
+            <div class="glass-opacity-control">
+              <input
+                type="range"
+                min="0"
+                max="80"
+                step="1"
+                value={backgroundImage().dim}
+                aria-label={t("settings.appearance.image.dim")}
+                onInput={(event) => setBackgroundImageDim(Number(event.currentTarget.value))}
+              />
+              <output>{backgroundImage().dim}%</output>
+            </div>
+          </RmFieldRow>
+        </Show>
+        <Show when={backgroundImageIssue()}>
+          <p class="wallpaper-note is-error">
+            {backgroundImageIssue() === "decode"
+              ? t("settings.appearance.image.issue")
+              : backgroundImageIssue()}
+          </p>
+        </Show>
+        <p class="wallpaper-note">{t("settings.appearance.image.formats")}</p>
+        <p class="wallpaper-note">{t("settings.appearance.image.priority")}</p>
       </RmCard>
 
       <RmCard title={t("settings.appearance.video.title")}>
@@ -670,13 +795,16 @@ function Appearance(): JSX.Element {
           <RmSwitch
             checked={backgroundVideo().enabled}
             disabled={!backgroundVideo().path}
-            onChange={(value) => setBackgroundVideoEnabled(value)}
+            onChange={(value) => {
+              setBackgroundVideoEnabled(value);
+              if (value) setBackgroundImageEnabled(false);
+            }}
           />
         </RmFieldRow>
         <RmFieldRow label={t("settings.appearance.video.file")}>
-          <div class="video-background-control">
+          <div class="wallpaper-file-control">
             <span
-              class={`video-background-path${backgroundVideo().path ? "" : " is-empty"}`}
+              class={`wallpaper-file-path${backgroundVideo().path ? "" : " is-empty"}`}
               title={backgroundVideo().path || undefined}
             >
               {backgroundVideo().path
@@ -688,7 +816,11 @@ function Appearance(): JSX.Element {
               icon="folder"
               onClick={() => {
                 void pickBackgroundVideo().then((res) => {
-                  if (!res.ok) toast({ message: res.message ?? "", tone: "error" });
+                  if (!res.ok) {
+                    toast({ message: res.message ?? "", tone: "error" });
+                  } else if (res.selected) {
+                    setBackgroundImageEnabled(false);
+                  }
                 });
               }}
             >
@@ -726,14 +858,22 @@ function Appearance(): JSX.Element {
           </RmFieldRow>
         </Show>
         <Show when={backgroundVideoIssue()}>
-          <p class="video-background-note is-error">
+          <p class="wallpaper-note is-error">
             {backgroundVideoIssue() === "decode"
               ? t("settings.appearance.video.issue")
               : backgroundVideoIssue()}
           </p>
         </Show>
+        <Show when={backgroundVideo().enabled && settingsStore.motionEnabled()}>
+          <p class="wallpaper-note">
+            {t("settings.appearance.video.performanceNote")}
+          </p>
+          <p class="wallpaper-note">
+            {t("settings.appearance.video.nativeCacheNote")}
+          </p>
+        </Show>
         <Show when={!settingsStore.motionEnabled()}>
-          <p class="video-background-note">{t("settings.appearance.video.motionOff")}</p>
+          <p class="wallpaper-note">{t("settings.appearance.video.motionOff")}</p>
         </Show>
       </RmCard>
 

@@ -221,8 +221,27 @@ pub async fn install_game(
     version_id: &str,
     progress: Option<&ProgressCb>,
 ) -> Result<SetupReport> {
+    install_game_into(core, game_dir, version_id, version_id, progress).await
+}
+
+/// 安装游戏资源到指定的实例目录。
+///
+/// `version_id` 是用于解析 Mojang/本地元数据的**来源版本**；`target_id` 是
+/// 文件真正落盘的实例 id。安装向导允许给实例起自定义名字，此时来源仍是
+/// `26.3`，但 `versions/{target_id}` 才是新实例。此前两者混用会把实例名
+/// 当成版本号去 Mojang 查询，直接得到 `Version not found: <实例名>`。
+pub async fn install_game_into(
+    core: &CoreHandle,
+    game_dir: &Path,
+    version_id: &str,
+    target_id: &str,
+    progress: Option<&ProgressCb>,
+) -> Result<SetupReport> {
     let game_dir = game_dir.to_path_buf();
-    let version = resolve_version(core, version_id, &game_dir).await?;
+    let mut version = resolve_version(core, version_id, &game_dir).await?;
+    // 写入的版本 JSON 必须声明 target id，否则实例仓库会把 id 归一化回
+    // 来源版本，自定义实例在提交时又变成「找不到版本」。
+    version.id = target_id.to_string();
 
     for subdir in &["versions", "libraries", "assets"] {
         std::fs::create_dir_all(game_dir.join(subdir))?;
@@ -230,11 +249,11 @@ pub async fn install_game(
 
     // 版本 JSON 先落盘：Minecraft 自己读 `versions/{id}/{id}.json` 且要求
     // Mojang 原始 camelCase 格式。已存在（patched/继承链）时不覆盖。
-    write_version_json(&game_dir, version_id, &version)?;
+    write_version_json(&game_dir, target_id, &version)?;
 
     // 一次性解析全部下载项，便于按总大小做磁盘预检。
     let mut items = Vec::new();
-    if let Some(item) = client_jar_item(&game_dir, version_id, &version)? {
+    if let Some(item) = client_jar_item(&game_dir, target_id, &version)? {
         items.push(item);
     }
     items.extend(library_items(
@@ -251,12 +270,16 @@ pub async fn install_game(
         run_extract_natives(
             &version,
             &game_dir,
-            version_id,
+            target_id,
             core.platform.descriptor,
             progress.cloned(),
         )
         .await?;
-        tracing::info!(version = %version_id, "Nothing to download, version already complete");
+        tracing::info!(
+            version = %version_id,
+            target = %target_id,
+            "Nothing to download, version already complete"
+        );
         return Ok(SetupReport::default());
     }
 
@@ -294,7 +317,7 @@ pub async fn install_game(
         run_extract_natives(
             &version,
             &game_dir,
-            version_id,
+            target_id,
             core.platform.descriptor,
             progress.cloned(),
         )
@@ -303,6 +326,7 @@ pub async fn install_game(
 
     tracing::info!(
         version = %version_id,
+        target = %target_id,
         game_dir = %game_dir.display(),
         total_files = total,
         failed_files,
@@ -350,9 +374,19 @@ fn write_version_json(
         return Ok(());
     }
     // 优先 Mojang 原始 JSON（camelCase）；本地解析出来的版本没有 raw_json 时
-    // 退回结构体序列化（引擎仍可启动）。
-    let content = match version.raw_json {
-        Some(ref raw) => raw.to_string(),
+    // 退回结构体序列化（引擎仍可启动）。自定义实例名必须同步改 `id`，否则
+    // 仓库读回时会把 id 归一化回来源版本。
+    let content = match version.raw_json.as_ref() {
+        Some(raw) => {
+            let mut raw: serde_json::Value = serde_json::from_str(raw.as_ref())?;
+            if let Some(object) = raw.as_object_mut() {
+                object.insert(
+                    "id".to_string(),
+                    serde_json::Value::String(version.id.clone()),
+                );
+            }
+            raw.to_string()
+        }
         None => serde_json::to_string_pretty(version)?,
     };
     write_if_absent(&path, &content)
@@ -1086,6 +1120,31 @@ mod tests {
         assert!(report.is_noop(), "complete version needs no downloads");
         let json = root.join("versions").join("1.20.4").join("1.20.4.json");
         assert!(json.exists());
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn test_install_game_into_custom_instance_name() {
+        let (dir, core) = test_env("install-custom-name");
+        seed_version(&core, "1.20.4");
+        let root = game_root(&core);
+
+        // 来源是 1.20.4，落盘实例名是用户输入的自定义名称。
+        let report = install_game_into(&core.handle(), &root, "1.20.4", "测试实例", None)
+            .await
+            .expect("install_game_into");
+
+        assert!(report.is_complete());
+        let json_path = root.join("versions").join("测试实例").join("测试实例.json");
+        assert!(json_path.exists(), "custom instance JSON must exist");
+        let json: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&json_path).unwrap()).unwrap();
+        assert_eq!(json["id"], "测试实例");
+
+        let detail =
+            commit_install(&core.handle(), "default", "测试实例").expect("commit custom instance");
+        assert_eq!(detail.summary.id, "测试实例");
 
         let _ = std::fs::remove_dir_all(&dir);
     }

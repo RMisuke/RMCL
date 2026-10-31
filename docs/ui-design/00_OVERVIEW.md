@@ -42,7 +42,7 @@
 | 无全局导航 | 页面间只能靠零散按钮 `navigate()`，新用户不知道还有什么功能 |
 | `/mods` ModBrowser（217 行） | 半成品：无 loader/版本筛选 UI、无详情页、无来源切换 |
 | 「实例」概念混乱 | Profile 与磁盘 versions/ 版本仓库两套概念混用；`instance_list/rename/duplicate/remove` 4 条命令连 wrapper 都没有 |
-| 15 条命令无 UI 入口 | `download_pause/resume`、`instance_*` 4 条、`plugin_contributions`、`logic.invoke/cancel`、`plugin_install(path)`、`dashboard_get_theme_json`、`plugin_config_get`、`mod_get_download_url`、`mod_install_local` |
+| 15 条命令无 UI 入口 | `instance_*` 4 条、`plugin_contributions`、`logic.invoke/cancel`、`plugin_install(path)`、`dashboard_get_theme_json`、`plugin_config_get`、`mod_get_download_url`、`mod_install_local` |
 | 设置页缺字段 | `mirror_url`、`download_concurrency`、`check_updates` 后端支持但未渲染 |
 | 插件设置页无宿主 | manifest `settingsPages` 全链路可用，前端无渲染入口 |
 | AI/Agent 方向调整 | 内建 Agent 页与 9 条 `agent_*` IPC 将被「轻量 AI 服务 + 外部 MCP 控制」取代（ADR-013，见 07） |
@@ -203,8 +203,7 @@ RMCCC 窗口
 | `authStore` | 当前会话、账号列表、登录流程状态 | auth 8 条 + `auth://device-code` | Rail、主页、账号页、快速启动 |
 | `profilesStore` | 实例列表、当前选中实例 id（内存态） | profiles 4 条 + `instances://refreshed` | 主页、实例列表/详情、下载中心、Agent |
 | `launchStore` | 运行中进程（profile→pid/exit）、日志环形缓冲 | launch 3 条 + `launch://started/output/exited` | Rail、任务中心、实例列表/详情、日志抽屉 |
-| `downloadStore` | 活动批次（进度/状态）、历史结果 | download 3 条 + `download://progress/complete/error` | Rail、任务中心、主页下载卡、下载中心 |
-| `modloaderStore` | 安装中的 loader 任务 | `modloader://progress` | 任务中心、实例详情 |
+| `tasksStore` | 活动任务快照 + 最近完成；唯一任务状态源 | `task_*` 7 条 + `task://updated/sync`（ADR-019） | Rail、任务中心、主页下载卡、下载中心、实例详情 |
 | `settingsStore` | AppConfig + UserSettings + 主题 | settings 6 条 + dashboard 主题 4 条 | 设置页、所有页面（token） |
 | `aiStore` | AI 配置状态、模型列表、进行中的日志分析 | `ai_*` 5 条（设计新增，ADR-013） | 设置-#ai、日志抽屉 AI 分析 |
 | `mcpStore` | MCP 开关/端口/会话/权限矩阵/待确认 | `mcp_*` 9 条（设计新增）+ `mcp://session/confirmation` | 设置-#ai、任务中心确认卡、Rail 红点 |
@@ -222,19 +221,16 @@ RMCCC 窗口
 
 | 事件 | → Store | UI 反应 |
 |---|---|---|
-| `download://progress` | downloadStore | 任务中心进度、Rail 徽标、主页下载卡 |
-| `download://complete` | downloadStore + profilesStore.refresh | toast「安装完成」+ 实例列表刷新 |
-| `download://error` | downloadStore | 任务中心失败态 + toast（可重试=再次 version_install） |
+| `task://updated` | tasksStore | 任务中心/主页/Rail 的进度、阶段、速度、完成副作用 |
+| `task://sync` | tasksStore | 广播落后或刷新后的整板恢复 |
 | `auth://device-code` | authStore | 账号页设备码卡片 |
 | `launch://started` | launchStore | Rail/实例列表运行徽标、日志抽屉开始 |
 | `launch://output` | launchStore（环形缓冲/1000 行） | 日志抽屉、任务中心 |
 | `launch://exited` | launchStore | 运行徽标消失、异常退出时 toast + 日志抽屉提示 |
-| `modloader://progress` | modloaderStore | 任务中心、实例详情 loader 卡状态 |
 | `instances://refreshed` | profilesStore / 版本仓库视图 | 列表刷新 |
-| `download://paused` / `resumed`（预留） | downloadStore | 当前后端不发射；UI 预留状态位（§9-P3） |
 | `ai://delta` / `ai://done` / `ai://error`（设计新增） | aiStore | 日志抽屉 AI 分析流式面板（07 §4） |
 | `mcp://session` / `mcp://confirmation`（设计新增） | mcpStore | 设置会话列表、任务中心确认卡（07 §3） |
-| 既有任务事件 payload 增加 `origin` 字段（设计新增） | 各任务 store | Agent/插件发起操作的归因徽标与 toast（07 §3） |
+| `TaskSnapshot.origin`（ADR-019） | tasksStore | Agent/插件发起任务的归因徽标与 toast（07 §3） |
 
 ### 5.3 实施时必须修正的 api.ts 问题
 
@@ -289,7 +285,7 @@ Rail 收起状态、实例列表视图模式（卡片/列表）、各页折叠�
 |---|---|---|---|
 | P1 | 新增 `open_path` IPC（`rmccc-platform` `ShellBackend::open_path` 已实现，仅缺命令封装） | 实例详情「浏览 ▾」、设置-日志目录 | 极小 |
 | P2 | `modloader 卸载` IPC（CLI `modloader remove` 已有逻辑） | 实例详情-Mod 加载器 tab | 小 |
-| P3 | 发射 `download://paused/resumed` 事件（常量已预留） | 任务中心暂停/恢复状态回显 | 小 |
+| P3 | ~~发射 `download://paused/resumed` 事件~~ → 已由 ADR-019 的 `task_pause/resume` + `TaskState::Paused` 取代 | 任务中心暂停/恢复状态回显 | 已完成 |
 | P4 | Dashboard 内置 widget 注册表新增 `downloads-card`（rmccc-dashboard widget.rs） | 主页下载任务卡 | 小 |
 | P5 | `selected_profile_id` 持久化 IPC（`LauncherState` 已有字段） | 主页/实例列表选中态跨重启 | 小 |
 | P6 | `modloader_analyze` IPC（`crates/rmccc-modloader/src/analyzer.rs` 已有） | 实例详情-加载器 tab 显示「本地版本实际可用的 loader」 | 小 |
@@ -301,7 +297,7 @@ Rail 收起状态、实例列表视图模式（卡片/列表）、各页折叠�
 | P12 | AI 服务：`rmccc-llm` crate + `ai_*` 5 条 IPC + `ai://delta/done/error` 事件（架构文档 S1/S2） | 设置-#ai、日志抽屉 AI 分析 | 中 |
 | P13 | MCP 服务器：回环 HTTP + `rmccc mcp` stdio 桥 + 31 工具 + 确认流 + `mcp_*` 9 条 IPC（S4/S5） | 设置-#ai、任务中心确认卡/归因徽标 | 大 |
 | P14 | `mods_dependency_scan` / `mods_apply_plan` 2 条 IPC（依赖扫描去 Agent 化，S3） | 实例详情-检查缺失前置 | 小 |
-| P15 | 既有任务事件 payload 增加 `origin` 字段（S5） | 任务中心/主页归因徽标 | 小 |
+| P15 | ~~既有任务事件 payload 增加 `origin` 字段~~ → 已由 ADR-019 `TaskSnapshot.origin` 落地 | 任务中心/主页归因徽标 | 已完成 |
 
 > P1–P6 建议随前端实施同批落地；P7–P9 可迭代；P10/P11 明确为后续阶段，UI 先占位不虚假承诺。
 > P12–P15 属 AI/MCP 架构（ADR-013），权威设计与实施顺序见

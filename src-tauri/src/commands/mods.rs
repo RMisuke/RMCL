@@ -283,10 +283,50 @@ pub async fn mod_install(
     validate_mod_filename(&filename)?;
 
     let dest = mods_dir.join(&filename);
-    source
-        .install(&version, &dest)
+    let task = state.tasks.create(
+        rmccc_tasks::TaskSpec::new(
+            rmccc_tasks::TaskKind::ModInstall,
+            format!("安装 Mod {filename}"),
+        )
+        .subtitle(key.clone())
+        .target(key.clone())
+        .tag(version.id.clone())
+        .step("download", "下载", 5)
+        .step("write", "写入", 1),
+    );
+    task.begin_step("download");
+    let progress_task = task.clone();
+    let progress_name = filename.clone();
+    let progress = move |downloaded: u64, total: Option<u64>| {
+        progress_task.download(
+            "download",
+            rmccc_tasks::DownloadUpdate {
+                completed_files: 0,
+                total_files: 0,
+                downloaded_bytes: downloaded,
+                total_bytes: total.unwrap_or(0),
+                current_file: Some(progress_name.clone()),
+            },
+        );
+    };
+    if let Err(error) = source
+        .install_with_progress(&version, &dest, Some(&progress))
         .await
-        .map_err(IpcError::from)?;
+    {
+        let message = error.to_string();
+        task.fail(crate::commands::tasks::error_view(message));
+        return Err(IpcError::from(error));
+    }
+    task.complete_step("download");
+    task.clear_download();
+    task.begin_step("write");
+    task.complete_step("write");
+    task.succeed(rmccc_tasks::TaskResultView {
+        key: Some(key.clone()),
+        name: Some(filename.clone()),
+        version: Some(version.version_number.clone()),
+        ..rmccc_tasks::TaskResultView::default()
+    });
 
     tracing::info!(key = %key, filename = %filename, "Mod installed");
     Ok(filename)
@@ -626,6 +666,17 @@ pub async fn mods_apply_plan(
             retryable: false,
         });
     }
+    let task = state.tasks.create(
+        rmccc_tasks::TaskSpec::new(rmccc_tasks::TaskKind::DependencyInstall, "补装缺失前置")
+            .subtitle(key.clone())
+            .target(key.clone())
+            .step("scan", "扫描依赖", 1)
+            .step("install", "下载安装", 9),
+    );
+    task.begin_step("scan");
+    task.complete_step("scan");
+    task.begin_step("install");
+
     let applier = ModrinthPlanApplier {
         source,
         game_version,
@@ -634,11 +685,33 @@ pub async fn mods_apply_plan(
     // Perf audit 1.7: the async twin replaces the `block_in_place` bridge —
     // bridging pinned a runtime worker for the whole (minutes-long) install.
     let applier = &applier;
-    let report =
-        rmccc_agent::apply_missing_dependencies_async(&mods_dir, |mods_dir, dep| async move {
-            applier.install_one(&mods_dir, &dep).await
-        })
-        .await?;
+    let install_task = task.clone();
+    let report = rmccc_agent::apply_missing_dependencies_async(&mods_dir, |mods_dir, dep| {
+        let install_task = install_task.clone();
+        async move {
+            install_task.message(format!("安装 {}…", dep.mod_id));
+            let result = applier.install_one(&mods_dir, &dep).await;
+            if result.is_ok() {
+                install_task.detail(format!("已安装 {}", dep.mod_id));
+            }
+            result
+        }
+    })
+    .await
+    .map_err(|error| {
+        let message = error.to_string();
+        task.fail(crate::commands::tasks::error_view(message));
+        IpcError::from(error)
+    })?;
+    for failed in &report.failed {
+        task.warn(format!("{}：{}", failed.mod_id, failed.reason));
+    }
+    task.complete_step("install");
+    task.succeed(rmccc_tasks::TaskResultView {
+        key: Some(key.clone()),
+        installed_files: Some(report.installed.len() as u64),
+        ..rmccc_tasks::TaskResultView::default()
+    });
     tracing::info!(
         key = %key,
         installed = report.installed.len(),

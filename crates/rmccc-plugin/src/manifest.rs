@@ -84,6 +84,8 @@ pub struct DashboardCard {
     pub default_size: CardSize,
     #[serde(default)]
     pub min_size: Option<CardSize>,
+    #[serde(default)]
+    pub max_size: Option<CardSize>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, TS)]
@@ -476,6 +478,15 @@ fn validate_contributions(manifest: &PluginManifest) -> Result<()> {
                 return Err(plugin_error(
                     PluginErrorCode::ManifestInvalid,
                     format!("卡片 {} 的 minSize 不能大于 defaultSize", card.id),
+                ));
+            }
+        }
+        if let Some(max) = card.max_size {
+            validate_size("maxSize", max)?;
+            if max.w < card.default_size.w || max.h < card.default_size.h {
+                return Err(plugin_error(
+                    PluginErrorCode::ManifestInvalid,
+                    format!("卡片 {} 的 maxSize 不能小于 defaultSize", card.id),
                 ));
             }
         }

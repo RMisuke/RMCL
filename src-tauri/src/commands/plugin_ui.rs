@@ -16,6 +16,7 @@ use std::time::Duration;
 
 use rmccc_core::rmccc_plugin::theme_assets;
 use rmccc_core::rmccc_plugin::ui::{self, BridgeError, BridgeErrorCode};
+use rmccc_core::server_status::query_server_status;
 use rmccc_error::{IpcError, RmcccError};
 use serde::Serialize;
 use serde_json::{json, Value};
@@ -321,13 +322,16 @@ pub async fn plugin_ui_invoke(
 
     let params = parsed.params.clone().unwrap_or(Value::Null);
     // network.request 的作用域是目标域名：授权时一起校验，防止"能力已授予但域名未声明"。
-    let scope_host = if parsed.method == "network.request" {
-        match network_host(&params) {
+    let scope_host = match parsed.method.as_str() {
+        "network.request" => match network_host(&params) {
             Ok(host) => Some(host),
             Err(e) => return Ok(BridgeReply::from_bridge(e)),
-        }
-    } else {
-        None
+        },
+        "server.status" => match server_host(&params) {
+            Ok((host, _port)) => Some(host),
+            Err(e) => return Ok(BridgeReply::from_bridge(e)),
+        },
+        _ => None,
     };
 
     // ── 每次调用重新授权 ──
@@ -419,6 +423,38 @@ pub async fn plugin_ui_invoke(
                 Err(e) => BridgeReply::from_host(e),
             }
         }
+        "tasks.list" => {
+            let board = state.tasks.board();
+            let active: Vec<Value> = board
+                .active
+                .iter()
+                .take(8)
+                .map(public_task_snapshot)
+                .collect();
+            let recent: Vec<Value> = board
+                .recent
+                .iter()
+                .take(8)
+                .map(public_task_snapshot)
+                .collect();
+            BridgeReply::ok(json!({
+                "active": active,
+                "recent": recent,
+                "generatedAt": board.generated_at,
+            }))
+        }
+        "launch.status" => {
+            let running: Vec<String> = state
+                .running_games
+                .iter()
+                .map(|entry| entry.key().clone())
+                .collect();
+            BridgeReply::ok(json!({ "running": running }))
+        }
+        "server.status" => match server_status_bridge(&params).await {
+            Ok(value) => BridgeReply::ok(value),
+            Err(e) => BridgeReply::from_bridge(e),
+        },
         "network.request" => match network_request(&params).await {
             Ok(value) => BridgeReply::ok(value),
             Err(e) => BridgeReply::from_bridge(e),
@@ -497,6 +533,85 @@ fn is_forbidden_ip(ip: IpAddr) -> bool {
 }
 
 /// 目标域名（授权作用域）：只接受 http(s) 且带 host 的绝对 URL。
+/// Plugin-facing task snapshot: no detail log, no manual directory, and only
+/// the current file's basename. Credentials never live in a TaskSnapshot, but
+/// paths do, so the projection is explicit rather than "serialize everything".
+fn public_task_snapshot(task: &rmccc_tasks::TaskSnapshot) -> Value {
+    let mut task = task.clone();
+    task.details.clear();
+    if let Some(download) = &mut task.download {
+        download.current_file = download
+            .current_file
+            .as_deref()
+            .and_then(|path| std::path::Path::new(path).file_name())
+            .and_then(|name| name.to_str())
+            .map(ToOwned::to_owned);
+    }
+    if let Some(result) = &mut task.result {
+        result.manual_directory = None;
+        result.directory_id = None;
+    }
+    serde_json::to_value(task).unwrap_or(Value::Null)
+}
+
+/// `server.status` 的 host/port 参数；host 必须是声明过的域名，不能带协议/路径。
+fn server_host(params: &Value) -> Result<(String, u16), BridgeError> {
+    let host = params
+        .get("host")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|host| !host.is_empty())
+        .ok_or_else(|| {
+            BridgeError::new(
+                BridgeErrorCode::Validation,
+                "server.status 需要 params.host",
+            )
+        })?;
+    if host.len() > 253
+        || host.contains("://")
+        || host.contains('/')
+        || host.contains('\\')
+        || host.contains(':')
+        || host.chars().any(|c| c.is_whitespace())
+    {
+        return Err(BridgeError::new(
+            BridgeErrorCode::Validation,
+            "server.status 的 host 只能是域名，端口请用 params.port",
+        ));
+    }
+    if host_is_blocked(host) {
+        return Err(BridgeError::new(
+            BridgeErrorCode::HostNotAllowed,
+            format!("{host} 是本地/私有域名，禁止访问"),
+        ));
+    }
+    let port = match params.get("port").and_then(Value::as_u64) {
+        Some(port) if (1..=65535).contains(&port) => port as u16,
+        Some(_) => {
+            return Err(BridgeError::new(
+                BridgeErrorCode::Validation,
+                "server.status 的 port 必须在 1..=65535",
+            ))
+        }
+        None => 25565,
+    };
+    Ok((host.to_ascii_lowercase(), port))
+}
+
+/// 受控 SLP 查询：域名必须在 `network.request` 白名单内，且解析到公网地址。
+async fn server_status_bridge(params: &Value) -> Result<Value, BridgeError> {
+    let (host, port) = server_host(params)?;
+    // 与 network.request 使用同一套 SSRF 过滤；查询仍按 host 名发送 handshake。
+    let _addrs = resolve_public_addrs(&host, port).await?;
+    let address = format!("{host}:{port}");
+    let status = tokio::task::spawn_blocking(move || query_server_status(&address))
+        .await
+        .map_err(|e| BridgeError::new(BridgeErrorCode::Internal, format!("SLP 线程失败：{e}")))?
+        .map_err(|e| BridgeError::new(BridgeErrorCode::Internal, e.to_string()))?;
+    serde_json::to_value(status)
+        .map_err(|e| BridgeError::new(BridgeErrorCode::Internal, format!("序列化状态失败：{e}")))
+}
+
 fn network_host(params: &Value) -> Result<String, BridgeError> {
     let url = params.get("url").and_then(Value::as_str).ok_or_else(|| {
         BridgeError::new(

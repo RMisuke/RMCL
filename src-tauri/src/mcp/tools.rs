@@ -267,12 +267,12 @@ static CATALOG: std::sync::LazyLock<Vec<ToolSpec>> = std::sync::LazyLock::new(||
             schema: obj(&[("key", str_req())], &["key"]),
         },
         ToolSpec {
-            name: "downloads.control",
-            description: "控制下载批次：action 取 pause|resume|cancel。batch_id 来自下载事件或 system 状态。",
+            name: "tasks.control",
+            description: "控制统一安装/下载任务：action 取 pause|resume|cancel。task_id 来自任务快照或 system 状态。",
             risk: ToolRisk::Operate,
             schema: obj(
-                &[("batch_id", str_req()), ("action", str_req())],
-                &["batch_id", "action"],
+                &[("task_id", str_req()), ("action", str_req())],
+                &["task_id", "action"],
             ),
         },
         ToolSpec {
@@ -399,9 +399,12 @@ pub async fn call(app: &tauri::AppHandle, name: &str, args: Value) -> Result<Val
         "system.status" => {
             let running = commands::launch::launch_status(state(app)).await?;
             let handle = &state(app).mcp;
+            let tasks = state(app).tasks.board();
             Ok(json!({
                 "app_version": env!("CARGO_PKG_VERSION"),
                 "running_profiles": running,
+                "active_tasks": tasks.active,
+                "recent_tasks": tasks.recent,
                 "mcp": {
                     "enabled": handle.is_enabled(),
                     "port": handle.port(),
@@ -576,13 +579,13 @@ pub async fn call(app: &tauri::AppHandle, name: &str, args: Value) -> Result<Val
                 commands::instance::instance_repair(state(app), arg_str(&args, "key")?).await?;
             Ok(json!({ "repaired_files": repaired }))
         }
-        "downloads.control" => {
-            let batch_id = arg_str(&args, "batch_id")?;
+        "tasks.control" => {
+            let task_id = arg_str(&args, "task_id")?;
             let action = arg_str(&args, "action")?;
             match action.as_str() {
-                "pause" => commands::download::download_pause(state(app), batch_id).await?,
-                "resume" => commands::download::download_resume(state(app), batch_id).await?,
-                "cancel" => commands::download::download_cancel(state(app), batch_id).await?,
+                "pause" => commands::tasks::task_pause(state(app), task_id).await?,
+                "resume" => commands::tasks::task_resume(state(app), task_id).await?,
+                "cancel" => commands::tasks::task_cancel(state(app), task_id).await?,
                 other => {
                     return Err(format!("unknown action: {other} (pause|resume|cancel)").into())
                 }

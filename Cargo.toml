@@ -1,6 +1,7 @@
 [workspace]
 members = [
     "crates/rmccc-error",
+    "crates/rmccc-tasks",
     "crates/rmccc-core",
     "crates/rmccc-auth",
     "crates/rmccc-download",
@@ -8,6 +9,7 @@ members = [
     "crates/rmccc-version",
     "crates/rmccc-modloader",
     "crates/rmccc-mods",
+    "crates/rmccc-modpack",
     "crates/rmccc-instance",
     "crates/rmccc-config",
     "crates/rmccc-platform",
@@ -53,6 +55,8 @@ md-5 = "0.10"
 
 # Archive
 zip = { version = "2", default-features = false, features = ["deflate"] }
+# ZIP filename charset fallback (GBK legacy Chinese modpacks, HMCL findSuitableEncoding)
+encoding_rs = "0.8"
 
 # Utilities
 uuid = { version = "1", features = ["v3", "v4", "v5"] }
@@ -95,6 +99,7 @@ tauri-plugin-dialog = "2"
 
 # Internal crates
 rmccc-error = { path = "crates/rmccc-error" }
+rmccc-tasks = { path = "crates/rmccc-tasks" }
 rmccc-core = { path = "crates/rmccc-core" }
 rmccc-auth = { path = "crates/rmccc-auth" }
 rmccc-download = { path = "crates/rmccc-download" }
@@ -102,6 +107,7 @@ rmccc-launch = { path = "crates/rmccc-launch" }
 rmccc-version = { path = "crates/rmccc-version" }
 rmccc-modloader = { path = "crates/rmccc-modloader" }
 rmccc-mods = { path = "crates/rmccc-mods" }
+rmccc-modpack = { path = "crates/rmccc-modpack" }
 rmccc-instance = { path = "crates/rmccc-instance" }
 rmccc-config = { path = "crates/rmccc-config" }
 rmccc-platform = { path = "crates/rmccc-platform" }

@@ -9,59 +9,41 @@
 import { createSignal } from "solid-js";
 import { dashboard } from "../ipc/api";
 import type { ThemeInfo, ThemeSkin, ThemeSkinPayload, ThemeTokens } from "../ipc/types";
+import { isDarkHex, sceneFor, type ThemeScene } from "./presets";
+
+export { visualPaletteFor } from "./presets";
+export type { ThemeMood, ThemeScene } from "./presets";
 
 const DARK_FALLBACK: ThemeTokens = {
-  background: "#0b1020",
-  surface: "#141a2e",
-  surfaceElevated: "#1c2440",
-  text: "#e6e9f2",
-  textMuted: "#8b93a8",
-  accent: "#7c6cff",
-  accentContrast: "#ffffff",
-  border: "#2a3352",
+  background: "#0b0c0f",
+  surface: "#13151a",
+  surfaceElevated: "#1a1d24",
+  text: "#f2eee7",
+  textMuted: "#a39d92",
+  accent: "#efb35e",
+  accentContrast: "#1b1204",
+  border: "#2b2e36",
 };
 
 const LIGHT_FALLBACK: ThemeTokens = {
-  background: "#f2f2f4",
-  surface: "#ffffff",
-  surfaceElevated: "#fafafa",
-  text: "#1a1a2e",
-  textMuted: "#888888",
-  accent: "#1a56db",
-  accentContrast: "#ffffff",
-  border: "#e0e0e4",
+  background: "#f1ece2",
+  surface: "#fbf7ef",
+  surfaceElevated: "#fffdf7",
+  text: "#1a1713",
+  textMuted: "#786f63",
+  accent: "#b0442b",
+  accentContrast: "#fff9f2",
+  border: "#ded5c6",
 };
-
-/** Host-owned decorative palette. The public theme schema remains unchanged. */
-export interface VisualPalette {
-  primary: string;
-  secondary: string;
-  tertiary: string;
-}
-
-const VISUAL_PALETTES: Record<string, VisualPalette> = {
-  "builtin:dark": { primary: "#8b7cff", secondary: "#38d9ff", tertiary: "#ff5fa2" },
-  "builtin:forest": { primary: "#58d68d", secondary: "#b7e56b", tertiary: "#36c9b0" },
-  "builtin:ocean": { primary: "#38bdf8", secondary: "#36e0c2", tertiary: "#7c8cff" },
-  "builtin:ember": { primary: "#ff8a4c", secondary: "#ffcf5c", tertiary: "#ff5e7a" },
-  "builtin:light": { primary: "#5b5bd6", secondary: "#00a6c7", tertiary: "#ec5b9f" },
-  "builtin:sakura": { primary: "#e75d9c", secondary: "#9b72ee", tertiary: "#ff9b71" },
-  "builtin:paper": { primary: "#a56a24", secondary: "#357a68", tertiary: "#c45a4a" },
-  "builtin:sky": { primary: "#2589e8", secondary: "#5a6ee8", tertiary: "#14b8a6" },
-};
-
-export function visualPaletteFor(
-  preference: string | null,
-  tokens: ThemeTokens,
-  mode: ThemeMode = isDark(tokens.background) ? "dark" : "light"
-): VisualPalette {
-  if (preference && VISUAL_PALETTES[preference]) return VISUAL_PALETTES[preference];
-  const fallback = mode === "light" ? "builtin:light" : "builtin:dark";
-  return { ...VISUAL_PALETTES[fallback], primary: tokens.accent };
-}
 
 /** Effective mode for host-owned safety colors. */
 export type ThemeMode = "light" | "dark";
+
+/** Host-owned scene for the active theme (atmosphere + particle motif). */
+const [currentScene, setCurrentScene] = createSignal<ThemeScene | null>(null);
+export function themeScene(): ThemeScene | null {
+  return currentScene();
+}
 
 /** Reactive effective mode (N-11): ambient/UI layers re-resolve when the
  *  applied tokens change (system dark/light switch, theme swap). */
@@ -80,20 +62,7 @@ let currentTokens: ThemeTokens | null = null;
 const tokenListeners = new Set<(tokens: ThemeTokens) => void>();
 
 function isDark(hex: string): boolean {
-  const value = hex.replace("#", "");
-  if (value.length !== 6 && value.length !== 3) return true;
-  const full =
-    value.length === 3
-      ? value
-          .split("")
-          .map((c) => c + c)
-          .join("")
-      : value;
-  const r = parseInt(full.slice(0, 2), 16);
-  const g = parseInt(full.slice(2, 4), 16);
-  const b = parseInt(full.slice(4, 6), 16);
-  // Relative luminance (sRGB approximation).
-  return (0.2126 * r + 0.7152 * g + 0.0722 * b) / 255 < 0.5;
+  return isDarkHex(hex);
 }
 
 function setVar(name: string, value: string) {
@@ -115,11 +84,22 @@ export function applyThemeTokens(tokens: ThemeTokens): ThemeMode {
   setVar("--rmccc-accent-contrast", tokens.accentContrast);
   setVar("--rmccc-border", tokens.border);
 
-  const palette = visualPaletteFor(currentPreference, tokens, mode);
-  setVar("--rmccc-accent-secondary", palette.secondary);
-  setVar("--rmccc-accent-tertiary", palette.tertiary);
-  setVar("--rmccc-accent-gradient", `linear-gradient(135deg, ${palette.primary}, ${palette.secondary})`);
+  const scene = sceneFor(currentPreference, tokens, mode);
+  setCurrentScene(scene);
+  setVar("--rmccc-accent-secondary", scene.secondary);
+  setVar("--rmccc-accent-tertiary", scene.tertiary);
+  setVar("--rmccc-accent-gradient", `linear-gradient(135deg, ${scene.primary}, ${scene.secondary})`);
+  setVar("--scene-primary", scene.primary);
+  setVar("--scene-secondary", scene.secondary);
+  setVar("--scene-tertiary", scene.tertiary);
+  setVar("--scene-particle-opacity", String(scene.particleOpacity));
+  // Neutral atmosphere values: decor is allowed to be colourful, content is not.
+  setVar("--scene-wash", `color-mix(in srgb, ${scene.primary} 12%, transparent)`);
+  setVar("--scene-wash-2", `color-mix(in srgb, ${scene.secondary} 10%, transparent)`);
+  setVar("--scene-line", `color-mix(in srgb, ${scene.primary} 22%, transparent)`);
   root.dataset.visualTheme = currentPreference?.replace("builtin:", "") ?? mode;
+  root.dataset.themeKey = currentPreference ?? (mode === "dark" ? "builtin:dark" : "builtin:light");
+  root.dataset.atmosphere = scene.atmosphere;
 
   // Bridge to the legacy variables used by app.css.
   setVar("--surface-bg", tokens.background);
@@ -197,10 +177,18 @@ async function resolveTokens(preference: string | null): Promise<ThemeTokens> {
 export async function applyThemePreference(
   preference: string | null
 ): Promise<ThemeMode> {
-  currentPreference = preference;
-  const tokens = await resolveTokens(preference);
+  // Legacy `light` / `dark` values are normalized so the scene lookup,
+  // settings selection and theme skin all share one stable key.
+  const normalized =
+    preference === "light"
+      ? "builtin:light"
+      : preference === "dark"
+        ? "builtin:dark"
+        : preference;
+  currentPreference = normalized;
+  const tokens = await resolveTokens(normalized);
   const mode = applyThemeTokens(tokens);
-  await refreshThemeSkin(preference);
+  await refreshThemeSkin(normalized);
   return mode;
 }
 

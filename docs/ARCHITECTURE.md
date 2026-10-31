@@ -94,6 +94,13 @@ RMCL/
 │   │   └── src/
 │   │       ├── lib.rs            # ModSource trait + data types
 │   │       └── modrinth.rs       # Modrinth search / versions / download
+│   ├── rmccc-modpack/            # HMCL-compatible modpack support
+│   │   └── src/
+│   │       ├── lib.rs            # inspection, Curse resolution, modpack.cfg
+│   │       ├── model.rs          # format-independent Modpack model
+│   │       ├── archive.rs        # UTF-8/GBK names + path safety + bounded reads
+│   │       ├── extract.rs        # overrides + HMCL update-preservation rules
+│   │       └── formats/          # Curse / Modrinth / MCBBS / Server / MultiMC / HMCL
 │   ├── rmccc-instance/           # Game directories + version-backed instances
 │   │   └── src/                  # directory registry, settings, service, migration
 │   ├── rmccc-platform/           # 平台适配层（Phase 1，指南 §5.7）
@@ -110,7 +117,8 @@ RMCL/
 │   └── rmccc-core/               # Core orchestrator + DI container
 │       └── src/
 │           ├── lib.rs            # CoreContext, re-exports
-│           └── pipeline.rs       # install / repair / launch orchestration
+│           ├── pipeline.rs       # install / repair / launch orchestration
+│           └── modpack.rs        # modpack install orchestration (game → loader → files)
 ├── src-cli/                      # CLI binary crate (`rmcli`)
 │   ├── Cargo.toml
 │   ├── src/
@@ -168,6 +176,7 @@ rmccc-error                     # leaf — 统一错误类型 + ErrorCode
 └── rmccc-mods                  # → error, download
 
 rmccc-version    → error, download, platform
+rmccc-modpack    → error, download, version
 rmccc-modloader  → error, download, platform, version
 rmccc-instance   → error, config, platform, version
 rmccc-launch     → error, config, platform, version, instance
@@ -1063,7 +1072,7 @@ impl AppState {
         Ok(Self {
             core: Arc::new(RwLock::new(rmccc_core::CoreContext::new(data_dir)?)),
             http_client,
-            downloads: Arc::new(DashMap::new()),
+            tasks: Arc::new(rmccc_tasks::TaskRegistry::new()),
             running_games: Arc::new(DashMap::new()),
             vault: Arc::new(rmccc_auth::TokenVault::init(&data_dir.join(".key"))?),
         })
@@ -1077,16 +1086,16 @@ impl AppState {
 - **限制**：同一实例 key 不可同时运行两个进程（`running_games` map 检查）
 - **内存预检**：启动前估算所需内存，超出系统可用内存时警告
 
-### 8.3 Download Control Granularity
+### 8.3 Unified Task Control
 
-All three IPC commands operate on a **batch** (`batch_id`); there is no
-per-file cancel command.
+Download batches are an implementation detail inside a task (ADR-019). The
+control surface is task-scoped; there is no per-file cancel command.
 
 | IPC command | Scope | Behavior |
 |-------------|-------|----------|
-| `download_cancel` | 整批 | 取消整批（`cancel_batch(batch_id)`），清理已下载的 partial 文件 |
-| `download_pause` | 整批 | 等待当前 worker 完成，停止 dequeuing 新任务 |
-| `download_resume` | 整批 | 从断点继续（HTTP Range） |
+| `task_list` | 全部 | 活动任务 + 最近完成（刷新恢复） |
+| `task_pause` / `task_resume` | 单任务 | 调任务的 pause action（当前下载批次） |
+| `task_cancel` | 单任务 | 置协作取消标志 + 取消当前批次；终态由 worker 落定 |
 
 ## 9. Frontend Architecture
 
@@ -1119,22 +1128,19 @@ export function createAuthStore() {
   return { session, loading, login, logout, refresh };
 }
 
-// stores/download.ts — tracks all active downloads
-export function createDownloadStore() {
-  const [tasks, setTasks] = createStore<Map<string, DownloadTask>>(new Map());
+// stores/tasks.ts — the only task store (ADR-019)
+export const tasksStore = createRoot(() => {
+  const [active, setActive] = createStore<Record<string, TaskSnapshot>>({});
+  const [recent, setRecent] = createSignal<TaskSnapshot[]>([]);
 
-  // Listen to Tauri events for progress (throttled at 100ms on Rust side)
-  onMount(() => {
-    listen<DownloadProgress>("download://progress", (event) => {
-      setTasks(event.payload.taskId, (prev) => ({
-        ...prev,
-        progress: event.payload.progress,
-      }));
-    });
-  });
+  // One snapshot per task; terminal snapshots move into `recent`.
+  listen<TaskSnapshot>("task://updated", (event) => apply(event.payload));
+  // Lag recovery / reload: replace the whole board.
+  listen<TaskBoard>("task://sync", (event) => applyBoard(event.payload));
+  void tasks.list().then((res) => res.ok && applyBoard(res.data));
 
-  return { tasks };
-}
+  return { active, recent, activeList, aggregate, cancel, pause, resume };
+});
 ```
 
 ### 9.3 IPC Type Bridge (Auto-Generated Types + Manual API Wrapper)
@@ -1218,11 +1224,14 @@ export const launch = {
   kill: (key: string) => invoke<void>("launch_kill", { key }),
 };
 
-// Downloads (all batch-scoped)
-export const downloads = {
-  cancel: (batchId: string) => invoke<void>("download_cancel", { batchId }),
-  pause: (batchId: string) => invoke<void>("download_pause", { batchId }),
-  resume: (batchId: string) => invoke<void>("download_resume", { batchId }),
+// Unified tasks (all task-scoped, ADR-019)
+export const tasks = {
+  list: () => invoke<TaskBoard>("task_list"),
+  log: (taskId: string) => invoke<string[]>("task_log", { taskId }),
+  pause: (taskId: string) => invoke<void>("task_pause", { taskId }),
+  resume: (taskId: string) => invoke<void>("task_resume", { taskId }),
+  cancel: (taskId: string) => invoke<void>("task_cancel", { taskId }),
+  clearHistory: () => invoke<void>("task_clear_history"),
 };
 
 // Settings & Logs
@@ -1243,12 +1252,9 @@ export const logs = {
 ```rust
 // src-tauri/src/events.rs
 pub mod events {
-    // Download
-    pub const DOWNLOAD_PROGRESS: &str = "download://progress";
-    pub const DOWNLOAD_COMPLETE: &str = "download://complete";
-    pub const DOWNLOAD_ERROR: &str = "download://error";
-    pub const DOWNLOAD_PAUSED: &str = "download://paused";
-    pub const DOWNLOAD_RESUMED: &str = "download://resumed";
+    // Unified task center (ADR-019)
+    pub const TASK_UPDATED: &str = "task://updated";
+    pub const TASK_SYNC: &str = "task://sync";
 
     // Auth
     pub const AUTH_STATE_CHANGED: &str = "auth://state-changed";
@@ -1259,8 +1265,6 @@ pub mod events {
     pub const LAUNCH_OUTPUT: &str = "launch://output";    // coalesced stdout/stderr lines (batched)
     pub const LAUNCH_EXITED: &str = "launch://exited";
 
-    // Mod Loader
-    pub const MODLOADER_INSTALL_PROGRESS: &str = "modloader://progress";
 }
 
 // All event names and error codes are string constants.
@@ -1407,7 +1411,7 @@ User clicks "Launch" on a profile
 
 ## 11. IPC Command Table
 
-98 commands, all defined in `src-tauri/src/commands/` and registered via
+125 commands, all defined in `src-tauri/src/commands/` and registered via
 `IPC_COMMANDS` + `generate_handler!` in `src-tauri/src/handlers.rs`
 （数量由 `ipc_tests.rs` 的计数断言守护；ADR-013 迁移后 agent_* 9 条已由
 ai_* 5 条 + mods 纯逻辑 2 条取代，S4/S5 再加 mcp_* 9 条）。
@@ -1415,6 +1419,10 @@ ai_* 5 条 + mods 纯逻辑 2 条取代，S4/S5 再加 mcp_* 9 条）。
 | Command | Handler | Description |
 |---------|---------|-------------|
 | `open_external_url` | `external.rs` | Open a URL in the system browser |
+| `dialog_pick_background_video` | `external.rs` | Pick and canonicalize a local MP4 wallpaper |
+| `background_video_prepare` | `external.rs` | Probe, prepare native-resolution HEVC when needed, validate and authorize one asset |
+| `dialog_pick_background_image` | `external.rs` | Pick and canonicalize a local still-image wallpaper |
+| `background_image_prepare` | `external.rs` | Validate image format/size and authorize one asset path |
 | `auth_microsoft_login` | `auth.rs` | Start MS OAuth2 device flow (emits `auth://device-code`) |
 | `auth_offline_login` | `auth.rs` | Create offline session |
 | `auth_logout` | `auth.rs` | Clear session + remove private data |
@@ -1423,9 +1431,10 @@ ai_* 5 条 + mods 纯逻辑 2 条取代，S4/S5 再加 mcp_* 9 条）。
 | `auth_list_accounts` | `auth.rs` | List accounts (plaintext metadata only) |
 | `auth_switch_account` | `auth.rs` | Change the selected account |
 | `auth_remove_account` | `auth.rs` | Remove an account and its private data |
-| `download_cancel` | `download.rs` | Cancel an entire download batch |
-| `download_pause` | `download.rs` | Pause download batch |
-| `download_resume` | `download.rs` | Resume paused download batch |
+| `task_list` | `tasks.rs` | Active tasks + recent history (reload recovery) |
+| `task_get` / `task_log` | `tasks.rs` | One task snapshot / full detail log |
+| `task_pause` / `task_resume` / `task_cancel` | `tasks.rs` | Task-scoped controls (ADR-019) |
+| `task_clear_history` | `tasks.rs` | Clear recent completed tasks |
 | `launch_start` | `launch.rs` | Launch game through `DefaultLauncher` |
 | `launch_kill` | `launch.rs` | Kill game process (process group on Unix) |
 | `launch_status` | `launch.rs` | Get running game status |
@@ -1447,6 +1456,12 @@ ai_* 5 条 + mods 纯逻辑 2 条取代，S4/S5 再加 mcp_* 9 条）。
 | `mcp_recent_calls` | `mcp.rs` | 最近 MCP 调用审计（脱敏视图） |
 | `modloader_list` | `modloader.rs` | List loader versions (`loader_type` param) |
 | `modloader_install` | `modloader.rs` | Install loader; creates a new version-backed instance and returns its key |
+| `modpack_inspect` | `modpack.rs` | Parse a local `.zip`/`.mrpack`; returns format, game/loader/file counts, icon, warnings |
+| `modpack_pick_file` | `modpack.rs` | Native `.zip`/`.mrpack` picker |
+| `modpack_install` | `modpack.rs` | Background one-click install (game → loader → overrides → files → metadata); creates a unified task |
+| `task_list` / `task_get` / `task_log` | `tasks.rs` | Task board / snapshot / full detail log |
+| `task_pause` / `task_resume` / `task_cancel` | `tasks.rs` | Task-scoped controls (ADR-019) |
+| `task_clear_history` | `tasks.rs` | Clear recent completed tasks |
 | `mod_search` | `mods.rs` | Search mods (Modrinth) |
 | `mod_get_versions` | `mods.rs` | List versions of a mod |
 | `mod_get_download_url` | `mods.rs` | Resolve a download URL |
@@ -2000,6 +2015,21 @@ Logging is infrastructure, not polish. Adding it late means retrofitting spans i
 
 写入前归一化；损坏 → `.bak-<ts>` + 默认布局；未知版本拒绝。
 
+### 21.3 主页卡片系统 v3（2026-10-31）
+
+- 前端主页已从后端持久化网格切换为 **12 列五档宽 × 四档高**卡片系统，权威契约见
+  [`docs/ui-design/14_CARD_SYSTEM.md`](ui-design/14_CARD_SYSTEM.md)。宽度档位
+  `3/4/6/8/12`，高度档位 `1/2/3/4`（92px 行高 + 14px 间隔），布局存
+  `rmccc.softDashboard.v3`；旧 `rmccc.softDashboard.v2` 自动迁移。
+- 内置卡与插件卡共用 `.soft-module` 外壳、尺寸约束和编辑操作。插件 manifest 的
+  `dashboardCards[]` 支持多卡，全局实例 id 为 `plugin:<pluginId>/<cardId>`；
+  `defaultSize/minSize/maxSize` 会吸附到合法档位。
+- 插件卡通过 UI API v1 Host Bridge 读取主题、公开设置、实例、任务、启动状态，
+  或经声明的 `network.request` 查询服务器/HTTP；每次调用在 Rust 重新授权。
+- 默认卡：`server` 走 Rust SLP（`server_status`）；`launch://progress` 由启动编排
+  和游戏窗口就绪日志驱动，`100%` 只在窗口打开后出现；`downloads` 直接消费统一任务
+  中心快照，不再维护第二套下载状态。
+
 ### 21.3 渲染与交互
 
 - 前端 CSS Grid（`repeat(columns, 1fr)`，120px 行高）；`grid-column/row` 由 `position/size` 计算。
@@ -2013,12 +2043,23 @@ Logging is infrastructure, not polish. Adding it late means retrofitting spans i
     一层看不见的覆盖物，让整页都点不动。
 - 每卡片 `ErrorBoundary`；插件卸载/禁用后 descriptor 缺失 → 保位占位。
 
-### 21.4 主题
+### 21.4 主题（Noctis v3，ADR-021）
 
 - `--rmccc-*` 令牌（background/surface/surfaceElevated/text/textMuted/accent/accentContrast/border），
-  同时桥接旧 `--surface-*`/`--text-*` 变量。
-- 内置 light/dark + 已启用插件的 `contributes.themes`（JSON，无 JS）；偏好存入 `UserSettings.theme`。
-- `follow_system` 监听 `prefers-color-scheme`；未知/无效主题回退安全主题。
+  同时桥接旧 `--surface-*`/`--text-*` 变量。公开 schema 仍只有这 8 个颜色。
+- 宿主派生 `ThemeScene`（`src/theme/presets.ts`）：8 套内置主题各有 atmosphere、
+  secondary/tertiary 与粒子 motif；未知插件主题按 accent 的 HSL 派生确定性场景。
+  场景通过 `<html data-atmosphere>` 与 `--scene-*` 发布，主题不能提供 CSS/JS。
+- 视觉层：`theme-core.css`（token/控件/页面）→ `theme-skin.css`（v2 皮肤槽）→
+  `ambient-stage.css`（默认动态背景）→ `home-stage.css`（主页/dock）。旧
+  `visual-system.css` / `soft-dashboard.css` 已删除。
+- 没有用户图片/视频壁纸且没有 v2 app 背景时，`AmbientStage` 渲染主题化渐变、
+  veil、地平线、网格和粒子；有壁纸时不创建。动效统一受 `data-motion` 与
+  `prefers-reduced-motion` 闸门。
+- 自适应主题 v2：图片多区域 / 视频多帧 → OKLab k-means（k=6）→ 代表性角色色；
+  dark/light 跟随当前主题，所有关键对比度 ≥4.5:1；存储 `rmccc.adaptivePalette.v2`。
+- `follow_system` 仍监听 `prefers-color-scheme` 以兼容旧 `null` 偏好；设置页只列
+  显式主题卡。未知/无效主题回退安全主题。
 - 安全语义色（danger/success/warning）由宿主控制，主题 JSON 中出现时忽略。
 
 ## 22. 前端引导与"透明窗口"防护（启动链路）
@@ -2263,4 +2304,43 @@ stdin/stdout，一行一个 JSON：
   → **deferred / release-blocked**（权限语义与账号 vault 相同）。
 - 旧面清理：`/agent` 路由重定向到 `/settings`；`agent_*` 9 条 IPC 移除，
   前端无引用（`ipc_tests` 计数断言 93）。
+
+## 26. Native-resolution wallpaper engine (ADR-020)
+
+Local MP4 wallpaper uses the system WebView as the GPU decoder and compositor;
+there is no bundled multimedia runtime and no custom native texture pipeline.
+The design supersedes ADR-017's 1080p H.264 proxy.
+
+| Layer | Responsibility |
+|-------|----------------|
+| `rmccc-platform::video` shared engine | MP4 probe, direct/transcode decision, recipe-keyed cache, unique staging and strict output validation |
+| macOS backend | `avconvert PresetHEVCHighestQuality`, native-resolution HEVC |
+| Windows backend | WinRT `MediaTranscoder`, native-resolution HEVC, hardware acceleration required |
+| Tauri `background_video_prepare` | Validate source, prepare on a blocking worker, grant the returned asset and return one DTO |
+| Tauri `background_image_prepare` | Validate a still image (format/size), grant the exact asset path and return it |
+| SolidJS `BackgroundVideo` | One persistent muted/looping/inline video source, composited into a DOM canvas at display resolution; frame watchdog only for decode stalls |
+| SolidJS `BackgroundImage` | One static `object-fit: cover` image layer above the video; no copy or image runtime |
+
+H.264 at or below 4096×2304 and HEVC play directly. Oversized H.264 is converted
+to HEVC without changing dimensions or timing. Validation requires HEVC, exact
+source width/height, exact rational frame rate and frame count; duration rounding
+is bounded to 200 ms. Preparation errors are visible and do not fall back to a
+known software-decoding source. Unsupported MP4 codecs are explicit errors.
+
+The single video prepare IPC removes the separate asset-allow step. Frontend
+preparation starts during bootstrap and deduplicates concurrent calls by source
+path. The old poster/IndexedDB cache, proxy-upgrade source swap, route compositor
+nudges, focus recovery timers and forced `load()` reset are prohibited by ADR-020.
+
+A still-image wallpaper reuses the asset-scope contract through
+`background_image_prepare`: the backend canonicalizes the file, accepts PNG/JPEG/
+WebP/GIF/BMP/AVIF up to 32 MiB and grants only that path. `BackgroundImage` layers
+above the video, sampling it first for the adaptive palette. Image and video are
+mutually exclusive in Appearance; enabling one turns the other off. No image
+codec runtime or frontend bitmap cache is added.
+
+Native macOS feasibility is verified with 4126×2596 HEVC and VideoToolbox.
+Windows HEVC codec/GPU/driver availability remains a runtime prerequisite;
+native Windows compilation and WebView2 GPU validation are deferred /
+release-blocked under platform guide §1.4.
 

@@ -202,7 +202,7 @@ Phase 6 按"受控编排层"思路在启动器内实现了 Agent 执行循环、
 
 | 工具 | 说明 |
 |---|---|
-| `system.status` | 版本、运行中游戏、活动下载概览 |
+| `system.status` | 版本、运行中游戏、活动任务/最近任务快照（含 task_id） |
 | `system.audit_recent {limit?}` | 最近操作审计（脱敏），Agent 自查历史 |
 | `profiles.list` / `profiles.get {profile_id}` | 实例列表/详情 |
 | `instances.list` | 版本仓库（磁盘 versions/） |
@@ -230,7 +230,7 @@ Phase 6 按"受控编排层"思路在启动器内实现了 Agent 执行循环、
 | `mods.toggle {profile_id, mod_filename, enabled}` | 启停 Mod |
 | `mods.apply_plan {profile_id, plan?}` | 补装缺失前置（缺 plan 时按最新扫描自动生成） |
 | `instance.repair {profile_id}` | 修复缺失文件 |
-| `downloads.control {batch_id, action}` | 暂停/恢复/取消下载 |
+| `tasks.control {task_id, action}` | 暂停/恢复/取消安装/下载任务（ADR-019） |
 | `launch.start {profile_id}` | 启动游戏 |
 
 **破坏性（5，默认 confirm——必须用户在 GUI 确认卡放行）**：

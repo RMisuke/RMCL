@@ -8,6 +8,7 @@
  */
 import { For, Match, Show, Switch } from "solid-js";
 import { themeSkin } from "../theme";
+import { AmbientStage } from "./AmbientStage";
 import type { SkinBackground, SkinEffect } from "../ipc/types";
 
 /** Deterministic pseudo-random so a re-render never reshuffles positions. */
@@ -213,15 +214,17 @@ export function ThemeBackdrop() {
     const scope = skin.background.scope;
     return scope === "app" || scope === "both" ? skin.background : null;
   };
+  const hostAmbient = () => !background();
   return (
-    <Show when={background()} keyed>
-      {(bg) => (
-        <div class="theme-backdrop" aria-hidden="true">
-          <BackgroundMedia background={bg} />
-          <ThemeEffects area="app" />
-        </div>
-      )}
-    </Show>
+    <div class="theme-backdrop" aria-hidden="true">
+      <Show when={hostAmbient()}>
+        <AmbientStage />
+      </Show>
+      <Show when={background()} keyed>
+        {(bg) => <BackgroundMedia background={bg} />}
+      </Show>
+      <ThemeEffects area="app" />
+    </div>
   );
 }
 

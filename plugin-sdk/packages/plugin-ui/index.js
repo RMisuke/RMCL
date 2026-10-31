@@ -202,6 +202,10 @@ export function connect(options = {}) {
     theme: () => request("theme.get"),
     settings: () => request("settings.get"),
     instances: () => request("instances.list"),
+    tasks: () => request("tasks.list"),
+    launch: () => request("launch.status"),
+    /** Query a declared Minecraft server through the host's SLP bridge. */
+    server: (params) => request("server.status", params),
     /**
      * @param {{url: string, method?: "GET"|"POST", body?: string}} params
      */

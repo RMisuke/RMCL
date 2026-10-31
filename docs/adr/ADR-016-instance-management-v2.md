@@ -184,6 +184,7 @@ HMCL 当前实例可配置项（`HMCL/.../setting/GameSettings.java`）：
 | `instance_update_settings(key, patch)` | 设置/覆盖名单/显示名/图标/隔离 |
 | `instance_resolved_settings(key)` | 生效值（UI 唯一来源） |
 | `instance_paths(key)` | 全部目录 |
+| `instance_reveal(key, folder?)` | 按受限枚举打开实例文件夹（HMCL 浏览菜单） |
 | `instance_install(directory_id, mc_version, instance_id?, loader?)` | 安装向导（异步事件） |
 | `instance_import(directory_id, version_id)` | 把已有版本登记为实例（目录内已有文件） |
 | `instance_rename(key, new_id)` / `instance_duplicate(key, new_id, copy_saves)` / `instance_remove(key, delete_files)` | 生命周期（HMCL 语义） |

@@ -91,16 +91,33 @@ impl ModSource for ModrinthSource {
         let hits: Vec<ModInfo> = raw
             .hits
             .into_iter()
-            .map(|h| ModInfo {
-                id: h.project_id,
-                source: "modrinth".into(),
-                name: h.title,
-                slug: h.slug,
-                authors: vec![h.author],
-                description: h.description,
-                download_count: h.downloads,
-                icon_url: h.icon_url,
-                categories: h.categories,
+            .map(|h| {
+                // Search hits do not expose a `loaders` array; Modrinth puts
+                // loader ids into `categories` (alongside topics like
+                // `optimization`). Prefer an explicit field when a mirror
+                // provides one, otherwise extract the loader categories.
+                let loaders = if h.loaders.is_empty() {
+                    h.categories
+                        .iter()
+                        .filter(|c| is_loader_category(c))
+                        .cloned()
+                        .collect()
+                } else {
+                    h.loaders
+                };
+                ModInfo {
+                    id: h.project_id,
+                    source: "modrinth".into(),
+                    name: h.title,
+                    slug: h.slug,
+                    authors: vec![h.author],
+                    description: h.description,
+                    download_count: h.downloads,
+                    icon_url: h.icon_url,
+                    categories: h.categories,
+                    game_versions: h.versions,
+                    loaders,
+                }
             })
             .collect();
 
@@ -113,10 +130,12 @@ impl ModSource for ModrinthSource {
 
     async fn list_versions(&self, mod_id: &str) -> Result<Vec<ModVersion>> {
         let url = format!("{}/project/{mod_id}/version", self.base_url);
+        // No loader filter: the launcher also browses LiteLoader/Quilt files and
+        // the detail page has its own loader filter. Filtering here silently hid
+        // versions for loaders missing from the hard-coded list.
         let resp = self
             .client
             .get(&url)
-            .query(&[("loaders", r#"["fabric","forge","neoforge","quilt"]"#)])
             .send()
             .await
             .map_err(|e| RmcccError::Network(e.to_string()))?;
@@ -141,6 +160,9 @@ impl ModSource for ModrinthSource {
                 filename: v.files.first().map(|f| f.filename.clone()),
                 // P3-11：Modrinth 提供 sha1，填充供 install 校验
                 sha1: v.files.first().and_then(|f| f.hashes.sha1.clone()),
+                published: v.date_published,
+                version_type: v.version_type,
+                file_size: v.files.first().and_then(|f| f.size).filter(|n| *n > 0),
             })
             .collect();
 
@@ -211,6 +233,22 @@ impl ModSource for ModrinthSource {
 
 // ── Modrinth API response types ──
 
+/// Loader ids are categories in Modrinth's search response.
+fn is_loader_category(category: &str) -> bool {
+    matches!(
+        category,
+        "fabric"
+            | "forge"
+            | "neoforge"
+            | "quilt"
+            | "liteloader"
+            | "rift"
+            | "modloader"
+            | "legacyfabric"
+            | "cleanroom"
+    )
+}
+
 #[derive(Debug, Deserialize)]
 struct SearchResponse {
     hits: Vec<SearchHit>,
@@ -228,6 +266,10 @@ struct SearchHit {
     downloads: u64,
     icon_url: Option<String>,
     categories: Vec<String>,
+    #[serde(default)]
+    versions: Vec<String>,
+    #[serde(default)]
+    loaders: Vec<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -238,6 +280,10 @@ struct VersionEntry {
     game_versions: Vec<String>,
     loaders: Vec<String>,
     files: Vec<VersionFile>,
+    #[serde(default)]
+    date_published: Option<String>,
+    #[serde(default)]
+    version_type: Option<String>,
 }
 
 #[derive(Debug, Deserialize, Default)]
@@ -247,6 +293,8 @@ struct VersionFile {
     filename: String,
     #[serde(default)]
     hashes: FileHashes,
+    #[serde(default)]
+    size: Option<u64>,
 }
 
 #[derive(Debug, Deserialize, Default)]
@@ -297,7 +345,9 @@ mod tests {
                     "description": "A test mod",
                     "downloads": 1234,
                     "icon_url": "https://example.com/icon.png",
-                    "categories": ["fabric", "utility"]
+                    "categories": ["fabric", "utility"],
+                    "versions": ["1.21.1", "1.21.5"],
+                    "loaders": ["fabric", "quilt"]
                 },
                 {
                     "project_id": "def456",
@@ -307,7 +357,8 @@ mod tests {
                     "description": "Another",
                     "downloads": 99,
                     "icon_url": null,
-                    "categories": ["forge"]
+                    "categories": ["forge"],
+                    "versions": ["1.20.4"]
                 }
             ]
         }"#;
@@ -328,6 +379,10 @@ mod tests {
         assert_eq!(result.hits[0].id, "abc123");
         assert_eq!(result.hits[0].name, "Example Mod");
         assert_eq!(result.hits[0].categories, vec!["fabric", "utility"]);
+        assert_eq!(result.hits[0].game_versions, vec!["1.21.1", "1.21.5"]);
+        assert_eq!(result.hits[0].loaders, vec!["fabric", "quilt"]);
+        // No explicit `loaders` field → derive loader ids from categories.
+        assert_eq!(result.hits[1].loaders, vec!["forge"]);
         assert_eq!(result.hits[0].source, "modrinth");
     }
 
@@ -341,8 +396,14 @@ mod tests {
                 "version_number": "1.0.0",
                 "game_versions": ["1.21"],
                 "loaders": ["fabric"],
+                "date_published": "2025-06-17T12:00:00Z",
+                "version_type": "release",
                 "files": [
-                    { "url": "https://example.com/mod-1.0.0.jar", "filename": "mod-1.0.0.jar" }
+                    {
+                        "url": "https://example.com/mod-1.0.0.jar",
+                        "filename": "mod-1.0.0.jar",
+                        "size": 2048
+                    }
                 ]
             }
         ]"#;
@@ -363,6 +424,12 @@ mod tests {
             Some("https://example.com/mod-1.0.0.jar")
         );
         assert_eq!(versions[0].filename.as_deref(), Some("mod-1.0.0.jar"));
+        assert_eq!(
+            versions[0].published.as_deref(),
+            Some("2025-06-17T12:00:00Z")
+        );
+        assert_eq!(versions[0].version_type.as_deref(), Some("release"));
+        assert_eq!(versions[0].file_size, Some(2048));
     }
 
     /// Modrinth `/version/{id}` 下载 URL 解析（P1-06）。

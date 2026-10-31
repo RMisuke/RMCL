@@ -209,6 +209,41 @@ fn parse_java_home_line(line: &str) -> Option<JavaInstallation> {
     })
 }
 
+/// macOS 物理内存探测：`sysctl -n hw.memsize` + `vm_stat`。
+pub struct MacosSystemMemory;
+
+impl crate::system::SystemMemory for MacosSystemMemory {
+    fn physical_memory(&self) -> Result<crate::system::PhysicalMemory> {
+        let total_output = Command::new("/usr/sbin/sysctl")
+            .args(["-n", "hw.memsize"])
+            .output()
+            .map_err(|e| RmcccError::Other(format!("读取物理内存失败: {e}")))?;
+        if !total_output.status.success() {
+            return Err(RmcccError::Other(format!(
+                "sysctl hw.memsize 退出状态非零: {}",
+                total_output.status
+            )));
+        }
+        let total_bytes = String::from_utf8_lossy(&total_output.stdout)
+            .trim()
+            .parse::<u64>()
+            .map_err(|e| RmcccError::Other(format!("解析物理内存失败: {e}")))?;
+
+        let vm_output = Command::new("/usr/bin/vm_stat")
+            .output()
+            .map_err(|e| RmcccError::Other(format!("读取内存状态失败: {e}")))?;
+        if !vm_output.status.success() {
+            return Err(RmcccError::Other(format!(
+                "vm_stat 退出状态非零: {}",
+                vm_output.status
+            )));
+        }
+        let text = String::from_utf8_lossy(&vm_output.stdout);
+        crate::system::parse_vm_stat(&text, total_bytes)
+            .ok_or_else(|| RmcccError::Other("vm_stat 输出无法解析".into()))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

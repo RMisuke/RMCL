@@ -151,6 +151,9 @@
             "theme.get",
             "settings.get",
             "instances.list",
+            "tasks.list",
+            "launch.status",
+            "server.status",
             "network.request",
             "llm.chat"
           ]
@@ -232,6 +235,16 @@
         "cardId": {
           "type": "string",
           "maxLength": 128
+        },
+        "card": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["title", "width", "height"],
+          "properties": {
+            "title": { "type": "string", "maxLength": 128 },
+            "width": { "enum": [3, 4, 6, 8, 12] },
+            "height": { "enum": [1, 2, 3, 4] }
+          }
         },
         "theme": {
           "$ref": "#/$defs/themeTokens"

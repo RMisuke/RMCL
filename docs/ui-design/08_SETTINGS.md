@@ -52,9 +52,21 @@
 | 区块 | 内容 |
 |---|---|
 | 语言 | `settings_supported_locales` 下拉（显示 native_name）；切换即时生效（现有 i18n 机制），无需重启 |
-| 外观 | 模式三选：跟随系统（默认）/ 浅色 / 深色（`dashboard_set_theme_preference("")`/`light`/`dark`）+ 主题卡列表（`dashboard_list_themes`：内置 dark/light + 插件主题 mode="custom" 标注来源插件）；每卡显示 4 色色板预览（`dashboard_get_theme_tokens`），选中即切换；「查看主题 JSON」（`dashboard_get_theme_json`，调试入口，折叠） |
+| 外观 | 主题卡列表（`dashboard_list_themes`：8 套内置 Noctis 主题 + 插件主题 mode="custom" 标注来源）+ 首卡「自适应」；不再提供“跟随系统”卡（旧 `null` 偏好仍按系统解析；选择任一主题后写入显式 key）。每卡显示主题场景缩略图（背景/三色角色/surface 条），选中即切换；「查看主题 JSON」（`dashboard_get_theme_json`，调试入口，折叠）。 |
+| 背景 | 宿主默认氛围层（`AmbientStage`）：没有图片/视频壁纸时按主题渲染渐变 wash、缓动 veil、地平线、透视网格与主题粒子；图片/视频壁纸或 v2 主题背景存在时该层不创建。图片壁纸卡位于动态视频卡上方：本地 PNG/JPEG/WebP/GIF/BMP/AVIF（≤32 MiB）经 `dialog_pick_background_image` + `background_image_prepare` 授权后只读显示；遮罩 0–80%。图片与 MP4 动态壁纸互斥（启用/选择其一会关闭另一个），图片层位于视频层之上。 |
+| 玻璃 | 主面板不透明度 0–100%（`--rmccc-panel-alpha`）、卡片不透明度 0–100%（`--rmccc-card-alpha`）、主面板卡片模糊度 0–40 px（`--rmccc-card-blur`）。0% 时对应层真正透明；图片/视频壁纸下主页卡片模糊度自动取设置值的 55%。 |
 | 更新 | 检查更新开关 `check_updates`（settings_set_user）+ [立即检查]（后端 P9 就绪前灰置「即将支持」） |
 | 日志 | 内嵌日志查看器：[刷新] 拉取 `log_get(lines)`（默认 200，可调 500）等宽字体滚动区 + 级别着色（ERROR=danger）+ [复制] [清空]（`log_clear` 确认）；「打开日志目录」待 open_path（P1） |
+
+### 外观 · 自适应主题
+
+- 采样图片的 4 个区域（整图/中心/左上/右下）或视频整段的 5 帧（8%/30%/52%/74%/90%）
+  加可见当前帧；跨域或 seek 失败时退回当前帧，不向网络发送像素。
+- 多帧 OKLab k-means（k=6）后按覆盖度 × 色度 × 中心偏置选出代表色；primary 优先
+  有色度的代表色，secondary/tertiary 至少相隔 30°。
+- 生成 dark/light 两套 surface stack，**跟随当前主题明暗模式**；所有关键对 ≥4.5:1，
+  卡片显示来源、采样帧/像素数、模式和置信度；失败时回退当前主题 accent。
+- 存储键 `rmccc.adaptivePalette.v2`；v1 结果自动失效。关闭自适应恢复 8-token 主题。
 
 ## 5. 分区 · 下载（#download）
 

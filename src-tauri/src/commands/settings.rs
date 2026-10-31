@@ -159,6 +159,43 @@ pub async fn settings_set(
     Ok(core.config.clone())
 }
 
+/// Host physical-memory snapshot for the instance memory meter.
+///
+/// Only the UI consumes this; launch-time heap sizing deliberately remains a
+/// persisted user setting. Platforms without a memory backend surface
+/// `unsupported_platform`, and the UI hides the system segment instead of
+/// inventing numbers.
+#[derive(Debug, Clone, Serialize, TS)]
+#[ts(export_to = "types.ts")]
+pub struct SystemMemoryInfo {
+    #[ts(type = "number")]
+    pub total_bytes: u64,
+    #[ts(type = "number")]
+    pub available_bytes: u64,
+}
+
+#[tauri::command]
+#[tracing::instrument(skip(state))]
+pub async fn system_memory(
+    state: tauri::State<'_, AppState>,
+) -> Result<SystemMemoryInfo, IpcError> {
+    let platform = {
+        let core = state.core.read().await;
+        core.platform.clone()
+    };
+    let status = tokio::task::spawn_blocking(move || platform.memory.physical_memory())
+        .await
+        .map_err(|e| IpcError {
+            code: rmccc_error::ErrorCode::Unknown,
+            message: format!("memory probe join error: {e}"),
+            retryable: false,
+        })??;
+    Ok(SystemMemoryInfo {
+        total_bytes: status.total_bytes,
+        available_bytes: status.available_bytes,
+    })
+}
+
 #[tauri::command]
 #[tracing::instrument(skip(state))]
 pub async fn java_detect(state: tauri::State<'_, AppState>) -> Result<Vec<JavaInfo>, IpcError> {

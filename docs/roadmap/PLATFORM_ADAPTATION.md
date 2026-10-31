@@ -23,6 +23,7 @@
 | Java 探测 | `JavaDetector` | `detect`/`find`（各 OS 路径/注册表/java_home/alternatives） |
 | 凭据存储 | `CredentialStore` | `get/set/delete_secret` |
 | shell/打开 | `PlatformShell` | `open_url`(http/s)/`open_path`/`run_script`(sh/bat/ps1) |
+| 原生分辨率视频壁纸 | `VideoEngine` / `VideoTranscoder` | `prepare`（决策/缓存/校验）/ `transcode`（各平台编码器） |
 | 安装器/更新 | `InstallerBackend`/`UpdaterBackend` | 平台打包 + updater target 架构 |
 | 平台描述符 | `PlatformDescriptor` | `os/arch/features` 供领域规则筛选 |
 
@@ -43,6 +44,7 @@
 | `rmccc-version/libraries.rs` 的 `cfg!` OS/arch + `minecraft_arch()` + per-OS classifier 分支 | 数据筛选 | library OS/arch 过滤 | ✅ `library_applies(lib, desc)` / `resolve_library_items(.., desc)` / `collect_classpath(.., desc)` / `is_current_platform_classifier(.., desc)`；classifier 事实来源收归 `PlatformDescriptor::native_classifier_candidates()` | ✅ 1.1b 完成 |
 | `rmccc-version/compatibility.rs` 的 `current_os_name/current_arch` | 数据筛选 | 当前平台规则 | ✅ `os_condition_matches(os, desc)` / `rule_applies(.., desc)` / `rules_allow(.., desc)` / `applies_to_environment(.., desc)`；`DefaultGameRepository` 持注入的描述符 | ✅ 1.1b 完成 |
 | `src-tauri/commands/launch.rs` `libc::kill(-pid)` + `taskkill` / `src-cli` `kill_process_group` | 进程终止 | Unix 进程组 + Windows taskkill | ✅ `core.platform.process.terminate_tree(pid)`；两个应用 crate 的 `libc` 依赖已删除 | ✅ 1.1c 完成 |
+| `src-tauri/commands/external.rs` 的 `/usr/bin/avconvert` + macOS `#[cfg]` | 视频硬解 | macOS 专用转码 | ✅ 策略/缓存/编码器下沉 `rmccc-platform::video`；macOS `avconvert`、Windows WinRT `MediaTranscoder`，Tauri 层零平台分支 | ✅ macOS 实测（2026-10-30）；Windows 原生 CI deferred |
 
 ## 4. 迁移优先级（与 Phase 1 切片对应）
 
@@ -86,6 +88,7 @@ grep -rn 'cfg(unix)|cfg(windows)|cfg(target_os|cfg!(target_os' crates/*/src --in
 | `PlatformShell`（`open_url` 仅 http(s) / `open_path`） | `shell.rs` | ✅ `open` | ⛔ `UnsupportedPlatform` | ⛔ 同上 |
 | `ProcessPriority` | `process.rs` | ✅ 数据 | ✅ 数据 | ✅ 数据 |
 | `JavaDetector`（`detect_all` / `find` + `select_for` 纯函数选版） | `java.rs` | ✅ `java_home -V` + `JAVA_HOME` + 常见路径 | ⛔ `UnsupportedPlatform`（注册表 + `Program Files` 待 CI） | ⛔ 同上（`/usr/lib/jvm` + `update-alternatives`） |
+| `VideoEngine` / `VideoTranscoder`（MP4 探测、原生分辨率 HEVC 缓存、精确帧率/帧数校验） | `video.rs` / `video/` | ✅ `avconvert PresetHEVCHighestQuality`（超规格 H.264 转 HEVC，尺寸与时序严格校验） | ⚠️ WinRT `MediaTranscoder::CreateHevc` 代码已落地（强制硬件加速），原生 Windows CI 待验 | ⛔ `UnsupportedPlatform`（不静默回退可能软解的原片；VA-API/GStreamer deferred） |
 | `CredentialStore` | — | **未定义**（延后到评估 Keychain 时，见下） | — | — |
 | 插件包解压 | `rmccc-plugin::package` | ✅ 纯 OS 无关 + `PlatformFs::atomic_replace` | ⛔ 依赖 `atomic_replace`（deferred） | ⛔ 同上 |
 
@@ -99,9 +102,9 @@ grep -rn 'cfg(unix)|cfg(windows)|cfg(target_os|cfg!(target_os' crates/*/src --in
 
 | 后端 | 状态 | 说明 |
 |---|---|---|
-| macOS (`aarch64-apple-darwin`) | ✅ 本机实现 + **真机实测** | 35 个单测（含真实子进程 `setpgid`+`killpg` 烟测、真实 Java 探测）；完整链路烟测：安装 1.20.4（3870 文件）→ 装 Fabric 0.15.11 → 启动到主菜单（Mixin + OpenAL 就绪） |
-| Windows (`x86_64-pc-windows-msvc`) | **deferred** | `unsupported.rs` 返回 `UnsupportedPlatform`；待原生 CI |
-| Linux (`x86_64-unknown-linux-gnu`) | **deferred** | 同上 |
+| macOS (`aarch64-apple-darwin`) | ✅ 本机实现 + **真机实测** | 含真实子进程 `setpgid`+`killpg` 烟测、真实 Java 探测、MP4 探测与原生分辨率 HEVC 转码；完整链路烟测：安装 1.20.4（3870 文件）→ 装 Fabric 0.15.11 → 启动到主菜单（Mixin + OpenAL 就绪） |
+| Windows (`x86_64-pc-windows-msvc`) | **deferred / release-blocked** | 文件/进程/shell/Java 仍返回 `UnsupportedPlatform`；`video::WindowsVideoTranscoder` 代码已落地（WinRT `MediaTranscoder` + 强制硬件加速），需原生 CI 首次编译，以及本机 HEVC 编解码器/GPU/驱动和 WebView2 D3D11 硬解实测 |
+| Linux (`x86_64-unknown-linux-gnu`) | **deferred** | 同上；视频准备返回 `UnsupportedPlatform` 并向前端显式报错，不回退可能软解的原视频 |
 | macOS Intel (`x86_64-apple-darwin`) | **deferred** | 不在本机构建（Apple Silicon 单架构） |
 
 > **Windows 隔离插件 UI：release-blocked（2026-10-27）**：wry 0.55 的 WebView2 后端把

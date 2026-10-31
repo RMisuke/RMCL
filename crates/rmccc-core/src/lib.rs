@@ -17,6 +17,7 @@ pub use rmccc_download;
 pub use rmccc_instance;
 pub use rmccc_launch;
 pub use rmccc_modloader;
+pub use rmccc_modpack;
 pub use rmccc_mods;
 pub use rmccc_platform;
 pub use rmccc_plugin;
@@ -27,6 +28,12 @@ pub mod pipeline;
 
 // Mod loader 安装编排（P1-4 收敛：Tauri/CLI 共用这一份）。
 pub mod modloader;
+
+// 整合包安装编排（HMCL ModpackProvider + install task 对应层）。
+pub mod modpack;
+
+// 主界面服务器信息卡：真实 Minecraft Server List Ping。
+pub mod server_status;
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;

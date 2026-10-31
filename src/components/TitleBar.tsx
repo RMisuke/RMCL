@@ -4,7 +4,7 @@ import { useLocation, useNavigate } from "@solidjs/router";
 import { Icon, type IconName } from "./icons";
 import { TaskIndicator } from "./TaskCenter";
 import { launchStore } from "../stores/launch";
-import { downloadsStore } from "../stores/downloads";
+import { tasksStore } from "../stores/tasks";
 import { uiStore } from "../stores/ui";
 import { t } from "../i18n";
 import type { TranslationKey } from "../i18n/locales/messages";
@@ -76,7 +76,7 @@ const TitleBar: Component = () => {
   };
 
   const runningCount = () => launchStore.running().size;
-  const downloadCount = () => Object.keys(downloadsStore.batches).length;
+  const downloadCount = () => tasksStore.activeCount();
   const skin = () => themeSkin();
   const iconUrl = (name: IconName) => skin()?.navigation?.icons?.[name];
 

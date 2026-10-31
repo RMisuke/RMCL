@@ -44,12 +44,16 @@
         "title": "Server Status",
         "description": "显示配置服务器的在线人数与 MOTD",
         "defaultSize": {
-          "w": 4,
+          "w": 6,
           "h": 2
         },
         "minSize": {
-          "w": 2,
-          "h": 1
+          "w": 4,
+          "h": 2
+        },
+        "maxSize": {
+          "w": 8,
+          "h": 3
         }
       }
     ],

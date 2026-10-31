@@ -163,7 +163,7 @@ JSON Schema：[`schemas/theme.schema.json`](../../schemas/theme.schema.json)（�
 - 亮色主题需同时确认：输入框/卡片与背景不要完全相同（否则边界消失）；
   `border` 建议比 `surface` 略深。
 - 主题只控制颜色，**不控制**圆角、间距、字体、阴影与背景图——这些由宿主视觉系统统一
-  （`src/styles/visual-system.css`），以保证所有主题下的可读性与可访问性。
+  （`src/styles/theme-core.css` + `theme-skin.css`），以保证所有主题下的可读性与可访问性。
 
 ## 5. 宿主如何对接（数据流）
 

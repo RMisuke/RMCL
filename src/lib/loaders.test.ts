@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { LOADER_CARDS, loaderLabel } from "./loaders";
+import { LOADER_CARDS, loaderLabel, normalizeLoaderId } from "./loaders";
 
 describe("loader catalog", () => {
   it("ids are unique and non-empty", () => {
@@ -13,6 +13,13 @@ describe("loader catalog", () => {
       expect(loaderLabel(card.id)).toBe(card.label);
       expect(card.label).not.toBe(card.id); // e.g. neo_forge → NeoForge
     }
+  });
+
+  it("normalizes Modrinth / aliased loader ids", () => {
+    expect(normalizeLoaderId("neoforge")).toBe("neo_forge");
+    expect(normalizeLoaderId("liteloader")).toBe("lite_loader");
+    expect(loaderLabel("neoforge")).toBe("NeoForge");
+    expect(loaderLabel("liteloader")).toBe("LiteLoader");
   });
 
   it("unknown ids fall back to the raw id", () => {

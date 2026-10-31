@@ -14,6 +14,21 @@ export const LOADER_CARDS: { id: string; label: string }[] = [
   { id: "lite_loader", label: "LiteLoader" },
 ];
 
+const LOADER_ALIASES: Record<string, string> = {
+  neoforge: "neo_forge",
+  optifine: "opti_fine",
+  liteloader: "lite_loader",
+  legacyfabric: "legacy_fabric",
+};
+
+/** Normalize source-specific loader ids (`neoforge` → `neo_forge`). */
+export function normalizeLoaderId(id: string | null | undefined): string {
+  if (!id) return "";
+  const lower = id.toLowerCase();
+  return LOADER_ALIASES[lower] ?? lower;
+}
+
 export function loaderLabel(id: string | null | undefined): string {
-  return LOADER_CARDS.find((l) => l.id === id)?.label ?? (id ?? "");
+  const normalized = normalizeLoaderId(id);
+  return LOADER_CARDS.find((l) => l.id === normalized)?.label ?? (id ?? "");
 }

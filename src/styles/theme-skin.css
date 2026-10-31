@@ -339,11 +339,12 @@ h3,
 /* ── Component slots ──────────────────────────────────────────────────── */
 
 .rm-card {
-  background: var(--rmccc-skin-card-bg, var(--rmccc-surface));
-  border-color: var(--rmccc-skin-card-border, var(--rmccc-border));
+  background: var(--rmccc-skin-card-bg, var(--noctis-card));
+  border-color: var(--rmccc-skin-card-border, var(--noctis-line));
   border-radius: var(--rmccc-skin-card-radius, var(--rmccc-radius-card));
   box-shadow: var(--rmccc-skin-card-shadow, var(--rmccc-shadow-card));
-  backdrop-filter: var(--rmccc-skin-card-blur, none);
+  backdrop-filter: var(--rmccc-skin-card-blur, blur(var(--rmccc-card-blur, 24px)) saturate(118%));
+  -webkit-backdrop-filter: var(--rmccc-skin-card-blur, blur(var(--rmccc-card-blur, 24px)) saturate(118%));
 }
 
 .rm-card {
@@ -375,11 +376,12 @@ h3,
 }
 
 .instance-card {
-  border-color: var(--rmccc-skin-card-border, var(--rmccc-border));
-  border-radius: var(--rmccc-skin-card-radius, 18px);
-  background: var(--rmccc-skin-card-bg, var(--rmccc-surface));
+  border-color: var(--rmccc-skin-card-border, var(--noctis-line));
+  border-radius: var(--rmccc-skin-card-radius, var(--rmccc-radius-card));
+  background: var(--rmccc-skin-card-bg, var(--noctis-card));
   box-shadow: var(--rmccc-skin-card-shadow, var(--rmccc-shadow-card));
-  backdrop-filter: var(--rmccc-skin-card-blur, none);
+  backdrop-filter: var(--rmccc-skin-card-blur, blur(var(--rmccc-card-blur, 24px)) saturate(118%));
+  -webkit-backdrop-filter: var(--rmccc-skin-card-blur, blur(var(--rmccc-card-blur, 24px)) saturate(118%));
 }
 
 .rm-btn {
@@ -391,17 +393,14 @@ html[data-skin-pill="on"] .rm-btn {
 }
 
 .rm-btn-primary {
-  background: var(--rmccc-skin-button-primary-bg, var(--rmccc-accent-gradient));
+  background: var(--rmccc-skin-button-primary-bg, var(--rmccc-accent));
   color: var(--rmccc-skin-button-primary-text, var(--rmccc-accent-contrast));
 }
 
 .rm-input,
 .rm-select,
 .rm-textarea {
-  background: var(
-    --rmccc-skin-input-bg,
-    color-mix(in srgb, var(--rmccc-background) 30%, var(--rmccc-surface))
-  );
+  background: var(--rmccc-skin-input-bg, var(--noctis-input));
   border-color: var(
     --rmccc-skin-input-border,
     color-mix(in srgb, var(--rmccc-border) 82%, transparent)
@@ -410,24 +409,24 @@ html[data-skin-pill="on"] .rm-btn {
 }
 
 .rm-menu {
-  background: var(--rmccc-skin-menu-bg, var(--rmccc-surface-elevated));
-  border-color: var(--rmccc-skin-menu-border, var(--rmccc-border));
+  background: var(--rmccc-skin-menu-bg, color-mix(in srgb, var(--rmccc-surface-elevated) 92%, transparent));
+  border-color: var(--rmccc-skin-menu-border, var(--noctis-line));
   border-radius: var(--rmccc-skin-menu-radius, 13px);
   box-shadow: var(--rmccc-skin-menu-shadow, var(--rmccc-shadow-2));
   backdrop-filter: var(--rmccc-skin-menu-blur, none);
 }
 
 .rm-dialog {
-  background: var(--rmccc-skin-dialog-bg, var(--rmccc-surface-elevated));
-  border-color: var(--rmccc-skin-dialog-border, var(--rmccc-border));
+  background: var(--rmccc-skin-dialog-bg, color-mix(in srgb, var(--rmccc-surface-elevated) 92%, transparent));
+  border-color: var(--rmccc-skin-dialog-border, var(--noctis-line));
   border-radius: var(--rmccc-skin-dialog-radius, var(--rmccc-radius-modal));
   box-shadow: var(--rmccc-skin-dialog-shadow, var(--rmccc-shadow-2));
   backdrop-filter: var(--rmccc-skin-dialog-blur, none);
 }
 
 .rm-tag {
-  background: var(--rmccc-skin-tag-bg, color-mix(in srgb, var(--rmccc-surface-elevated) 64%, transparent));
-  border-color: var(--rmccc-skin-tag-border, var(--rmccc-border));
+  background: var(--rmccc-skin-tag-bg, color-mix(in srgb, var(--rmccc-surface-elevated) 38%, transparent));
+  border-color: var(--rmccc-skin-tag-border, var(--noctis-line));
   border-radius: var(--rmccc-skin-tag-radius, 7px);
   color: var(--rmccc-skin-tag-text, var(--rmccc-text));
 }
@@ -435,13 +434,12 @@ html[data-skin-pill="on"] .rm-btn {
 .titlebar {
   background: var(
     --rmccc-skin-titlebar-bg,
-    color-mix(in srgb, var(--rmccc-surface) 68%, transparent)
+    linear-gradient(160deg, rgba(255, 255, 255, .05), transparent 42%),
+    linear-gradient(150deg, var(--noctis-chrome-1), var(--noctis-chrome-2))
   );
-  border-bottom-color: var(
-    --rmccc-skin-titlebar-border,
-    color-mix(in srgb, var(--rmccc-border) 64%, transparent)
-  );
-  backdrop-filter: var(--rmccc-skin-titlebar-blur, blur(26px) saturate(140%));
+  border-color: var(--rmccc-skin-titlebar-border, rgba(255, 255, 255, .09));
+  border-bottom-color: transparent;
+  backdrop-filter: var(--rmccc-skin-titlebar-blur, blur(26px) saturate(130%));
 }
 
 /* ── Component images (SVG / pixel textures) ──────────────────────────── */

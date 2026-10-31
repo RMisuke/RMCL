@@ -12,8 +12,7 @@ import { dispatchPluginPush } from "../plugin-ui/bridge";
 import { authStore } from "./auth";
 import { instancesStore } from "./instances";
 import { launchStore } from "./launch";
-import { downloadsStore } from "./downloads";
-import { modloadersStore } from "./modloaders";
+import { tasksStore } from "./tasks";
 import { aiStore } from "./ai";
 import { mcpStore } from "./mcp";
 import { uiStore, toast } from "./ui";
@@ -30,8 +29,7 @@ export function initStores(): void {
   authStore.attachEvents();
   instancesStore.attachEvents();
   launchStore.attachEvents();
-  downloadsStore.attachEvents();
-  modloadersStore.attachEvents();
+  tasksStore.attachEvents();
   aiStore.attachEvents();
   mcpStore.attachEvents((client) => {
     toast({ message: t("tasks.agentConnected", { client }), tone: "info" });
@@ -67,10 +65,6 @@ export function initStores(): void {
     // page reload (the list command itself is cheap — no completion scan).
     setTimeout(() => void instancesStore.refresh(true), 1200);
   });
-  void listen<{ profile_id: string; version: string }>(EVENTS.DOWNLOAD_COMPLETE, () => {
-    void instancesStore.refresh(true);
-  });
-
   // ── Startup data ──
   void authStore.refresh();
   void instancesStore.refresh();

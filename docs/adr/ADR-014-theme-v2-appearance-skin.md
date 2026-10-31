@@ -14,7 +14,7 @@
 
 当前前端样式事实（2026-10-27 核对）：
 
-- `src/styles/app.css`（2,436 行）+ `src/styles/visual-system.css`（777 行）是唯一视觉来源；
+- `src/styles/app.css` + `theme-core.css` / `theme-skin.css` 是唯一视觉来源；
 - 已有可复用令牌：`--rmccc-radius-{tag,control,card,modal}`、`--rmccc-space-1..6`、
   `--font-stack` / `--font-mono`、`--rmccc-shadow-*`、`--rmccc-accent-secondary/tertiary`；
 - 但大量组件仍写死数值：约 125 处 `border-radius`、成百处 padding/gap/font-size；

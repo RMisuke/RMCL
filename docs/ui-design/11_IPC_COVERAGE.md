@@ -42,13 +42,17 @@
 | `version_list` | 05 向导① / 02 速装卡 | 版本列表（类型过滤+搜索）；快捷版本芯片 |
 | `version_install` | 05 向导④ | 提交安装（后台执行，事件跟踪） |
 
-### 下载控制（download.rs · 3 条）
+### 统一任务（tasks.rs · 7 条，ADR-019）
 
 | 命令 | 页面 | 触发点 |
 |---|---|---|
-| `download_cancel` | 10 任务中心 / 02 下载卡 | 批次 [✕ 取消]（确认） |
-| `download_pause` | **10 任务中心** | 批次 [⏸]（现状 UI 只做 cancel，首次接通） |
-| `download_resume` | **10 任务中心** | 批次 [▶] |
+| `task_list` | 10 任务中心 | 启动/刷新恢复活动任务与最近完成 |
+| `task_get` | 10 任务中心 | 单任务快照（深链/调试） |
+| `task_log` | 10 任务中心 | 展开「安装过程」时拉完整安装器日志 |
+| `task_pause` | 10 任务中心 | 任务卡 [⏸]（仅 canPause） |
+| `task_resume` | 10 任务中心 | 任务卡 [▶] |
+| `task_cancel` | 10 任务中心 / 02 下载卡 / 05 整合包 | 任务卡 [✕]（确认） |
+| `task_clear_history` | 10 任务中心 | 「最近完成」[清空] |
 
 ### 启动与进程（launch.rs · 3 条）
 
@@ -69,7 +73,8 @@
 | `instance_remove` | **08 版本仓库** / 04 详情 | 行删除；详情「删除并清理版本文件」 |
 | `instance_check_completion` | 04 概览/维护 | [检查完整性]（Hash 级，按钮注明耗时） |
 | `instance_repair` | 04 维护 | [修复全部缺失]（返回值 N 展示） |
-| `instance_paths` | 04 概览/维护/Mod管理 | 路径卡、隔离预览、浏览菜单路径源 |
+| `instance_paths` | 04 概览/设置 | 隔离卡片运行目录预览（不再用于路径复制） |
+| `instance_reveal` | 04 概览 / 侧栏「浏览」 | 10 个文件夹按钮；受限枚举，直接打开 Finder/资源管理器 |
 | `instance_resolved_settings` | 04 设置 | 继承模型生效值副标题 |
 
 ### Modloader（modloader.rs · 2 条）
@@ -93,7 +98,7 @@
 | `mod_install_local` | **04 Mod 管理** | 拖拽 jar 到列表（首次接通） |
 | `mod_pick_and_install` | 04 Mod 管理 | [+ 添加本地文件] 原生选择器 |
 
-### 设置/Java（settings.rs · 6 条）
+### 设置/Java/系统（settings.rs · 7 条）
 
 | 命令 | 页面 | 触发点 |
 |---|---|---|
@@ -103,6 +108,7 @@
 | `settings_set_user` | 08 通用 | 语言、`check_updates` 开关 |
 | `settings_supported_locales` | 08 通用 | 语言下拉（i18n 现有接线保留） |
 | `java_detect` | 08 游戏默认 / 04 设置 | Java 选择器（含版本/厂商/64bit 副标题） |
+| `system_memory` | 04 设置 | 内存占用条（物理总量/可用量；不可用平台只显示实例分配） |
 
 ### Dashboard/主题（dashboard.rs · 9 条）
 
@@ -154,13 +160,18 @@
 > ✅ 迁移已完成：旧命令已从注册表移除，`/agent` 路由重定向设置页，
 > 前端无 `agent_*` 引用。
 
-### 日志/外部/诊断（logs.rs + external.rs + ui.rs · 4 条）
+### 日志/外部/诊断（logs.rs + external.rs + ui.rs · 9 条）
 
 | 命令 | 页面 | 触发点 |
 |---|---|---|
 | `log_get` | 08 通用-日志 | 日志查看器（行数可调 ≤500，级别着色） |
 | `log_clear` | 08 通用-日志 | 清空（确认） |
 | `open_external_url` | 06/05/08/09 | 设备码链接、Mod 浏览器下载、关于/帮助链接、插件 manifest 外链 |
+| `dialog_pick_directory` | 08 通用 / 实例设置 | 游戏根目录 / Java 目录 / 运行目录选择 |
+| `dialog_pick_background_video` | 08 外观 | 动态壁纸 MP4 选择与校验 |
+| `background_video_prepare` | 08 外观 | 原生分辨率准备 + asset 授权 |
+| `dialog_pick_background_image` | 08 外观 | 图片壁纸选择与校验（PNG/JPEG/WebP/GIF/BMP/AVIF ≤32MiB） |
+| `background_image_prepare` | 08 外观 | 图片路径校验 + asset 授权（只读原文件） |
 | `frontend_log` | 00 Shell | App.tsx 引导守卫现有接线保留 |
 
 ## 1.5 设计新增：AI 与外部控制（16 条，ADR-013）
@@ -182,23 +193,20 @@
 | | `mcp_recent_calls` | 设置-#ai：最近 Agent 操作（审计脱敏视图） |
 | Mod 纯逻辑（2） | `mods_dependency_scan` / `mods_apply_plan` | 实例详情-Mod 管理：检查缺失前置 / 一键补装（依赖扫描去 Agent 化，P14） |
 
-## 2. 事件矩阵（10 个）
+## 2. 事件矩阵
 
 | 事件 | 消费 Store | UI 落点 |
 |---|---|---|
-| `download://progress` | downloadStore | Rail 环、任务中心、02 下载卡、05 向导④ |
-| `download://complete` | downloadStore→profilesStore | 任务中心完成态、toast、向导④推进 loader 步 |
-| `download://error` | downloadStore | 任务中心失败详情、toast、向导④失败态 |
+| `task://updated` | tasksStore | Rail 环、任务中心、02 下载卡、04 加载器卡、05 向导/整合包 |
+| `task://sync` | tasksStore | 广播落后或 WebView 刷新后的整板恢复 |
 | `auth://device-code` | authStore | 06 设备码弹窗 |
 | `launch://started` | launchStore | 运行徽标（02/03/04/Rail）、日志抽屉开始 |
 | `launch://output` | launchStore（环形缓冲） | 日志抽屉 |
 | `launch://exited` | launchStore | 徽标消失、异常退出自动弹抽屉 |
-| `modloader://progress` | modloaderStore | 任务中心 loader 区、04 加载器卡 loading |
 | `instances://refreshed` | profilesStore/版本仓库视图 | 实例列表、版本仓库表刷新 |
-| `download://paused` / `download://resumed` | （预留） | 后端当前不发射；任务中心预留状态位（00 §9-P3） |
 | `ai://delta` / `ai://done` / `ai://error`（设计新增） | aiStore | 日志抽屉 AI 分析流式面板（07 §4） |
 | `mcp://session` / `mcp://confirmation`（设计新增） | mcpStore | 设置会话列表、任务中心确认卡（07 §3） |
-| 既有任务事件 payload 增加 `origin` 字段（设计新增） | 各任务 store | Agent/插件发起操作的归因徽标与 toast（07 §3） |
+| `TaskSnapshot.origin` | tasksStore | Agent/插件发起任务的归因徽标与 toast（07 §3） |
 
 ## 3. api.ts 实施修正清单
 
@@ -228,7 +236,7 @@
 ## 5. 覆盖率结论
 
 - 除已退役的 `agent_*` 9 条外，既有命令与事件全部有唯一 UI 归属；其中 **15 条命令在新设计中首次获得入口**
-  （上表加粗：download_pause/resume、instance_list/refresh/rename/duplicate/remove、
+  （上表加粗：task_pause/resume、instance_list/refresh/rename/duplicate/remove、
   mod_get_download_url、mod_install_local、dashboard_get_theme_json、plugin_install(path)、
   plugin_config_get、plugin_contributions、plugin_logic_invoke/cancel）。
 - **ADR-013 迁移已完成（S4–S7）**：`agent_*` 9 条移除，`ai_*` 5 + mods 2 +

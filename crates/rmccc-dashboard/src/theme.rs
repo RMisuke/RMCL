@@ -172,111 +172,111 @@ fn is_dark(hex: &str) -> bool {
 /// 内置安全主题令牌。
 pub fn builtin_dark() -> ThemeTokens {
     ThemeTokens {
-        background: "#0b1020".into(),
-        surface: "#141a2e".into(),
-        surface_elevated: "#1c2440".into(),
-        text: "#e6e9f2".into(),
-        text_muted: "#8b93a8".into(),
-        accent: "#7c6cff".into(),
-        accent_contrast: "#ffffff".into(),
-        border: "#2a3352".into(),
+        background: "#0b0c0f".into(),
+        surface: "#13151a".into(),
+        surface_elevated: "#1a1d24".into(),
+        text: "#f2eee7".into(),
+        text_muted: "#a39d92".into(),
+        accent: "#efb35e".into(),
+        accent_contrast: "#1b1204".into(),
+        border: "#2b2e36".into(),
     }
 }
 
 pub fn builtin_light() -> ThemeTokens {
     ThemeTokens {
-        background: "#f2f2f4".into(),
-        surface: "#ffffff".into(),
-        surface_elevated: "#fafafa".into(),
-        text: "#1a1a2e".into(),
-        text_muted: "#888888".into(),
-        accent: "#1a56db".into(),
-        accent_contrast: "#ffffff".into(),
-        border: "#e0e0e4".into(),
+        background: "#f1ece2".into(),
+        surface: "#fbf7ef".into(),
+        surface_elevated: "#fffdf7".into(),
+        text: "#1a1713".into(),
+        text_muted: "#786f63".into(),
+        accent: "#b0442b".into(),
+        accent_contrast: "#fff9f2".into(),
+        border: "#ded5c6".into(),
     }
 }
 
-/// 「林间」：绿意暗色， 苔藓绿点缀。
+/// 「林间」：苔原夜色，酸橙绿点缀。
 pub fn builtin_forest() -> ThemeTokens {
     ThemeTokens {
-        background: "#0c1512".into(),
-        surface: "#122019".into(),
-        surface_elevated: "#1a2c22".into(),
-        text: "#e3efe7".into(),
-        text_muted: "#82a491".into(),
-        accent: "#43c783".into(),
-        accent_contrast: "#06130c".into(),
-        border: "#244234".into(),
+        background: "#0a0f0c".into(),
+        surface: "#121a14".into(),
+        surface_elevated: "#19231b".into(),
+        text: "#edf2e9".into(),
+        text_muted: "#94a58f".into(),
+        accent: "#a3d46a".into(),
+        accent_contrast: "#101a0a".into(),
+        border: "#2a372b".into(),
     }
 }
 
-/// 「深海」：青蓝暗色，海面蓝点缀。
+/// 「深海」：青黑深海，磷光青点缀。
 pub fn builtin_ocean() -> ThemeTokens {
     ThemeTokens {
-        background: "#081522".into(),
-        surface: "#0e2135".into(),
-        surface_elevated: "#152c45".into(),
-        text: "#ddebf7".into(),
-        text_muted: "#7fa0ba".into(),
-        accent: "#35a7e0".into(),
-        accent_contrast: "#04121f".into(),
-        border: "#20425c".into(),
+        background: "#071014".into(),
+        surface: "#0e1b20".into(),
+        surface_elevated: "#14262c".into(),
+        text: "#e6f3f4".into(),
+        text_muted: "#8ba7ab".into(),
+        accent: "#5ad1c8".into(),
+        accent_contrast: "#031a18".into(),
+        border: "#203c42".into(),
     }
 }
 
-/// 「熔岩」：暖色暗调，熔岩橙点缀。
+/// 「熔岩」：焦黑暖调，熔岩橙点缀。
 pub fn builtin_ember() -> ThemeTokens {
     ThemeTokens {
-        background: "#171009".into(),
-        surface: "#221812".into(),
-        surface_elevated: "#2e211a".into(),
-        text: "#f4e9e1".into(),
-        text_muted: "#b09a89".into(),
-        accent: "#ef7d3a".into(),
-        accent_contrast: "#1c0e04".into(),
-        border: "#44322a".into(),
+        background: "#120b08".into(),
+        surface: "#1c1210".into(),
+        surface_elevated: "#271a16".into(),
+        text: "#f6ebe4".into(),
+        text_muted: "#b59b8f".into(),
+        accent: "#ff8152".into(),
+        accent_contrast: "#220b04".into(),
+        border: "#40281f".into(),
     }
 }
 
-/// 「樱吹雪」：粉调亮色，樱粉点缀。
+/// 「樱吹雪」：暖粉纸面，胭脂粉点缀。
 pub fn builtin_sakura() -> ThemeTokens {
     ThemeTokens {
-        background: "#faf1f4".into(),
-        surface: "#ffffff".into(),
-        surface_elevated: "#fdf3f7".into(),
-        text: "#42222f".into(),
-        text_muted: "#a58493".into(),
-        accent: "#e05687".into(),
+        background: "#faf0ec".into(),
+        surface: "#fff9f5".into(),
+        surface_elevated: "#fffdfb".into(),
+        text: "#33221f".into(),
+        text_muted: "#9b7f78".into(),
+        accent: "#c44963".into(),
         accent_contrast: "#ffffff".into(),
-        border: "#f3d9e2".into(),
+        border: "#efd8d2".into(),
     }
 }
 
-/// 「纸墨」：暖纸色亮色（低蓝光护眼），赭金点缀。
+/// 「纸墨」：旧纸暖白，赭金点缀。
 pub fn builtin_paper() -> ThemeTokens {
     ThemeTokens {
-        background: "#f4efe4".into(),
-        surface: "#fffdf7".into(),
-        surface_elevated: "#faf5ea".into(),
-        text: "#332e20".into(),
-        text_muted: "#958c74".into(),
-        accent: "#a5721f".into(),
-        accent_contrast: "#ffffff".into(),
-        border: "#e7dfca".into(),
+        background: "#f3ead8".into(),
+        surface: "#fbf5e6".into(),
+        surface_elevated: "#fffaf0".into(),
+        text: "#30281c".into(),
+        text_muted: "#8f8067".into(),
+        accent: "#8f5f1f".into(),
+        accent_contrast: "#fff8ea".into(),
+        border: "#e1d4bb".into(),
     }
 }
 
-/// 「晴空」：蓝调亮色，天青点缀。
+/// 「晴空」：冷雾天青，钴蓝点缀。
 pub fn builtin_sky() -> ThemeTokens {
     ThemeTokens {
-        background: "#eff5fb".into(),
-        surface: "#ffffff".into(),
-        surface_elevated: "#f4f9fe".into(),
-        text: "#1c2e40".into(),
-        text_muted: "#7e93a7".into(),
-        accent: "#1d86c9".into(),
+        background: "#eaf1f7".into(),
+        surface: "#f7fafc".into(),
+        surface_elevated: "#ffffff".into(),
+        text: "#162433".into(),
+        text_muted: "#6b7e90".into(),
+        accent: "#2b66c9".into(),
         accent_contrast: "#ffffff".into(),
-        border: "#d9e6f2".into(),
+        border: "#cfdde9".into(),
     }
 }
 
@@ -284,7 +284,7 @@ pub fn builtin_list() -> Vec<ThemeInfo> {
     vec![
         ThemeInfo {
             key: "builtin:dark".into(),
-            name: "Dark · 靛夜".into(),
+            name: "Dark · 曜石".into(),
             is_builtin: true,
             mode: "dark".into(),
         },
@@ -308,7 +308,7 @@ pub fn builtin_list() -> Vec<ThemeInfo> {
         },
         ThemeInfo {
             key: "builtin:light".into(),
-            name: "Light · 晨白".into(),
+            name: "Light · 晨雾".into(),
             is_builtin: true,
             mode: "light".into(),
         },

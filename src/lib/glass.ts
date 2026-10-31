@@ -1,20 +1,30 @@
 /**
- * Appearance glass controls (soft-skeuo dashboard).
+ * Appearance glass controls.
  *
- * Two independent, per-machine preferences:
- *  - `panelOpacity`: the frame behind non-home pages (`--soft-frame-opacity`);
- *    0 % means the page shows the wallpaper/video completely.
- *  - `cardOpacity`: the background of the home cards (`--soft-card-opacity`).
+ * Three independent, per-machine preferences persisted in localStorage (visual
+ * preferences, not launcher config) and applied as CSS variables on <html>:
  *
- * Both are persisted in localStorage (visual preferences, not launcher config)
- * and applied as CSS variables on <html>.
+ *  - `panelOpacity`: the shell behind non-home pages (`--rmccc-panel-alpha`);
+ *    0 % means the wallpaper/video shows through completely.
+ *  - `cardOpacity`: the background of cards (`--rmccc-card-alpha`); 0 % makes
+ *    cards genuinely transparent, including their border/shadow/blur.
+ *  - `cardBlur`: the backdrop-filter radius for cards (`--rmccc-card-blur`).
+ *    Home cards use half of it while an image/video wallpaper is active, so the
+ *    wallpaper stays readable without turning every surface into a solid slab.
+ *
+ * The legacy `--soft-*` variables are still published for third-party skin CSS
+ * written against the previous dashboard, but the host consumes the
+ * `--rmccc-*` variables exclusively.
  */
 import { createRoot, createSignal } from "solid-js";
 
 const PANEL_KEY = "rmccc.panelOpacity.v1";
 const CARD_KEY = "rmccc.cardOpacity.v1";
-const DEFAULT_PANEL = 88;
-const DEFAULT_CARD = 68;
+const CARD_BLUR_KEY = "rmccc.cardBlur.v1";
+const DEFAULT_PANEL = 74;
+const DEFAULT_CARD = 62;
+const DEFAULT_CARD_BLUR = 24;
+const MAX_CARD_BLUR = 40;
 
 function readPercent(key: string, fallback: number): number {
   try {
@@ -27,15 +37,35 @@ function readPercent(key: string, fallback: number): number {
   }
 }
 
+function readBlur(): number {
+  try {
+    const raw = localStorage.getItem(CARD_BLUR_KEY);
+    if (raw === null) return DEFAULT_CARD_BLUR;
+    const value = Number(raw);
+    return Number.isFinite(value)
+      ? Math.round(Math.min(MAX_CARD_BLUR, Math.max(0, value)))
+      : DEFAULT_CARD_BLUR;
+  } catch {
+    return DEFAULT_CARD_BLUR;
+  }
+}
+
 function clampPercent(value: number): number {
   return Math.round(Math.min(100, Math.max(0, value)));
 }
 
+function clampBlur(value: number): number {
+  return Math.round(Math.min(MAX_CARD_BLUR, Math.max(0, value)));
+}
+
 const [opacity, setOpacitySignal] = createRoot(() => createSignal(readPercent(PANEL_KEY, DEFAULT_PANEL)));
 const [cardOpacity, setCardOpacitySignal] = createRoot(() => createSignal(readPercent(CARD_KEY, DEFAULT_CARD)));
+const [cardBlur, setCardBlurSignal] = createRoot(() => createSignal(readBlur()));
 
 function applyPanelOpacity(value: number): void {
+  if (typeof document === "undefined") return;
   const root = document.documentElement;
+  root.style.setProperty("--rmccc-panel-alpha", `${value}%`);
   root.style.setProperty("--soft-frame-opacity", String(value / 100));
   // 0 % must be genuinely transparent: drop the 1 px border, shadow and
   // backdrop blur instead of leaving a faint frame around the content.
@@ -43,35 +73,18 @@ function applyPanelOpacity(value: number): void {
   else delete root.dataset.panelTransparent;
 }
 
-type Rgba = [number, number, number, number];
-
-function mixRgba(from: Rgba, to: Rgba, t: number): string {
-  const channel = (index: number) => Math.round(from[index] + (to[index] - from[index]) * t);
-  const alpha = from[3] + (to[3] - from[3]) * t;
-  return `rgba(${channel(0)}, ${channel(1)}, ${channel(2)}, ${alpha.toFixed(3)})`;
-}
-
-/**
- * The blue hero card switches from white ink to dark ink as its glass fades,
- * so the launch content stays readable at 0 %.  The blend only starts below
- * the design default (68 %), keeping the normal look byte-identical.
- */
-function applyLaunchInk(value: number): void {
-  const blend = Math.min(1, Math.max(0, (0.68 - value / 100) / 0.68));
-  const root = document.documentElement;
-  root.style.setProperty("--soft-launch-ink", mixRgba([248, 251, 255, 1], [38, 51, 58, 1], blend));
-  root.style.setProperty(
-    "--soft-launch-muted",
-    mixRgba([249, 252, 255, 0.72], [70, 84, 90, 1], blend)
-  );
-}
-
 function applyCardOpacity(value: number): void {
+  if (typeof document === "undefined") return;
   const root = document.documentElement;
+  root.style.setProperty("--rmccc-card-alpha", `${value}%`);
   root.style.setProperty("--soft-card-opacity", String(value / 100));
-  applyLaunchInk(value);
   if (value === 0) root.dataset.cardsTransparent = "on";
   else delete root.dataset.cardsTransparent;
+}
+
+function applyCardBlur(value: number): void {
+  if (typeof document === "undefined") return;
+  document.documentElement.style.setProperty("--rmccc-card-blur", `${value}px`);
 }
 
 export function panelOpacity(): number {
@@ -104,5 +117,21 @@ export function setHomeCardOpacity(value: number): void {
   }
 }
 
+export function homeCardBlur(): number {
+  return cardBlur();
+}
+
+export function setHomeCardBlur(value: number): void {
+  const next = clampBlur(value);
+  setCardBlurSignal(next);
+  applyCardBlur(next);
+  try {
+    localStorage.setItem(CARD_BLUR_KEY, String(next));
+  } catch {
+    // Same as above.
+  }
+}
+
 applyPanelOpacity(opacity());
 applyCardOpacity(cardOpacity());
+applyCardBlur(cardBlur());

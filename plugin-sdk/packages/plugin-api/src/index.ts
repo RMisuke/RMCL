@@ -42,6 +42,9 @@ export type BridgeMethod =
   | "llm.chat"
   | "settings.get"
   | "instances.list"
+  | "tasks.list"
+  | "launch.status"
+  | "server.status"
   | "network.request";
 
 /** Capability required per method (`null` = any enabled plugin with a UI entry). */
@@ -50,6 +53,9 @@ export const METHOD_CAPABILITIES: Record<BridgeMethod, string | null> = {
   "theme.get": null,
   "settings.get": "settings.read",
   "instances.list": "instance.read",
+  "tasks.list": "tasks.read",
+  "launch.status": "launch.read",
+  "server.status": "network.request",
   "network.request": "network.request",
   "llm.chat": "ai.chat",
 };
@@ -60,6 +66,9 @@ export const METHOD_TIMEOUTS: Record<BridgeMethod, number> = {
   "theme.get": 5_000,
   "settings.get": 10_000,
   "instances.list": 10_000,
+  "tasks.list": 10_000,
+  "launch.status": 5_000,
+  "server.status": 30_000,
   "network.request": 30_000,
   "llm.chat": 30_000,
 };
@@ -104,6 +113,7 @@ export type HostMessage =
       type: "init";
       pluginId: string;
       cardId?: string;
+      card?: { title: string; width: number; height: number };
       theme: ThemeTokens;
       limits: { maxRequestBytes: number; maxResponseBytes: number; timeoutMs: number };
     }

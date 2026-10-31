@@ -160,3 +160,14 @@ mod tests {
             .is_empty());
     }
 }
+
+/// 未实现平台的物理内存探测后端。
+pub struct UnsupportedSystemMemory;
+
+impl crate::system::SystemMemory for UnsupportedSystemMemory {
+    fn physical_memory(&self) -> Result<crate::system::PhysicalMemory> {
+        // TODO(windows): GlobalMemoryStatusEx。
+        // TODO(linux): 解析 /proc/meminfo 的 MemTotal / MemAvailable。
+        Err(unsupported("物理内存探测"))
+    }
+}

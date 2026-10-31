@@ -14,23 +14,55 @@ import {
 } from "solid-js";
 import { useNavigate } from "@solidjs/router";
 import { GrassBlock } from "../components/GrassBlock";
+import { DownloadsCard } from "../components/home/DownloadsCard";
+import { LaunchStatusCard } from "../components/home/LaunchStatusCard";
+import { ServerCard } from "../components/home/ServerCard";
 import { Icon, type IconName } from "../components/icons";
-import { RmButton, RmIconButton, RmInput, RmProgress, RmTag } from "../components/rm/controls";
+import { RmButton, RmIconButton, RmInput, RmTag } from "../components/rm/controls";
 import { RmDialog, RmMenu } from "../components/rm/overlays";
 import { RmEmptyState } from "../components/rm/surfaces";
 import { ThemeHeroLayer } from "../components/ThemeSurface";
-import { dashboard, downloads, type WidgetDescriptor } from "../ipc/api";
+import { dashboard, type WidgetDescriptor } from "../ipc/api";
 import type { VersionInfo } from "../ipc/types";
 import { t } from "../i18n";
 import type { TranslationKey } from "../i18n/locales/messages";
-import { formatBytes, formatDate, groupDigits, providerLabel, relativeTime } from "../lib/format";
+import { formatDate, relativeTime } from "../lib/format";
 import { loaderLabel } from "../lib/loaders";
+import {
+  type BuiltinCardId,
+  type CardConstraints,
+  type CardHeight,
+  type CardPlacement,
+  type CardWidth,
+  type HomeLayoutV3,
+  BUILTIN_CARD_IDS,
+  DEFAULT_CARD_CONSTRAINTS,
+  DEFAULT_CARD_SIZES,
+  LAYOUT_KEY_V2,
+  LAYOUT_KEY_V3,
+  addCard as addCardToLayout,
+  constraintsForBuiltin,
+  cycleHeight,
+  cycleWidth,
+  defaultLayout,
+  hideCard as hideCardInLayout,
+  isBuiltinCardId,
+  layoutCards,
+  migrateLayoutV2,
+  normalizePlacement,
+  parseLayoutV3,
+  parseLegacyPluginKey,
+  parsePluginCardKey,
+  pluginCardKey,
+  reorderCard,
+  restoreCard as restoreCardInLayout,
+  setCardSize,
+} from "../lib/cardLayout";
 import { playtimeLabel } from "../lib/playtime";
 import { launchInstance } from "../lib/launchActions";
 import { backgroundOnlyMode, toggleBackgroundOnlyMode } from "../lib/backgroundMode";
 import { PluginFrame } from "../plugin-ui/PluginFrame";
 import { authStore } from "../stores/auth";
-import { downloadsStore, type DownloadBatch } from "../stores/downloads";
 import { instancesStore } from "../stores/instances";
 import { launchStore } from "../stores/launch";
 import { confirmDanger, toast, uiStore } from "../stores/ui";
@@ -38,49 +70,109 @@ import * as versionCache from "../stores/versionCache";
 
 const [catalog, setCatalog] = createRoot(() => createSignal<WidgetDescriptor[]>([]));
 
-type BuiltinCardId =
-  | "server"
-  | "compare"
-  | "announcements"
-  | "instances"
-  | "versions"
-  | "downloads"
-  | "games";
-
-interface SoftLayout {
-  order: string[];
-  hidden: string[];
-}
-
-const SOFT_CARD_IDS = ["instances", "versions", "server", "downloads", "announcements", "compare", "games"];
-const SOFT_DEFAULTS: SoftLayout = {
-  order: ["versions", "server", "downloads"],
-  hidden: ["instances", "announcements", "compare", "games"],
-};
-const SOFT_LAYOUT_KEY = "rmccc.softDashboard.v2";
-
-function loadLayout(): SoftLayout {
+function localLayout(): HomeLayoutV3 {
   try {
-    const stored = JSON.parse(localStorage.getItem(SOFT_LAYOUT_KEY) ?? "{}") as Partial<SoftLayout>;
-    const order = Array.isArray(stored.order) ? stored.order : [...SOFT_DEFAULTS.order];
-    for (const id of SOFT_DEFAULTS.order) if (!order.includes(id) && !(stored.hidden ?? []).includes(id)) order.push(id);
-    return { order, hidden: Array.isArray(stored.hidden) ? stored.hidden : [] };
+    const storedV3 = localStorage.getItem(LAYOUT_KEY_V3);
+    if (storedV3) {
+      const parsed = parseLayoutV3(JSON.parse(storedV3));
+      if (parsed) return parsed;
+    }
+    const storedV2 = localStorage.getItem(LAYOUT_KEY_V2);
+    if (storedV2) {
+      const migrated = migrateLayoutV2(JSON.parse(storedV2));
+      if (migrated) {
+        saveLocalLayout(migrated);
+        return migrated;
+      }
+    }
   } catch {
-    return { order: [...SOFT_DEFAULTS.order], hidden: [...SOFT_DEFAULTS.hidden] };
+    // Storage can be unavailable/corrupt; fall back to the canonical layout.
   }
+  return defaultLayout();
 }
 
-function saveLayout(layout: SoftLayout): void {
+function saveLocalLayout(layout: HomeLayoutV3): void {
   try {
-    localStorage.setItem(SOFT_LAYOUT_KEY, JSON.stringify(layout));
+    localStorage.setItem(LAYOUT_KEY_V3, JSON.stringify(layout));
   } catch {
     // The dashboard remains usable when storage is unavailable.
   }
 }
 
+function pluginCardIdOf(widget: WidgetDescriptor): string {
+  const prefix = "dashboard-card:";
+  return widget.widgetId.startsWith(prefix)
+    ? widget.widgetId.slice(prefix.length)
+    : widget.widgetId;
+}
+
+function descriptorForCard(catalog: WidgetDescriptor[], id: string): WidgetDescriptor | undefined {
+  const ref = parsePluginCardKey(id);
+  if (!ref) return undefined;
+  return catalog.find(
+    (widget) => widget.pluginId === ref.pluginId && pluginCardIdOf(widget) === ref.cardId
+  );
+}
+
+function constraintsForDescriptor(widget: WidgetDescriptor): CardConstraints {
+  const minW = Math.max(3, widget.minSize.w);
+  const maxW = Math.min(12, Math.max(minW, widget.maxSize.w || 12));
+  const minH = Math.max(1, widget.minSize.h);
+  const maxH = Math.min(4, Math.max(minH, widget.maxSize.h || 4));
+  return { minW, maxW, minH, maxH };
+}
+
+function placementForWidget(widget: WidgetDescriptor): CardPlacement {
+  const id = pluginCardKey(widget.pluginId, pluginCardIdOf(widget));
+  return normalizePlacement(
+    id,
+    widget.defaultSize.w || 4,
+    widget.defaultSize.h || 2,
+    constraintsForDescriptor(widget)
+  );
+}
+
+/**
+ * Resolve legacy `plugin:<pluginId>` entries to the plugin's first card and
+ * clamp every placement to its declared/allowed size. Plugin descriptors only
+ * arrive after `dashboard_list_widgets`, so this runs once the catalog lands.
+ */
+function reconcileLayout(current: HomeLayoutV3, widgets: WidgetDescriptor[]): HomeLayoutV3 {
+  const catalogById = new Map<string, WidgetDescriptor>();
+  for (const widget of widgets) {
+    catalogById.set(pluginCardKey(widget.pluginId, pluginCardIdOf(widget)), widget);
+  }
+
+  const idMap = new Map<string, string>();
+  const cards: CardPlacement[] = [];
+  const seen = new Set<string>();
+  for (const card of current.cards) {
+    let id = card.id;
+    const legacyPlugin = parseLegacyPluginKey(id);
+    if (legacyPlugin) {
+      const widget = widgets.find((item) => item.pluginId === legacyPlugin);
+      if (widget) id = pluginCardKey(widget.pluginId, pluginCardIdOf(widget));
+    }
+    if (id !== card.id) idMap.set(card.id, id);
+    if (seen.has(id)) continue;
+    seen.add(id);
+    const widget = catalogById.get(id);
+    if (widget) {
+      cards.push(normalizePlacement(id, card.w, card.h, constraintsForDescriptor(widget)));
+    } else if (isBuiltinCardId(id)) {
+      cards.push(normalizePlacement(id, card.w, card.h, constraintsForBuiltin(id)));
+    } else {
+      cards.push(card);
+    }
+  }
+
+  const hidden = [...new Set(current.hidden.map((id) => idMap.get(id) ?? id))];
+  return { schemaVersion: 3, cards, hidden };
+}
+
 export default function Home(): JSX.Element {
   const navigate = useNavigate();
-  const [layout, setLayout] = createSignal<SoftLayout>(loadLayout());
+  const [layout, setLayout] = createSignal<HomeLayoutV3>(localLayout());
   const [editing, setEditing] = createSignal(false);
   const [addOpen, setAddOpen] = createSignal(false);
 
@@ -98,8 +190,14 @@ export default function Home(): JSX.Element {
     void instancesStore.rescan();
     void authStore.refresh();
     void dashboard.listWidgets().then((res) => {
-      if (res.ok) setCatalog(res.data);
-      else toast({ message: res.error.message, tone: "error" });
+      if (!res.ok) {
+        toast({ message: res.error.message, tone: "error" });
+        return;
+      }
+      setCatalog(res.data);
+      const next = reconcileLayout(layout(), res.data);
+      saveLocalLayout(next);
+      setLayout(next);
     });
   });
 
@@ -122,29 +220,42 @@ export default function Home(): JSX.Element {
     if (latest) void instancesStore.selectInstance(latest.summary.key);
   });
 
-  function persist(next: SoftLayout): void {
+  function persist(next: HomeLayoutV3): void {
     setLayout(next);
-    saveLayout(next);
+    saveLocalLayout(next);
+  }
+
+  function cardDescriptor(id: string): WidgetDescriptor | undefined {
+    return descriptorForCard(catalog(), id);
+  }
+
+  function constraintsForCard(id: string): CardConstraints {
+    const widget = cardDescriptor(id);
+    if (widget) return constraintsForDescriptor(widget);
+    if (isBuiltinCardId(id)) return constraintsForBuiltin(id);
+    return DEFAULT_CARD_CONSTRAINTS;
+  }
+
+  function changeCardSize(id: string, axis: "w" | "h", delta: 1 | -1): void {
+    const card = layout().cards.find((item) => item.id === id);
+    if (!card) return;
+    const constraints = constraintsForCard(id);
+    const next: { w?: CardWidth; h?: CardHeight } = {};
+    if (axis === "w") next.w = cycleWidth(card.w, delta, constraints);
+    else next.h = cycleHeight(card.h, delta, constraints);
+    persist(setCardSize(layout(), id, next));
   }
 
   function hideCard(id: string): void {
-    const current = layout();
-    persist({ order: current.order.filter((card) => card !== id), hidden: [...current.hidden, id] });
-  }
-
-  function moveCard(id: string, delta: -1 | 1): void {
-    const order = [...layout().order];
-    const index = order.indexOf(id);
-    const target = index + delta;
-    if (index < 0 || target < 0 || target >= order.length) return;
-    [order[index], order[target]] = [order[target], order[index]];
-    persist({ ...layout(), order });
+    persist(hideCardInLayout(layout(), id));
   }
 
   function restoreCard(id: string): void {
-    const current = layout();
-    if (!current.hidden.includes(id)) return;
-    persist({ order: [...current.order, id], hidden: current.hidden.filter((card) => card !== id) });
+    persist(restoreCardInLayout(layout(), id));
+  }
+
+  function moveCard(id: string, delta: -1 | 1): void {
+    persist(reorderCard(layout(), id, delta));
   }
 
   async function resetLayout(): Promise<void> {
@@ -153,21 +264,29 @@ export default function Home(): JSX.Element {
       body: t("home.resetLayout.body"),
       confirmLabel: t("home.resetLayout.confirm"),
     });
-    if (allowed) persist({ order: [...SOFT_DEFAULTS.order], hidden: [...SOFT_DEFAULTS.hidden] });
+    if (allowed) persist(defaultLayout());
   }
 
-  const pluginPrefix = "plugin:";
+  function placementForCardId(id: string): CardPlacement {
+    const widget = cardDescriptor(id);
+    if (widget) return placementForWidget(widget);
+    if (isBuiltinCardId(id)) return { ...DEFAULT_CARD_SIZES[id] };
+    return normalizePlacement(id, 4, 2);
+  }
+
   function addCard(id: string): void {
-    const current = layout();
-    if (!current.order.includes(id)) persist({ order: [...current.order, id], hidden: current.hidden.filter((card) => card !== id) });
+    persist(addCardToLayout(layout(), placementForCardId(id)));
     setAddOpen(false);
   }
 
   function cardTitle(id: string): string {
-    if (id.startsWith(pluginPrefix)) {
-      const pluginId = id.slice(pluginPrefix.length);
-      return catalog().find((widget) => widget.pluginId === pluginId)?.displayName ?? pluginId;
+    const widget = cardDescriptor(id);
+    if (widget) return widget.displayName;
+    const legacy = parseLegacyPluginKey(id);
+    if (legacy) {
+      return catalog().find((item) => item.pluginId === legacy)?.displayName ?? legacy;
     }
+    if (!isBuiltinCardId(id)) return id;
     const titles: Record<BuiltinCardId, TranslationKey> = {
       server: "hero.server.title",
       compare: "hero.compare.title",
@@ -177,32 +296,54 @@ export default function Home(): JSX.Element {
       downloads: "tasks.sectionDownloads",
       games: "tasks.sectionGames",
     };
-    return t(titles[id as BuiltinCardId]);
+    return t(titles[id]);
+  }
+
+  function cardSubtitle(id: string): string {
+    const widget = cardDescriptor(id);
+    if (widget) return widget.pluginId;
+    if (id.startsWith("plugin:")) return id.slice("plugin:".length);
+    return "SNGL";
   }
 
   function cardIcon(id: string): IconName {
-    if (id.startsWith(pluginPrefix)) return "extension";
+    if (id.startsWith("plugin:")) return "extension";
+    if (!isBuiltinCardId(id)) return "grid";
     const icons: Record<BuiltinCardId, IconName> = {
-      server: "activity", compare: "refresh", announcements: "info", instances: "gamepad",
-      versions: "package", downloads: "download", games: "terminal",
+      server: "activity",
+      compare: "refresh",
+      announcements: "info",
+      instances: "gamepad",
+      versions: "package",
+      downloads: "download",
+      games: "terminal",
     };
-    return icons[id as BuiltinCardId];
+    return icons[id];
   }
 
   const addableCards = createMemo(() => {
     const current = layout();
-    const builtins = SOFT_CARD_IDS
-      .filter((id) => !current.order.includes(id) || current.hidden.includes(id))
+    const visible = new Set(
+      current.cards.filter((card) => !current.hidden.includes(card.id)).map((card) => card.id)
+    );
+    const builtins = BUILTIN_CARD_IDS
+      .filter((id) => !visible.has(id))
       .map((id) => ({ id, name: cardTitle(id), subtitle: "SNGL" }));
     const plugins = catalog()
       .filter((widget) => widget.pluginId !== "org.rmccc.core-ui")
-      .map((widget) => ({ id: `${pluginPrefix}${widget.pluginId}`, name: widget.displayName, subtitle: widget.pluginId }))
-      .filter((card) => !current.order.includes(card.id));
+      .map((widget) => {
+        const id = pluginCardKey(widget.pluginId, pluginCardIdOf(widget));
+        return { id, name: widget.displayName, subtitle: widget.pluginId };
+      })
+      .filter((card) => !visible.has(card.id));
     return [...builtins, ...plugins];
   });
 
+  const hiddenCards = createMemo(() =>
+    layout().hidden.map((id) => ({ id, title: cardTitle(id), icon: cardIcon(id) }))
+  );
+
   const isRunning = () => launchStore.isRunning(selected()?.summary.key ?? "");
-  const readiness = () => selected() ? (session() ? 100 : 72) : 0;
 
   return (
     <div class={`soft-home${backgroundOnlyMode() ? " is-background-only" : ""}`}>
@@ -252,82 +393,181 @@ export default function Home(): JSX.Element {
                   <p>{profile().summary.game_version}<Show when={profile().summary.loader}> · {loaderLabel(profile().summary.loader!.kind)}</Show></p>
                   <div class="soft-playtime"><Icon name="clock" size={15} />{profile().summary.play_time_seconds > 0 ? playtimeLabel(Number(profile().summary.play_time_seconds)) : t("playtime.none")}</div>
                 </div>
-                <GrassBlock />
+                <div class="soft-current-art"><GrassBlock /></div>
               </div>
             )}
           </Show>
           <div class="soft-current-footer"><span>{instancesStore.selectedDirectory()?.directory.name ?? t("instances.root.profiles")}</span><span>{(instancesStore.items() ?? []).length} {t("instances.title")}</span></div>
         </article>
 
-        <article class="soft-launch-card">
-          <div class="soft-launch-orb o1" /><div class="soft-launch-orb o2" />
-          <div class="soft-launch-top"><span>MINECRAFT</span><Icon name="sparkles" size={18} /></div>
-          <div class="soft-launch-body">
-            <div><p>{t("soft.playNow")}</p><h2>{selected()?.summary.game_version ?? "Minecraft"}</h2><span>{selected()?.summary.loader ? loaderLabel(selected()!.summary.loader!.kind) : t("instances.versionDetail.vanillaShort")}</span></div>
-            <div class="soft-launch-cube"><GrassBlock /></div>
-          </div>
-          <div class="soft-launch-actions">
-            <Show when={!isRunning()} fallback={<><RmButton variant="secondary" icon="terminal" onClick={() => uiStore.openLogDrawer(selected()?.summary.key ?? null)}>{t("home.viewLog")}</RmButton><RmButton variant="danger" icon="square" onClick={() => void launchStore.stop(selected()?.summary.key ?? "")}>{t("home.stop")}</RmButton></>}>
-              <RmButton variant="primary" size="lg" icon={selected() ? "play" : "download"} loading={launchStore.isStarting(selected()?.summary.key ?? "")} onClick={() => void launchInstance(selected(), navigate)}>
-                {selected() ? t("home.launch") : t("home.noInstance.cta")}
-              </RmButton>
-            </Show>
-            <RmMenu align="right" side="up" items={[...sortedByLastPlayed().map((profile) => ({ label: `${profile.summary.display_name} · ${profile.summary.game_version}`, icon: "gamepad" as const, onSelect: () => void instancesStore.selectInstance(profile.summary.key) })), { label: t("home.instanceSettings"), icon: "sliders" as const, onSelect: () => selected() && navigate(`/instances/${selected()!.summary.key}#settings`) }]}>
-              <button class="soft-launch-picker" aria-label={t("home.pickInstance")}><Icon name="layers" size={18} /><Icon name="chevron-down" size={13} /></button>
-            </RmMenu>
-          </div>
-        </article>
+        <div class="soft-hero-side">
+          <article class="soft-launch-card">
+            <div class="soft-launch-orb o1" /><div class="soft-launch-orb o2" />
+            <div class="soft-launch-top"><span>MINECRAFT · {t("soft.playNow")}</span><Icon name="sparkles" size={18} /></div>
+            <div class="soft-launch-body">
+              <div><p>{t("soft.currentVersion")}</p><h2>{selected()?.summary.game_version ?? "Minecraft"}</h2><span>{selected()?.summary.loader ? loaderLabel(selected()!.summary.loader!.kind) : t("instances.versionDetail.vanillaShort")}</span></div>
+              <div class="soft-launch-cube"><GrassBlock /></div>
+            </div>
+            <div class="soft-launch-actions">
+              <Show when={!isRunning()} fallback={<><RmButton variant="secondary" icon="terminal" onClick={() => uiStore.openLogDrawer(selected()?.summary.key ?? null)}>{t("home.viewLog")}</RmButton><RmButton variant="danger" icon="square" onClick={() => void launchStore.stop(selected()?.summary.key ?? "")}>{t("home.stop")}</RmButton></>}>
+                <RmButton variant="primary" size="lg" icon={selected() ? "play" : "download"} loading={launchStore.isStarting(selected()?.summary.key ?? "")} onClick={() => void launchInstance(selected(), navigate)}>
+                  {selected() ? t("home.launch") : t("home.noInstance.cta")}
+                </RmButton>
+              </Show>
+              <RmMenu align="right" side="up" items={[...sortedByLastPlayed().map((profile) => ({ label: `${profile.summary.display_name} · ${profile.summary.game_version}`, icon: "gamepad" as const, onSelect: () => void instancesStore.selectInstance(profile.summary.key) })), { label: t("home.instanceSettings"), icon: "sliders" as const, onSelect: () => selected() && navigate(`/instances/${selected()!.summary.key}#settings`) }]}>
+                <button class="soft-launch-picker" aria-label={t("home.pickInstance")}><Icon name="layers" size={18} /><Icon name="chevron-down" size={13} /></button>
+              </RmMenu>
+            </div>
+          </article>
 
-        <article class="soft-card soft-status-card">
-          <div class="soft-card-heading"><span>{t("soft.launchStatus")}</span><Icon name="activity" size={17} /></div>
-          <div class="soft-status-ring" style={{ "--ready": `${readiness() * 3.6}deg` }}><div><strong>{readiness()}<small>%</small></strong><span>{t("soft.ready")}</span></div></div>
-          <div class="soft-status-legend"><span><i class="is-green" />{t("hero.compare.upToDate")}</span><span><i class="is-blue" />{session() ? providerLabel(session()!.provider) : t("home.account.add")}</span></div>
-        </article>
+          <LaunchStatusCard />
+        </div>
       </section>
 
       <section class="soft-dashboard-grid">
-        <For each={layout().order}>
-          {(id) => (
-            <article class={`soft-card soft-module soft-module-${id.replace(":", "-")}`} data-card={id}>
-              <div class="soft-card-heading">
-                <span class="soft-module-title"><Icon name={cardIcon(id)} size={16} />{cardTitle(id)}</span>
-                <Show when={!editing()}><span class="soft-card-dots"><i /><i /><i /></span></Show>
-                <Show when={editing()}><div class="soft-edit-actions"><RmIconButton icon="chevron-up" label={t("common.moveUp")} onClick={() => moveCard(id, -1)} /><RmIconButton icon="chevron-down" label={t("common.moveDown")} onClick={() => moveCard(id, 1)} /><RmIconButton icon="x" label={t("common.hide")} onClick={() => hideCard(id)} /></div></Show>
-              </div>
-              <div class="soft-module-body">
-                <Switch fallback={<ErrorBoundary fallback={(err, reset) => <div class="soft-plugin-error"><RmEmptyState icon="alert" title={t("home.card.broken")} hint={String(err)} /><RmButton size="sm" onClick={reset}>{t("common.retry")}</RmButton></div>}><PluginCard pluginId={id.slice(pluginPrefix.length)} /></ErrorBoundary>}>
-                  <Match when={id === "server"}><ServerCard /></Match>
-                  <Match when={id === "compare"}><CompareCard /></Match>
-                  <Match when={id === "announcements"}><AnnouncementsCard /></Match>
-                  <Match when={id === "instances"}><InstancesCard /></Match>
-                  <Match when={id === "versions"}><VersionsCard /></Match>
-                  <Match when={id === "downloads"}><DownloadsCard /></Match>
-                  <Match when={id === "games"}><GamesCard /></Match>
-                </Switch>
-              </div>
-            </article>
-          )}
+        <For each={layoutCards(layout())}>
+          {(card) => {
+            const ref = () => parsePluginCardKey(card.id);
+            const descriptor = () => cardDescriptor(card.id);
+            return (
+              <article
+                class={`soft-card soft-module soft-module-${card.id.replace(/[^a-z0-9]+/gi, "-")}`}
+                data-card={card.id}
+                data-w={card.w}
+                data-h={card.h}
+                style={{ "--card-w": `${card.w}`, "--card-h": `${card.h}` }}
+              >
+                <div class="soft-card-heading">
+                  <span class="soft-module-title">
+                    <Icon name={cardIcon(card.id)} size={16} />
+                    {cardTitle(card.id)}
+                  </span>
+                  <Show when={!editing()}>
+                    <span class="soft-card-dots"><i /><i /><i /></span>
+                  </Show>
+                  <Show when={editing()}>
+                    <div class="soft-edit-actions">
+                      <button
+                        type="button"
+                        class="soft-size-chip"
+                        title={t("home.card.resizeWidth")}
+                        aria-label={t("home.card.resizeWidth")}
+                        onClick={() => changeCardSize(card.id, "w", 1)}
+                      >
+                        W{card.w}
+                      </button>
+                      <button
+                        type="button"
+                        class="soft-size-chip"
+                        title={t("home.card.resizeHeight")}
+                        aria-label={t("home.card.resizeHeight")}
+                        onClick={() => changeCardSize(card.id, "h", 1)}
+                      >
+                        H{card.h}
+                      </button>
+                      <RmIconButton
+                        icon="chevron-up"
+                        label={t("common.moveUp")}
+                        onClick={() => moveCard(card.id, -1)}
+                      />
+                      <RmIconButton
+                        icon="chevron-down"
+                        label={t("common.moveDown")}
+                        onClick={() => moveCard(card.id, 1)}
+                      />
+                      <RmIconButton
+                        icon="x"
+                        label={t("common.hide")}
+                        onClick={() => hideCard(card.id)}
+                      />
+                    </div>
+                  </Show>
+                </div>
+                <div class="soft-module-body">
+                  <ErrorBoundary
+                    fallback={(err, reset) => (
+                      <div class="soft-plugin-error">
+                        <RmEmptyState
+                          icon="alert"
+                          title={t("home.card.broken")}
+                          hint={String(err)}
+                        />
+                        <RmButton size="sm" onClick={reset}>{t("common.retry")}</RmButton>
+                      </div>
+                    )}
+                  >
+                    <Show
+                      when={ref()}
+                      fallback={
+                        <Switch>
+                          <Match when={card.id === "server"}><ServerCard /></Match>
+                          <Match when={card.id === "compare"}><CompareCard /></Match>
+                          <Match when={card.id === "announcements"}><AnnouncementsCard /></Match>
+                          <Match when={card.id === "instances"}><InstancesCard /></Match>
+                          <Match when={card.id === "versions"}><VersionsCard /></Match>
+                          <Match when={card.id === "downloads"}><DownloadsCard /></Match>
+                          <Match when={card.id === "games"}><GamesCard /></Match>
+                        </Switch>
+                      }
+                    >
+                      {(plugin) => (
+                        <Show
+                          when={descriptor()?.uiUrl}
+                          fallback={
+                            <div class="soft-empty">
+                              <Icon name="extension" size={17} />
+                              {descriptor()
+                                ? t("home.card.noUi")
+                                : t("home.card.pluginUnavailable")}
+                            </div>
+                          }
+                        >
+                          <PluginCard
+                            pluginId={plugin().pluginId}
+                            cardId={plugin().cardId}
+                            descriptor={descriptor()}
+                            width={card.w}
+                            height={card.h}
+                          />
+                        </Show>
+                      )}
+                    </Show>
+                  </ErrorBoundary>
+                </div>
+              </article>
+            );
+          }}
         </For>
       </section>
 
       <RmDialog open={addOpen()} title={t("home.addWidget")} onClose={() => setAddOpen(false)}>
         <div class="add-widget-list"><Show when={addableCards().length > 0} fallback={<div class="muted-line">{t("modStore.empty")}</div>}><For each={addableCards()}>{(card) => <button class="rm-row is-clickable" onClick={() => addCard(card.id)}><div class="rm-row-main"><div class="rm-row-title">{card.name}</div><div class="rm-row-subtitle">{card.subtitle}</div></div></button>}</For></Show></div>
       </RmDialog>
-      <Show when={editing()}><div class="soft-editing-menu"><RmMenu align="right" items={[{ label: t("home.restoreHidden", { n: layout().hidden.length }), disabled: layout().hidden.length === 0, onSelect: () => restoreCard(layout().hidden[0]) }, { label: t("home.resetLayout.title"), danger: true, onSelect: () => void resetLayout() }]}><RmIconButton icon="more-horizontal" label={t("common.more")} /></RmMenu></div></Show>
+      <Show when={editing()}>
+        <div class="soft-editing-menu">
+          <RmMenu
+            align="right"
+            items={[
+              ...(hiddenCards().length > 0
+                ? hiddenCards().map((card) => ({
+                    label: card.title,
+                    icon: card.icon,
+                    onSelect: () => restoreCard(card.id),
+                  }))
+                : [{
+                    label: t("home.restoreHidden", { n: "0" }),
+                    disabled: true,
+                    onSelect: () => undefined,
+                  }]),
+              { label: t("home.resetLayout.title"), danger: true, onSelect: () => void resetLayout() },
+            ]}
+          >
+            <RmIconButton icon="more-horizontal" label={t("common.more")} />
+          </RmMenu>
+        </div>
+      </Show>
     </div>
   );
-}
-
-function ServerCard(): JSX.Element {
-  const [addr, setAddr] = createSignal("play.example.net");
-  const [state, setState] = createSignal<"idle" | "loading" | "online" | "offline">("idle");
-  const mock = { motd: "欢迎来到 Example 生存服务器！", players: { online: 42, max: 100 }, latencyMs: 23, serverVersion: "26.2 · Fabric 0.20.1" };
-  function connect(): void {
-    if (!addr().trim() || state() === "loading") return;
-    setState("loading");
-    setTimeout(() => setState(addr().includes("offline") ? "offline" : "online"), 800);
-  }
-  return <div class="soft-server"><div class="soft-server-input"><RmInput value={addr()} onInput={setAddr} placeholder={t("hero.server.address")} onEnter={connect} /><RmButton size="sm" variant="primary" icon="search" loading={state() === "loading"} onClick={connect}>{t("hero.server.connect")}</RmButton></div><Switch fallback={<div class="soft-empty">{t("hero.server.idle")}</div>}><Match when={state() === "loading"}><div class="soft-empty">{t("hero.server.probing")}</div></Match><Match when={state() === "offline"}><div class="soft-empty is-error">{t("hero.server.offline")}</div></Match><Match when={state() === "online"}><div class="soft-server-online"><strong>{mock.motd}</strong><div><span><Icon name="person" size={13} />{t("hero.server.players", { online: mock.players.online, max: mock.players.max })}</span><span><Icon name="activity" size={13} />{t("hero.server.latency", { ms: mock.latencyMs })}</span></div><small>{mock.serverVersion}</small></div></Match></Switch></div>;
 }
 
 function CompareCard(): JSX.Element {
@@ -374,22 +614,30 @@ function VersionsCard(): JSX.Element {
   return <div class="soft-versions"><div class="soft-version-chips"><For each={chips()}>{(version) => <button onClick={() => navigate(`/download?version=${version.id}#install`)}><Icon name="package" size={15} /><strong>{version.id}</strong><small>{formatDate(version.release_time)}</small></button>}</For></div><div class="soft-version-paste"><RmInput value={pasted()} onInput={setPasted} placeholder={t("home.pasteVersion")} onEnter={() => pasted().trim() && navigate(`/download?version=${pasted().trim()}#install`)} /><RmIconButton icon="chevron-right" label={t("home.allVersions")} onClick={() => navigate("/download#install")} /></div></div>;
 }
 
-function DownloadsCard(): JSX.Element {
-  const batches = createMemo(() => Object.values(downloadsStore.batches) as DownloadBatch[]);
-  async function cancelBatch(batchId: string): Promise<void> {
-    const allowed = await confirmDanger({ title: t("tasks.cancelConfirm.title"), body: t("tasks.cancelConfirm.body"), confirmLabel: t("tasks.download.cancel") });
-    if (!allowed) return;
-    const res = await downloads.cancel(batchId);
-    toast({ message: res.ok ? t("tasks.download.cancelled") : res.error.message, tone: res.ok ? "info" : "error" });
-  }
-  return <div class="soft-downloads"><For each={batches()}>{(batch) => <div class="soft-download-row"><div><strong>{batch.label || batch.version}</strong><small>{groupDigits(batch.completedFiles)}/{groupDigits(batch.totalFiles)} · {formatBytes(batch.downloadedBytes)}/{formatBytes(batch.totalBytes)}</small></div><RmProgress value={batch.totalBytes > 0 ? (batch.downloadedBytes / batch.totalBytes) * 100 : 0} determinate={batch.totalBytes > 0} /><RmIconButton icon="x" label={t("tasks.download.cancel")} danger onClick={() => void cancelBatch(batch.batchId)} /></div>}</For><Show when={batches().length === 0}><div class="soft-empty"><Icon name="check" size={18} />{t("home.downloads.empty")}</div></Show></div>;
-}
-
 function GamesCard(): JSX.Element {
   return <div class="soft-instance-list"><For each={[...launchStore.running().values()]}>{(game) => <div class="soft-list-row"><span class="soft-list-icon"><span class="dot-running" /></span><span class="soft-list-copy"><strong>{instancesStore.items()?.find((profile) => profile.summary.key === game.profileId)?.summary.display_name ?? game.profileId}</strong><small>{t("instances.running")}</small></span><RmIconButton icon="terminal" label={t("home.viewLog")} onClick={() => uiStore.openLogDrawer(game.profileId)} /><RmIconButton icon="square" label={t("common.stop")} danger onClick={() => void launchStore.stop(game.profileId)} /></div>}</For><Show when={launchStore.running().size === 0}><div class="soft-empty">{t("tasks.empty")}</div></Show></div>;
 }
 
-function PluginCard(props: { pluginId: string }): JSX.Element {
-  const descriptor = createMemo(() => catalog().find((widget) => widget.pluginId === props.pluginId));
-  return <div class="soft-plugin-frame"><PluginFrame pluginId={props.pluginId} cardId="soft-dashboard" title={descriptor()?.displayName ?? props.pluginId} uiUrl={descriptor()?.uiUrl ?? `rmcccplugin://${props.pluginId}/ui/index.html`} /></div>;
+function PluginCard(props: {
+  pluginId: string;
+  cardId: string;
+  descriptor?: WidgetDescriptor;
+  width: number;
+  height: number;
+}): JSX.Element {
+  return (
+    <div class="soft-plugin-frame">
+      <PluginFrame
+        pluginId={props.pluginId}
+        cardId={props.cardId}
+        title={props.descriptor?.displayName ?? props.pluginId}
+        uiUrl={props.descriptor?.uiUrl ?? ""}
+        card={{
+          title: props.descriptor?.displayName ?? props.pluginId,
+          width: props.width,
+          height: props.height,
+        }}
+      />
+    </div>
+  );
 }

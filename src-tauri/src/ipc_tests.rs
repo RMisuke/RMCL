@@ -153,7 +153,16 @@ fn ipc_command_count_is_stable() {
     // → 109：game_directory_overview / scan / reveal（目录侧边栏与 HMCL/PCL 兼容）。
     // → 112：storage_overview / storage_clean_cache / instance_sizes（存储管理）。
     // → 114：dialog_pick_background_video / background_video_allow（本地 MP4 动态背景）。
-    assert_eq!(crate::handlers::IPC_COMMANDS.len(), 114);
+    // → 115：instance_reveal（HMCL 实例文件夹菜单，受限枚举）。
+    // → 116：background_video_prepare（超大视频转 H.264 1080p 硬解代理，保留帧率/帧数）。
+    // → 120：modpack_inspect / pick_file / install / cancel（HMCL 整合包一键安装）。
+    // → 123：移除 download_* 3 条与 modpack_cancel，新增 task_list/get/log/pause/
+    //        resume/cancel/clear_history 7 条（ADR-019 统一任务中心）。
+    // → 124：system_memory（实例设置页内存占用条，平台适配层探测）。
+    // → 123：ADR-020 合并壁纸 prepare + asset grant，移除 background_video_allow。
+    // → 125：dialog_pick_background_image / background_image_prepare（图片壁纸）。
+    // → 126：server_status（主页服务器信息卡的 SLP 查询）。
+    assert_eq!(crate::handlers::IPC_COMMANDS.len(), 126);
 }
 
 // ────────────────────────── 2. 错误码契约 ──────────────────────────
@@ -1117,4 +1126,16 @@ fn logic_slots_are_per_plugin() {
 
     // 空闲后快路径可用：try_lock 成功即干净 cancel。
     assert!(a.runner.try_lock().is_ok());
+}
+
+// ────────────────────────── 4. Modpack ──────────────────────────
+
+#[tokio::test]
+async fn modpack_inspect_rejects_missing_file() {
+    let err = expect_code(
+        crate::commands::modpack::modpack_inspect("/definitely/not/a/modpack/here.zip".to_string())
+            .await,
+        ErrorCode::ValidationError,
+    );
+    assert!(err.message.contains("not found"));
 }

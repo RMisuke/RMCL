@@ -229,16 +229,21 @@ export function RmInheritLock(props: {
   overridden: boolean;
   onToggle: () => void;
   disabled?: boolean;
+  /** Optional visible label; icon-only when omitted (legacy field locks). */
+  label?: string;
 }): JSX.Element {
   return (
     <button
-      class={`rm-inherit-lock${props.overridden ? " is-overridden" : ""}`}
+      class={`rm-inherit-lock${props.overridden ? " is-overridden" : ""}${props.label ? " has-label" : ""}`}
       aria-label={props.overridden ? t("instanceDetail.settings.lockOverride") : t("instanceDetail.settings.lockInherit")}
       title={props.overridden ? t("instanceDetail.settings.lockOverride") : t("instanceDetail.settings.lockInherit")}
       disabled={props.disabled}
       onClick={() => props.onToggle()}
     >
-      <Icon name={props.overridden ? "unlock" : "lock"} size={14} />
+      <Icon name={props.overridden ? "unlock" : "lock"} size={13} />
+      <Show when={props.label}>
+        <span>{props.label}</span>
+      </Show>
     </button>
   );
 }

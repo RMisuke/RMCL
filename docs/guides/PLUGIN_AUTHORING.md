@@ -49,8 +49,9 @@ my-plugin/
       {
         "id": "status",
         "title": "Status",
-        "defaultSize": { "w": 4, "h": 2 },
-        "minSize": { "w": 2, "h": 1 }
+        "defaultSize": { "w": 6, "h": 2 },
+        "minSize": { "w": 4, "h": 2 },
+        "maxSize": { "w": 8, "h": 3 }
       }
     ]
   }
@@ -67,6 +68,29 @@ my-plugin/
   `darwin-aarch64` / `darwin-x86_64` / `windows-x86_64` / `windows-aarch64` /
   `linux-x86_64` / `linux-aarch64`。
 - **未知字段会被拒绝**（v1 严格模式），拼错不会静默忽略。
+
+### 2.1 卡片尺寸与 Host Bridge
+
+卡片宽度只能取 `3 / 4 / 6 / 8 / 12`（12 列网格），高度只能取 `1 / 2 / 3 / 4`
+（92px 行高 + 14px 间隔）。manifest 的 `defaultSize` 必填，`minSize` / `maxSize`
+可选；宿主会把旧插件声明的任意 1..24 尺寸吸附到最近的合法档位。
+
+隔离 UI 卡片的 `init` 消息包含 `cardId` 与 `card: { title, width, height }`。
+v1 可调用的宿主方法：
+
+| 方法 | 能力 | 用途 |
+|---|---|---|
+| `host.info` / `theme.get` | — | 版本、卡 id、当前主题 |
+| `settings.get` | `settings.read` | 公开设置子集 |
+| `instances.list` | `instance.read` | 实例概要 |
+| `tasks.list` | `tasks.read` | 统一任务中心快照（已脱敏，无日志/路径） |
+| `launch.status` | `launch.read` | 运行中的实例 key |
+| `server.status` | `network.request` + 声明 host | 真实 Minecraft SLP 查询 |
+| `network.request` | `network.request` | 声明域名的 HTTP 代理 |
+| `llm.chat` | `ai.chat` | 宿主 AI 服务 |
+
+新增低风险能力 `tasks.read` / `launch.read` 安装时自动授予；`network.request`
+仍需显式授权。插件不能直接访问文件系统、账号凭据或宿主 DOM。
 
 ## 3. 权限
 

@@ -23,6 +23,8 @@ export interface PluginFrameProps {
   title: string;
   /** `rmcccplugin://...` URL built by the backend (`contributions[].uiUrl`). */
   uiUrl: string;
+  /** Current grid placement, exposed to the plugin in the init payload. */
+  card?: { title: string; width: number; height: number };
 }
 
 /// A frame that never reports `ready` within this window is treated as broken.
@@ -54,6 +56,7 @@ export const PluginFrame: Component<PluginFrameProps> = (props) => {
     bridge = new PluginBridge({
       pluginId: props.pluginId,
       cardId: props.cardId,
+      card: props.card,
       frame,
       onDiagnostic: (message) => console.warn(`plugin-ui[${props.pluginId}]: ${message}`),
       onReady: () => {

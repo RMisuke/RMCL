@@ -6,29 +6,15 @@ use rmccc_modloader::{DependencyManager, LoaderVersion, ModLoaderType};
 use std::sync::Arc;
 use tauri::Emitter;
 
-/// 发射 modloader 安装进度事件（P2-06）。
-/// `InstallTask` 无细粒度进度回调，故采用阶段级事件（0/10/50/100%），
-/// 前端可据此展示安装中/完成/失败状态。
-fn emit_modloader_progress(
-    app_handle: &tauri::AppHandle,
-    key: &str,
-    loader_type: &str,
-    game_version: &str,
-    stage: &str,
-    percent: u8,
-    message: &str,
-) {
-    let _ = app_handle.emit(
-        crate::events::MODLOADER_INSTALL_PROGRESS,
-        serde_json::json!({
-            "key": key,
-            "loader_type": loader_type,
-            "game_version": game_version,
-            "stage": stage,
-            "percent": percent,
-            "message": message,
-        }),
-    );
+/// Map a loader installer stage to the visible task step.
+fn step_for_stage(stage: &str) -> &'static str {
+    match stage {
+        "started" => "prepare",
+        "fetch" | "download" => "download",
+        "run" | "execute" => "installer",
+        "detect" | "repair" | "completed" => "verify",
+        _ => "",
+    }
 }
 
 #[tauri::command]
@@ -89,48 +75,41 @@ pub async fn modloader_install(
         service.get(&key)?
     };
     let base_game_version = instance.summary.game_version.clone();
-    let base_game_version_for_progress = base_game_version.clone();
 
-    emit_modloader_progress(
-        &app_handle,
-        &key,
-        &loader_type,
-        &base_game_version,
-        "started",
-        0,
-        &format!("开始安装 {} ...", lt.display_name()),
+    let task = state.tasks.create(
+        rmccc_tasks::TaskSpec::new(
+            rmccc_tasks::TaskKind::ModloaderInstall,
+            format!("安装 {} {}", lt.display_name(), loader_version),
+        )
+        .subtitle(format!(
+            "{} · {}",
+            instance.summary.display_name, base_game_version
+        ))
+        .target(key.clone())
+        .tag(loader_type.clone())
+        .step("prepare", "准备", 1)
+        .step("download", "下载安装器", 6)
+        .step("installer", "运行安装器", 8)
+        .step("verify", "校验产物", 2),
     );
+    task.begin_step("prepare");
+    task.message(format!("开始安装 {}…", lt.display_name()));
 
-    // 安装细节回调：modloader crate 的阶段事件逐条转发为 IPC 进度事件
-    //（下载字节 / 安装器 stdout 原行 / 检测产物 / 补库），Task Center 展示。
-    // "detail"（安装器 stdout 原行）可达每秒数百条，按 100ms 限流转发；
-    // 阶段/百分比里程碑事件不受限流影响（perf audit 2.2）。
+    // 安装细节回调：modloader crate 的阶段事件直接驱动任务步骤与细节日志。
+    // 进度节流由 TaskRegistry 统一负责（100ms/任务），这里不再手写时间窗。
     let progress: rmccc_modloader::InstallProgressCallback = {
-        let app_handle = app_handle.clone();
-        let key = key.clone();
-        let loader_type = loader_type.clone();
-        let progress_created = std::time::Instant::now();
-        let last_detail_ms = std::sync::atomic::AtomicU64::new(0);
+        let task = task.clone();
         Arc::new(move |event: rmccc_modloader::InstallProgressEvent| {
             if event.stage == "detail" {
-                const DETAIL_WINDOW_MS: u64 = 100;
-                let now_ms = progress_created.elapsed().as_millis() as u64;
-                if now_ms.saturating_sub(last_detail_ms.load(std::sync::atomic::Ordering::Relaxed))
-                    < DETAIL_WINDOW_MS
-                {
-                    return;
-                }
-                last_detail_ms.store(now_ms, std::sync::atomic::Ordering::Relaxed);
+                task.detail(event.message);
+                return;
             }
-            emit_modloader_progress(
-                &app_handle,
-                &key,
-                &loader_type,
-                &base_game_version_for_progress,
-                event.stage,
-                event.percent,
-                &event.message,
-            );
+            let step = step_for_stage(event.stage);
+            task.message(event.message);
+            if !step.is_empty() {
+                task.begin_step(step);
+                task.set_step_percent(step, event.percent as f64);
+            }
         })
     };
 
@@ -153,16 +132,8 @@ pub async fn modloader_install(
     {
         Ok(installed) => installed,
         Err(error) => {
-            // 失败也要落地：否则 Task Center 的安装行永远悬着。
-            emit_modloader_progress(
-                &app_handle,
-                &key,
-                &loader_type,
-                &base_game_version,
-                "failed",
-                100,
-                &format!("安装失败：{error}"),
-            );
+            let message = format!("加载器安装失败：{error}");
+            task.fail(crate::commands::tasks::error_view(message));
             return Err(error.into());
         }
     };
@@ -178,18 +149,18 @@ pub async fn modloader_install(
         let _ = service.select_instance(Some(&installed.instance_key));
     }
 
-    // ── 新实例提交与索引刷新已由 core 完成，这里只上报事件 ──
-    emit_modloader_progress(
-        &app_handle,
-        &key,
-        &loader_type,
-        &installed.version_id,
-        "completed",
-        100,
-        "安装完成",
-    );
-
+    task.complete_step("verify");
+    task.message(format!("{} 安装完成", lt.display_name()));
     let installed_key = installed.instance_key.clone();
+    task.succeed(rmccc_tasks::TaskResultView {
+        key: Some(installed_key.clone()),
+        instance_id: Some(installed.version_id.clone()),
+        directory_id: Some(instance.summary.directory_id.clone()),
+        name: Some(installed.version_id.clone()),
+        version: Some(installed.version_id.clone()),
+        ..rmccc_tasks::TaskResultView::default()
+    });
+
     let _ = app_handle.emit(
         crate::events::INSTANCES_REFRESHED,
         serde_json::json!({ "version": installed.version_id }),

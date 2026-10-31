@@ -3,16 +3,27 @@
 > 本文定义全局视觉语言。所有页面必须从本文的 token 与组件库取用，
 > 禁止页面私自造样式（这是现状 2253 行手写 CSS 教训的直接对策）。
 
-> **视觉更新（2026-10-26 · Chromatic Voxel）**：在既有信息架构、8 token 主题 schema
-> 与安全语义色不变的前提下，全局视觉升级为「层叠玻璃 + 轨道光效 + 体素几何」。
-> 每套内置主题由宿主派生 `accent / accent-secondary / accent-tertiary` 三个装饰色，
-> 不扩展插件主题 schema；三色只用于品牌、图形与装饰，安全色仍由宿主固定。
-> 卡片采用 14–18px 圆角、顶部高光、ambient/contact 双层阴影；主按钮使用三色中的
-> 双色渐变与掠光反馈。页面进入采用 180ms 淡入上移，菜单/对话框采用带轻微回弹的
-> 缩放入场，列表与卡片 hover 使用 1–3px 位移，不使用大幅滑屏。主页新增漂浮体素方块、
-> 轨道环、透视网格和主题粒子，全部只读装饰且不拦截指针。所有动效继续受
-> `data-motion` 与 `prefers-reduced-motion` 双重闸门控制。具体实现集中于
-> `src/styles/visual-system.css`，替代本章与之冲突的旧阴影/圆角/动效数值。
+> **视觉更新（2026-10-31 · Noctis / 主题 v3）**：信息架构、8 token 主题 schema
+> 与安全语义色保持不变，视觉层整体替换为「深墨 chrome + 墨色玻璃 + 圆角卡片 +
+> 单焦点强调色」。每套主题由宿主派生 `accent / accent-secondary / accent-tertiary`
+> 三个角色色：**accent 只用于主操作、当前导航、焦点和单个关键数字**；secondary
+> 只进入启动面板氛围与背景光；tertiary 只用于粒子/微光，不进入正文。没有用户
+> 图片/视频壁纸时，宿主自动渲染符合主题的 `AmbientStage`：主题色 wash、缓动 veil、
+> 地平线、透视网格和主题粒子；用户壁纸存在时该层不创建。
+>
+> 卡片统一 14px 四角圆角，细描边、低对比阴影，取消“每张卡都发光”的旧
+> 做法；窗口控制、底部导航和账号/启动 dock 始终是深墨色板。页面进入 220ms 淡入
+> 上移，卡片 hover 只改变边框/阴影。所有动效继续受 `data-motion` 与
+> `prefers-reduced-motion` 双重闸门控制。
+>
+> 设置 → 外观提供主面板不透明度、卡片不透明度和主面板卡片模糊度三个独立滑块；
+> 卡片使用 `--rmccc-card-alpha` / `--rmccc-card-blur`，主面板使用
+> `--rmccc-panel-alpha`。图片/视频壁纸激活时主页卡片模糊度自动降到滑块的约
+> 55%，避免壁纸被过度磨平，同时保留玻璃质感。
+>
+> 样式按 `app.css → theme-core.css → theme-skin.css → ambient-stage.css →
+> home-stage.css → instance-settings.css` 加载；旧 `visual-system.css` /
+> `soft-dashboard.css` 已删除。协议细节见 [ADR-021](../adr/ADR-021-noctis-theme-v3.md)。
 
 ## 1. 风格基调
 
@@ -21,10 +32,10 @@
   边框 + 微阴影分层，拒绝重投影。
 - **紧凑而清晰**：桌面工具的信息密度（列表行 44px、卡片内边距 16px），
   但排版层级用字号/字重/灰度拉开，不靠堆颜色。
-- **暗色优先**：默认暗色（与现状一致），亮色为完整一等公民，跟随系统为推荐默认值。
+- **暗色优先**：默认视觉是深墨 + 单焦点 accent；亮色是完整一等公民，使用暖纸/雾白而非高亮白玻璃。
 
 参照系：HMCL 的 Material Design 3 token 思路（语义角色色 + 统一圆角/阴影/间距），
-但视觉上更扁平、更少装饰，符合 RMCCC「< 10MB 小工具」的气质。
+但视觉上更扁平、更少装饰，符合 RMCCC「< 20 MiB 小工具」的气质。
 
 ## 2. 设计令牌（Design Tokens）
 

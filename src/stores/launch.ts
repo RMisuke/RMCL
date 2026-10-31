@@ -3,8 +3,9 @@
  * 1000 lines per profile; buffers survive exit until the drawer closes.
  */
 import { createRoot, createSignal } from "solid-js";
-import { launch, instances } from "../ipc/api";
+import { launch } from "../ipc/api";
 import { EVENTS } from "../ipc/events";
+import type { LaunchProgressPayload } from "../ipc/types";
 import { listen } from "@tauri-apps/api/event";
 import { instancesStore } from "./instances";
 import { uiStore } from "./ui";
@@ -44,14 +45,24 @@ export interface LaunchExit {
  * Launch flow shown in the bottom-right bubble (HMCL launching-steps style):
  * check instance resources → repair if incomplete → start → success.
  */
+export type LaunchFlowStage =
+  | "check"
+  | "repair"
+  | "launching"
+  | "waiting"
+  | "started"
+  | "failed";
+
 export interface LaunchFlow {
   profileId: string;
   profileName: string;
-  stage: "check" | "repair" | "launching" | "started" | "failed";
-  missing?: number;
-  repaired?: number;
+  stage: LaunchFlowStage;
+  percent: number;
+  message?: string;
   error?: string;
 }
+
+export type LaunchProgress = LaunchProgressPayload;
 
 export const launchStore = createRoot(() => {
   const [running, setRunning] = createSignal<Map<string, RunningGame>>(new Map());
@@ -63,8 +74,8 @@ export const launchStore = createRoot(() => {
   /** Profiles the user stopped from the UI — distinguishes kill from crash (P1-7). */
   const userKilled = new Set<string>();
   const [flow, setFlow] = createSignal<LaunchFlow | null>(null);
+  const [progress, setProgress] = createSignal<Map<string, LaunchProgress>>(new Map());
   let flowClearTimer: ReturnType<typeof setTimeout> | null = null;
-  let flowStartTimer: ReturnType<typeof setTimeout> | null = null;
 
   function scheduleFlowClear(delayMs: number): void {
     if (flowClearTimer) clearTimeout(flowClearTimer);
@@ -108,28 +119,21 @@ export const launchStore = createRoot(() => {
       // Selection is cosmetic; never block a launch on it.
     }
 
-    // 启动气泡：检查资源 → 自动补全 → 启动（HMCL launching steps 等价）。
-    setFlow({ profileId, profileName: profileName ?? profileId, stage: "check" });
-    let missing = 0;
-    try {
-      const check = await instances.checkCompletion(profileId);
-      if (check.ok) missing = check.data.length;
-    } catch {
-      /* 检查失败不阻塞启动——启动流程自带 pre-launch 修复 */
-    }
-    if (missing > 0) {
-      setFlow((f) => (f && f.profileId === profileId ? { ...f, stage: "repair", missing } : f));
-      try {
-        const repaired = await instances.repair(profileId);
-        if (repaired.ok) {
-          setFlow((f) => (f && f.profileId === profileId ? { ...f, repaired: repaired.data } : f));
-        }
-      } catch {
-        /* 同上 */
-      }
-    }
-    setFlow((f) => (f && f.profileId === profileId ? { ...f, stage: "launching" } : f));
-
+    // 启动气泡只展示后端上报的真实阶段；不再先跑一遍 check/repair
+    // （launch_start 内部已经执行 ensure_launch_ready，重复检查会拖慢启动并
+    // 让两套进度互相覆盖）。
+    setProgress((map) => {
+      const next = new Map(map);
+      next.delete(profileId);
+      return next;
+    });
+    setFlow({
+      profileId,
+      profileName: profileName ?? profileId,
+      stage: "check",
+      percent: 0,
+      message: t("launchFlow.detail.checking"),
+    });
     const res = await launch.start(profileId);
     setStarting((set) => {
       const next = new Set(set);
@@ -138,32 +142,106 @@ export const launchStore = createRoot(() => {
     });
     if (!res.ok) {
       const message = launchErrorMessage(res.error);
-      setFlow((f) => (f && f.profileId === profileId ? { ...f, stage: "failed", error: message } : f));
+      setFlow((f) =>
+        f && f.profileId === profileId
+          ? { ...f, stage: "failed", error: message, message }
+          : f
+      );
       // P2-19: the failed bubble stays until dismissed — a 5s auto-clear
       // dropped the error whenever the user glanced away.
       return { ok: false, message };
     }
-    // LAUNCH_STARTED 事件通常先到；45s 兜底（进程拉起但事件丢失时仍收尾）。
-    // 句柄存下来：dismissFlow 时一并取消（P3-10）。
-    flowStartTimer = setTimeout(() => {
-      flowStartTimer = null;
-      setFlow((f) =>
-        f && f.profileId === profileId && f.stage === "launching" ? { ...f, stage: "started" } : f
-      );
-      scheduleFlowClear(2500);
-    }, 45_000);
     // Attribute the launch to the active account (account card last-played).
     void import("./auth").then(({ authStore }) => authStore.recordAccountActivity());
     return { ok: true };
   }
 
-  /** LAUNCH_STARTED 事件到达：气泡进入"启动成功"并在 2.5s 后关闭。 */
-  function markStarted(profileId: string): void {
+  function stageForFlow(stage: string): LaunchFlowStage {
+    switch (stage) {
+      case "repairing":
+        return "repair";
+      case "checking-java":
+      case "spawning":
+        return "launching";
+      case "waiting-window":
+        return "waiting";
+      case "window-open":
+        return "started";
+      default:
+        return "check";
+    }
+  }
+
+  /**
+   * Process spawn is **not** 100%: the game window has not been observed yet.
+   * Keep the bubble in "waiting for window" until the backend's stdout marker
+   * arrives.
+   */
+  function markProcessStarted(profileId: string): void {
     setFlow((f) => {
-      if (!f || f.profileId !== profileId || f.stage === "failed" || f.stage === "started") return f;
-      scheduleFlowClear(2500);
-      return { ...f, stage: "started" };
+      if (!f || f.profileId !== profileId || f.stage === "failed" || f.stage === "started") {
+        return f;
+      }
+      return {
+        ...f,
+        stage: "waiting",
+        percent: Math.max(f.percent, 88),
+        message: t("launchFlow.detail.waitingWindow"),
+      };
     });
+  }
+
+  /** Window-open event: the only transition to 100%. */
+  function markWindowOpened(profileId: string, message?: string): void {
+    setFlow((f) => {
+      if (!f || f.profileId !== profileId) return f;
+      if (f.stage === "started") return f;
+      scheduleFlowClear(2500);
+      return {
+        ...f,
+        stage: "started",
+        percent: 100,
+        message: message ?? t("launchFlow.detail.windowOpen"),
+      };
+    });
+  }
+
+  function applyProgress(event: LaunchProgressPayload): void {
+    const percent = Math.max(0, Math.min(100, event.percent));
+    setProgress((map) => {
+      const previous = map.get(event.profileId);
+      // Progress must never move backwards (the 100% marker can arrive before
+      // the post-spawn 88% event).
+      const merged: LaunchProgress = {
+        ...event,
+        percent: Math.max(previous?.percent ?? 0, percent),
+        windowOpened: previous?.windowOpened || event.windowOpened || percent >= 100,
+      };
+      if (merged.windowOpened) merged.percent = 100;
+      const next = new Map(map);
+      next.set(event.profileId, merged);
+      return next;
+    });
+
+    if (event.windowOpened || percent >= 100) {
+      markWindowOpened(event.profileId, event.message);
+      return;
+    }
+
+    setFlow((f) => {
+      if (!f || f.profileId !== event.profileId) return f;
+      if (f.stage === "failed" || f.stage === "started") return f;
+      return {
+        ...f,
+        stage: stageForFlow(event.stage),
+        percent: Math.max(f.percent, percent),
+        message: event.message,
+      };
+    });
+  }
+
+  function progressFor(profileId: string): LaunchProgress | null {
+    return progress().get(profileId) ?? null;
   }
 
   /**
@@ -191,6 +269,11 @@ export const launchStore = createRoot(() => {
   async function kill(profileId: string): Promise<void> {
     userKilled.add(profileId);
     // 乐观更新：UI 立即停止显示运行中；退出事件晚到也无害（幂等）。
+    setProgress((map) => {
+      const next = new Map(map);
+      next.delete(profileId);
+      return next;
+    });
     setRunning((map) => {
       const next = new Map(map);
       next.delete(profileId);
@@ -227,12 +310,15 @@ export const launchStore = createRoot(() => {
     void listen<{ profile_id: string; pid: number }>(EVENTS.LAUNCH_STARTED, (event) => {
       const { profile_id, pid } = event.payload;
       userKilled.delete(profile_id); // a fresh run clears any stale kill marker
-      markStarted(profile_id);
+      markProcessStarted(profile_id);
       setRunning((map) => {
         const next = new Map(map);
         next.set(profile_id, { profileId: profile_id, pid, startedAt: Date.now() });
         return next;
       });
+    });
+    void listen<LaunchProgressPayload>(EVENTS.LAUNCH_PROGRESS, (event) => {
+      applyProgress(event.payload);
     });
     // Backend coalesces stdout lines into batches (~10 events/s at high
     // rates) — append the whole batch in one signal update.
@@ -248,6 +334,16 @@ export const launchStore = createRoot(() => {
           next.delete(profile_id);
           return next;
         });
+        setProgress((map) => {
+          const next = new Map(map);
+          next.delete(profile_id);
+          return next;
+        });
+        setFlow((f) =>
+          f && f.profileId === profile_id && f.stage !== "started" && f.stage !== "failed"
+            ? { ...f, stage: "failed", error: t("launchFlow.detail.exitedEarly"), message: t("launchFlow.detail.exitedEarly") }
+            : f
+        );
         setLastExit({ profileId: profile_id, exitCode: exit_code, exitType: exit_type });
       }
     );
@@ -277,11 +373,11 @@ export const launchStore = createRoot(() => {
     lastExit,
     clearLastExit: () => setLastExit(null),
     flow,
+    progress,
+    progressFor,
     dismissFlow: () => {
       if (flowClearTimer) clearTimeout(flowClearTimer);
       flowClearTimer = null;
-      if (flowStartTimer) clearTimeout(flowStartTimer);
-      flowStartTimer = null;
       setFlow(null);
     },
     start,

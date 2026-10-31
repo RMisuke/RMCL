@@ -17,8 +17,8 @@
 //!
 //! | 后端 | 状态 |
 //! |------|------|
-//! | macOS（aarch64） | ✅ 实现并本机实测 |
-//! | Windows | ⛔ `UnsupportedPlatform`（deferred，待原生 CI） |
+//! | macOS（aarch64） | ✅ 实现并本机实测（含原生分辨率 HEVC 壁纸） |
+//! | Windows | ⚠️ 原生 HEVC WinRT 后端已落地，其余能力 `UnsupportedPlatform`（deferred，待原生 CI） |
 //! | Linux | ⛔ `UnsupportedPlatform`（deferred，待原生 CI） |
 //!
 //! 各能力域的迁移清单与逐项销账见 `docs/roadmap/PLATFORM_ADAPTATION.md`。
@@ -43,6 +43,8 @@ pub mod java;
 pub mod mock;
 pub mod process;
 pub mod shell;
+pub mod system;
+pub mod video;
 
 #[cfg(target_os = "macos")]
 mod macos;
@@ -56,6 +58,11 @@ pub use java::{JavaDetector, JavaInstallation};
 pub use macos::MacosFs;
 pub use process::{PlatformProcessControl, ProcessPriority};
 pub use shell::PlatformShell;
+pub use system::{PhysicalMemory, SystemMemory};
+pub use video::{
+    probe_mp4, CachedVideoEngine, PreparedVideo, UnsupportedVideoTranscoder, VideoCodec,
+    VideoEngine, VideoMetadata, VideoPrepareMode, VideoPrepareRequest,
+};
 
 use mock::MockJavaDetector;
 use std::sync::Arc;
@@ -75,6 +82,10 @@ pub struct Platform {
     pub shell: Arc<dyn PlatformShell>,
     /// Java 运行时探测（各 OS 的安装位置 / 注册表 / `java_home` / alternatives）。
     pub java: Arc<dyn JavaDetector>,
+    /// 物理内存状态（设置页内存占用条；不参与启动决策）。
+    pub memory: Arc<dyn SystemMemory>,
+    /// Native-resolution wallpaper preparation with a platform transcoder.
+    pub video: Arc<dyn VideoEngine>,
 }
 
 impl Platform {
@@ -88,9 +99,11 @@ impl Platform {
                 process: Arc::new(macos::MacosProcess),
                 shell: Arc::new(macos::MacosShell),
                 java: Arc::new(macos::MacosJavaDetector),
+                memory: Arc::new(macos::MacosSystemMemory),
+                video: Arc::new(CachedVideoEngine::new(video::MacosVideoTranscoder)),
             }
         }
-        #[cfg(not(target_os = "macos"))]
+        #[cfg(target_os = "windows")]
         {
             Self {
                 descriptor: PlatformDescriptor::current(),
@@ -98,6 +111,20 @@ impl Platform {
                 process: Arc::new(unsupported::UnsupportedProcess),
                 shell: Arc::new(unsupported::UnsupportedShell),
                 java: Arc::new(unsupported::UnsupportedJavaDetector),
+                memory: Arc::new(unsupported::UnsupportedSystemMemory),
+                video: Arc::new(CachedVideoEngine::new(video::WindowsVideoTranscoder)),
+            }
+        }
+        #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+        {
+            Self {
+                descriptor: PlatformDescriptor::current(),
+                fs: Arc::new(unsupported::UnsupportedFs),
+                process: Arc::new(unsupported::UnsupportedProcess),
+                shell: Arc::new(unsupported::UnsupportedShell),
+                java: Arc::new(unsupported::UnsupportedJavaDetector),
+                memory: Arc::new(unsupported::UnsupportedSystemMemory),
+                video: Arc::new(CachedVideoEngine::new(UnsupportedVideoTranscoder)),
             }
         }
     }
@@ -120,6 +147,8 @@ impl Platform {
                 process: backend.clone(),
                 shell: backend.clone(),
                 java: Arc::new(MockJavaDetector::default()),
+                memory: Arc::new(mock::MockSystemMemory),
+                video: Arc::new(CachedVideoEngine::new(UnsupportedVideoTranscoder)),
             },
             backend,
         )

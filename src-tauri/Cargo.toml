@@ -9,6 +9,7 @@ tauri-build = { workspace = true }
 [dependencies]
 # Internal crates
 rmccc-core = { workspace = true }
+rmccc-tasks = { workspace = true }
 rmccc-instance = { workspace = true }
 rmccc-error = { workspace = true }
 rmccc-auth = { workspace = true }
@@ -18,6 +19,7 @@ rmccc-launch = { workspace = true }
 rmccc-version = { workspace = true }
 rmccc-modloader = { workspace = true }
 rmccc-mods = { workspace = true }
+rmccc-modpack = { workspace = true }
 rmccc-logic = { workspace = true }
 rmccc-agent = { workspace = true }
 rmccc-llm = { workspace = true }

@@ -99,7 +99,7 @@ test("every method that needs a capability names a known one", () => {
   );
   const entries = [...block.matchAll(/"([a-z.]+)":\s*(null|"([a-z.]+)")/g)];
   assert.equal(entries.length, schemaMethods.length);
-  const known = ["settings.read", "instance.read", "network.request", "ai.chat"];
+  const known = ["settings.read", "instance.read", "tasks.read", "launch.read", "network.request", "ai.chat"];
   for (const [, method, , capability] of entries) {
     if (capability) assert.ok(known.includes(capability), `${method} uses unknown capability ${capability}`);
   }

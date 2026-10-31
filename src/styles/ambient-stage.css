@@ -1,0 +1,272 @@
+/* ==========================================================================
+   Noctis ambient stage — the default theme wallpaper
+   --------------------------------------------------------------------------
+   Rendered under every foreground surface when the user has not selected an
+   image/video wallpaper. Pure CSS: one atmospheric wash, three blurred veils,
+   a perspective grid, a horizon arc and a theme-specific particle field.
+   No canvas, no image assets, no network. All motion is gated by data-motion
+   and prefers-reduced-motion.
+   ========================================================================== */
+
+.ambient-stage {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  overflow: hidden;
+  border-radius: inherit;
+  background:
+    radial-gradient(110% 85% at 76% -8%, var(--scene-wash), transparent 56%),
+    radial-gradient(95% 75% at 8% 104%, var(--scene-wash-2), transparent 62%),
+    linear-gradient(160deg,
+      color-mix(in srgb, var(--rmccc-background) 88%, var(--scene-primary) 12%),
+      var(--rmccc-background) 48%,
+      color-mix(in srgb, var(--rmccc-background) 90%, var(--scene-secondary) 10%));
+  contain: layout paint style;
+  isolation: isolate;
+}
+
+.ambient-stage::before {
+  content: "";
+  position: absolute;
+  inset: -10%;
+  background:
+    radial-gradient(42% 42% at 24% 26%, color-mix(in srgb, var(--scene-primary) 10%, transparent), transparent 72%),
+    radial-gradient(36% 36% at 82% 68%, color-mix(in srgb, var(--scene-secondary) 9%, transparent), transparent 74%);
+  opacity: .9;
+}
+
+.ambient-wash {
+  position: absolute;
+  inset: 0;
+  background:
+    linear-gradient(115deg, transparent 22%, color-mix(in srgb, var(--scene-primary) 5%, transparent) 48%, transparent 72%),
+    radial-gradient(ellipse at 50% 116%, color-mix(in srgb, var(--scene-secondary) 14%, transparent), transparent 58%);
+}
+
+.ambient-veil {
+  position: absolute;
+  inset: -24%;
+  opacity: .85;
+  filter: blur(58px) saturate(118%);
+}
+.ambient-veil i {
+  position: absolute;
+  display: block;
+  width: 44%;
+  aspect-ratio: 1;
+  border-radius: 50%;
+  mix-blend-mode: screen;
+  animation: ambient-veil-drift var(--veil-duration, 34s) ease-in-out infinite alternate;
+}
+.ambient-veil i.is-a {
+  left: 12%;
+  top: 4%;
+  background: radial-gradient(circle, color-mix(in srgb, var(--scene-primary) 26%, transparent), transparent 68%);
+}
+.ambient-veil i.is-b {
+  right: 6%;
+  top: 20%;
+  background: radial-gradient(circle, color-mix(in srgb, var(--scene-secondary) 23%, transparent), transparent 70%);
+  animation-delay: -11s;
+  animation-duration: 41s;
+}
+.ambient-veil i.is-c {
+  left: 30%;
+  bottom: -10%;
+  background: radial-gradient(circle, color-mix(in srgb, var(--scene-tertiary) 18%, transparent), transparent 70%);
+  animation-delay: -21s;
+  animation-duration: 47s;
+}
+
+/* A large offset circle reads as a horizon/planet, not as a card. */
+.ambient-horizon {
+  position: absolute;
+  left: 50%;
+  bottom: -78%;
+  width: 132%;
+  aspect-ratio: 1;
+  border: 1px solid color-mix(in srgb, var(--scene-primary) 22%, transparent);
+  border-radius: 50%;
+  transform: translateX(-50%);
+  box-shadow:
+    0 -2px 40px color-mix(in srgb, var(--scene-primary) 8%, transparent),
+    inset 0 2px 60px color-mix(in srgb, var(--scene-secondary) 6%, transparent);
+}
+.ambient-horizon::before {
+  content: "";
+  position: absolute;
+  inset: 7%;
+  border: 1px solid color-mix(in srgb, var(--scene-secondary) 12%, transparent);
+  border-radius: 50%;
+}
+
+.ambient-grid {
+  position: absolute;
+  left: 50%;
+  bottom: -34%;
+  width: 150%;
+  height: 78%;
+  opacity: .42;
+  transform: translateX(-50%) perspective(620px) rotateX(66deg);
+  transform-origin: 50% 100%;
+  background-image:
+    linear-gradient(color-mix(in srgb, var(--scene-primary) 13%, transparent) 1px, transparent 1px),
+    linear-gradient(90deg, color-mix(in srgb, var(--scene-primary) 13%, transparent) 1px, transparent 1px);
+  background-size: 44px 44px;
+  mask-image: linear-gradient(to top, black 0%, color-mix(in srgb, black 60%, transparent) 44%, transparent 86%);
+  -webkit-mask-image: linear-gradient(to top, black 0%, color-mix(in srgb, black 60%, transparent) 44%, transparent 86%);
+  animation: ambient-grid-drift 18s linear infinite;
+}
+
+.ambient-particles {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  opacity: calc(var(--scene-particle-opacity, .55) * 1.15);
+  mix-blend-mode: screen;
+}
+.ambient-particle {
+  position: absolute;
+  display: block;
+  width: var(--particle-size, 3px);
+  height: var(--particle-size, 3px);
+  border-radius: 50%;
+  background: var(--particle-color, var(--scene-primary));
+  box-shadow: 0 0 10px color-mix(in srgb, var(--particle-color, var(--scene-primary)) 70%, transparent);
+  opacity: var(--particle-alpha, .5);
+  will-change: transform, opacity;
+  animation: ambient-particle-rise var(--particle-duration, 28s) linear infinite;
+  animation-delay: var(--particle-delay, 0s);
+}
+
+.ambient-particle.is-leaf {
+  height: calc(var(--particle-size, 3px) * .62);
+  border-radius: 70% 10% 70% 10%;
+  box-shadow: 0 0 8px color-mix(in srgb, var(--particle-color) 45%, transparent);
+  transform: rotate(24deg);
+}
+.ambient-particle.is-petal {
+  height: calc(var(--particle-size, 3px) * .7);
+  border-radius: 70% 10% 70% 10%;
+  box-shadow: 0 0 10px color-mix(in srgb, var(--particle-color) 38%, transparent);
+}
+.ambient-particle.is-bubble {
+  border: 1px solid color-mix(in srgb, var(--particle-color) 55%, transparent);
+  background: color-mix(in srgb, var(--particle-color) 10%, transparent);
+  box-shadow: inset 0 0 4px color-mix(in srgb, var(--particle-color) 25%, transparent);
+}
+.ambient-particle.is-spark {
+  width: max(1.5px, calc(var(--particle-size, 3px) * .36));
+  height: calc(var(--particle-size, 3px) * 2.4);
+  border-radius: 99px;
+  box-shadow: 0 0 12px color-mix(in srgb, var(--particle-color) 75%, transparent);
+}
+.ambient-particle.is-dust { height: calc(var(--particle-size, 3px) * .5); width: calc(var(--particle-size, 3px) * .5); }
+.ambient-particle.is-shard {
+  height: calc(var(--particle-size, 3px) * 1.9);
+  border-radius: 1px;
+  clip-path: polygon(50% 0, 100% 100%, 0 100%);
+  box-shadow: 0 0 10px color-mix(in srgb, var(--particle-color) 45%, transparent);
+}
+
+.ambient-vignette {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background:
+    radial-gradient(ellipse at 50% 42%, transparent 42%, color-mix(in srgb, var(--rmccc-background) 46%, transparent) 112%),
+    linear-gradient(to bottom, color-mix(in srgb, var(--rmccc-background) 22%, transparent), transparent 24%, transparent 72%, color-mix(in srgb, var(--rmccc-background) 38%, transparent));
+}
+
+.ambient-grain {
+  position: absolute;
+  inset: 0;
+  opacity: .035;
+  pointer-events: none;
+  background-image: radial-gradient(color-mix(in srgb, var(--rmccc-text) 80%, transparent) .5px, transparent .7px);
+  background-size: 4px 4px;
+  mix-blend-mode: overlay;
+}
+
+/* Theme atmosphere variations. Hue comes from --scene-*; these only change
+   geometry/opacity so every preset keeps its own silhouette. */
+.ambient-stage[data-atmosphere="verdant"] .ambient-horizon {
+  bottom: -84%;
+  border-color: color-mix(in srgb, var(--scene-primary) 26%, transparent);
+  box-shadow: 0 -8px 80px color-mix(in srgb, var(--scene-primary) 10%, transparent);
+}
+.ambient-stage[data-atmosphere="verdant"] .ambient-grid { opacity: .32; background-size: 56px 56px; }
+.ambient-stage[data-atmosphere="abyss"] .ambient-grid {
+  opacity: .5;
+  transform: translateX(-50%) perspective(760px) rotateX(72deg);
+  background-size: 58px 58px;
+}
+.ambient-stage[data-atmosphere="abyss"] .ambient-horizon { bottom: -70%; border-style: dashed; opacity: .5; }
+.ambient-stage[data-atmosphere="ember"] .ambient-horizon {
+  bottom: -88%;
+  border-color: color-mix(in srgb, var(--scene-primary) 32%, transparent);
+  box-shadow: 0 -18px 100px color-mix(in srgb, var(--scene-primary) 20%, transparent);
+}
+.ambient-stage[data-atmosphere="ember"] .ambient-grid { opacity: .26; }
+.ambient-stage[data-atmosphere="rose"] .ambient-veil { filter: blur(66px) saturate(108%); }
+.ambient-stage[data-atmosphere="rose"] .ambient-horizon { bottom: -82%; opacity: .72; }
+.ambient-stage[data-atmosphere="parchment"] .ambient-veil { opacity: .5; filter: blur(70px) saturate(82%); }
+.ambient-stage[data-atmosphere="parchment"] .ambient-particles { mix-blend-mode: multiply; }
+.ambient-stage[data-atmosphere="parchment"] .ambient-grid { opacity: .22; }
+.ambient-stage[data-atmosphere="daybreak"] .ambient-veil { opacity: .62; }
+.ambient-stage[data-atmosphere="daybreak"] .ambient-particles { mix-blend-mode: multiply; opacity: calc(var(--scene-particle-opacity, .42) * .8); }
+.ambient-stage[data-atmosphere="daybreak"] .ambient-grid { opacity: .22; }
+.ambient-stage[data-atmosphere="custom"] .ambient-horizon { opacity: .55; }
+
+html[data-theme-mode="light"] .ambient-stage {
+  background:
+    radial-gradient(110% 85% at 76% -8%, var(--scene-wash), transparent 58%),
+    radial-gradient(95% 75% at 8% 104%, var(--scene-wash-2), transparent 64%),
+    linear-gradient(160deg,
+      color-mix(in srgb, var(--rmccc-background) 92%, var(--scene-primary) 8%),
+      var(--rmccc-background) 50%,
+      color-mix(in srgb, var(--rmccc-background) 94%, var(--scene-secondary) 6%));
+}
+html[data-theme-mode="light"] .ambient-vignette {
+  background:
+    radial-gradient(ellipse at 50% 42%, transparent 48%, color-mix(in srgb, var(--rmccc-text) 7%, transparent) 118%),
+    linear-gradient(to bottom, color-mix(in srgb, #fff 12%, transparent), transparent 30%, transparent 74%, color-mix(in srgb, var(--rmccc-text) 5%, transparent));
+}
+html[data-theme-mode="light"] .ambient-grain { opacity: .022; mix-blend-mode: multiply; }
+
+/* Motion gates. The stage remains as a static gradient when motion is off. */
+html[data-motion="off"] .ambient-particle,
+html[data-motion="off"] .ambient-grid,
+html[data-motion="off"] .ambient-veil i { animation: none !important; }
+html[data-motion="off"] .ambient-particles { opacity: .18; }
+html[data-motion="off"] .ambient-particle:nth-child(n + 9) { display: none; }
+
+@media (prefers-reduced-motion: reduce) {
+  .ambient-particle,
+  .ambient-grid,
+  .ambient-veil i { animation: none !important; }
+  .ambient-particles { opacity: .16; }
+  .ambient-particle:nth-child(n + 9) { display: none; }
+}
+
+@keyframes ambient-veil-drift {
+  from { transform: translate3d(-4%, -2%, 0) scale(1); }
+  to { transform: translate3d(6%, 5%, 0) scale(1.14); }
+}
+@keyframes ambient-grid-drift {
+  from { background-position: 0 0, 0 0; }
+  to { background-position: 44px 44px, 44px 44px; }
+}
+@keyframes ambient-particle-rise {
+  0% {
+    opacity: 0;
+    transform: translate3d(0, 24px, 0) rotate(0deg) scale(.7);
+  }
+  12% { opacity: var(--particle-alpha, .5); }
+  72% { opacity: calc(var(--particle-alpha, .5) * .8); }
+  100% {
+    opacity: 0;
+    transform: translate3d(var(--particle-drift-x, 0px), calc(var(--particle-drift-y, 160px) * -1), 0)
+      rotate(var(--particle-spin, 40deg)) scale(1.05);
+  }
+}

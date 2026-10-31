@@ -5,12 +5,14 @@ edition = "2021"
 
 [dependencies]
 rmccc-error = { workspace = true }
+rmccc-tasks = { workspace = true }
 rmccc-auth = { workspace = true }
 rmccc-download = { workspace = true }
 rmccc-version = { workspace = true }
 rmccc-launch = { workspace = true }
 rmccc-modloader = { workspace = true }
 rmccc-mods = { workspace = true }
+rmccc-modpack = { workspace = true }
 rmccc-instance = { workspace = true }
 rmccc-config = { workspace = true }
 rmccc-platform = { workspace = true }
@@ -22,3 +24,7 @@ reqwest = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }
 chrono = { workspace = true }
+ts-rs = { workspace = true }
+
+[dev-dependencies]
+zip = { workspace = true }

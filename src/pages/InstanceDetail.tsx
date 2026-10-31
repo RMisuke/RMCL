@@ -9,39 +9,34 @@ import { useParams, useNavigate } from "@solidjs/router";
 import { PageHeader } from "../components/PageHeader";
 import { DeleteInstanceDialog } from "../components/DeleteInstanceDialog";
 import { Icon } from "../components/icons";
-import { RmButton, RmIconButton, RmInput, RmSelect, RmSwitch, RmTag, RmCheckbox } from "../components/rm/controls";
+import { RmButton, RmIconButton, RmInput, RmTag, RmCheckbox } from "../components/rm/controls";
 import { RmDialog, RmMenu } from "../components/rm/overlays";
 import {
   RmCard,
   RmListRow,
   RmSideTabs,
-  RmAdvancedSection,
-  RmFieldRow,
-  RmInheritLock,
   RmEmptyState,
   RmErrorState,
 } from "../components/rm/surfaces";
-import { instances, mods, modLoader, settings as settingsApi } from "../ipc/api";
+import { instances, mods, modLoader } from "../ipc/api";
 import type {
   InstanceDetail as InstanceDetailData,
-  InstancePaths,
   ResolvedInstanceSettings,
-  MissingFileInfo,
-  JavaInfo,
   LoaderVersion,
   ModsDependencyScanView,
   AppliedPlanReport,
 } from "../ipc/types";
 import { instancesStore } from "../stores/instances";
 import { toInstanceView, toSettingsPatch, type InstanceView } from "../lib/instanceView";
+import { InstanceSettings } from "../components/instance-settings/InstanceSettings";
 import { launchStore } from "../stores/launch";
-import { modloadersStore } from "../stores/modloaders";
-import { downloadsStore } from "../stores/downloads";
+import { tasksStore } from "../stores/tasks";
 import { uiStore, toast, promptText } from "../stores/ui";
 import { t } from "../i18n";
 import type { TranslationKey } from "../i18n/locales/messages";
-import { relativeTime, elidePath } from "../lib/format";
+import { relativeTime } from "../lib/format";
 import { LOADER_CARDS, loaderLabel } from "../lib/loaders";
+import { INSTANCE_FOLDERS, type InstanceFolder } from "../lib/instanceFolders";
 import { loaderIcon } from "../lib/mcIcons";
 import * as versionCache from "../stores/versionCache";
 import { useHashTab } from "../lib/useHashTab";
@@ -160,7 +155,7 @@ export default function InstanceDetail(): JSX.Element {
                   <Match when={tab() === "overview"}><OverviewTab profile={p()} onGoTab={changeTab} /></Match>
                   <Match when={tab() === "mods"}><ModsTab profile={p()} /></Match>
                   <Match when={tab() === "loaders"}><LoadersTab profile={p()} /></Match>
-                  <Match when={tab() === "settings"}><SettingsTab profile={p()} /></Match>
+                  <Match when={tab() === "settings"}><InstanceSettings detail={detail()!} /></Match>
                 </Switch>
               </div>
             </>
@@ -173,66 +168,25 @@ export default function InstanceDetail(): JSX.Element {
 
 // ── Toolbar menus ──
 
+async function revealInstanceFolder(key: string, folder: InstanceFolder): Promise<void> {
+  const res = await instances.reveal(key, folder);
+  if (!res.ok) toast({ message: res.error.message, tone: "error" });
+}
+
 function BrowseMenu(props: { profile: InstanceView }): JSX.Element {
-  const [open, setOpen] = createSignal(false);
-  const [paths, setPaths] = createSignal<InstancePaths | null>(null);
-  // Key on the profile id, not the object: the store refreshes produce new
-  // objects even when nothing changed (perf audit 2.5).
-  createEffect(
-    on(
-      () => props.profile.id,
-      (id) => {
-        void instances.paths(id).then((res) => {
-          if (res.ok) setPaths(res.data);
-          else toast({ message: res.error.message, tone: "error" });
-        });
-      }
-    )
-  );
-  const copy = (value: string) => {
-    void navigator.clipboard.writeText(value);
-    toast({ message: t("common.copied"), tone: "success" });
-  };
-  const rows = () => {
-    const data = paths();
-    if (!data) return [];
-    return [
-      { label: t("instanceDetail.browse.gameDir"), value: data.game_dir },
-      { label: t("instanceDetail.browse.runDir"), value: data.run_dir },
-      { label: t("instanceDetail.browse.mods"), value: data.mods_dir },
-    ];
-  };
   return (
-    <>
-      <RmButton size="sm" icon="folder" onClick={() => setOpen(true)}>
+    <RmMenu
+      portal
+      items={INSTANCE_FOLDERS.map((folder) => ({
+        label: t(folder.labelKey),
+        icon: folder.icon,
+        onSelect: () => void revealInstanceFolder(props.profile.id, folder.id),
+      }))}
+    >
+      <RmButton size="sm" icon="folder">
         {t("instanceDetail.browse")}
       </RmButton>
-      {/* A dialog instead of a side-popover: the sidebar clips overflow, so the
-          old `side="right"` menu was cut off at the page edge. */}
-      <RmDialog
-        open={open()}
-        title={t("instanceDetail.browse.title")}
-        width={620}
-        onClose={() => setOpen(false)}
-        footer={<RmButton onClick={() => setOpen(false)}>{t("common.close")}</RmButton>}
-      >
-        <div class="instance-path-list">
-          <For each={rows()}>
-            {(row) => (
-              <div class="instance-path-row">
-                <span class="instance-path-label">{row.label}</span>
-                <span class="instance-path-value" title={row.value}>{row.value}</span>
-                <RmIconButton
-                  icon="copy"
-                  label={t("common.copy")}
-                  onClick={() => copy(row.value)}
-                />
-              </div>
-            )}
-          </For>
-        </div>
-      </RmDialog>
-    </>
+    </RmMenu>
   );
 }
 
@@ -325,7 +279,6 @@ async function updateInstance(
 
 function OverviewTab(props: { profile: InstanceView; onGoTab: (tab: string) => void }): JSX.Element {
   const navigate = useNavigate();
-  const [paths, setPaths] = createSignal<InstancePaths | null>(null);
   const [resolved, setResolved] = createSignal<ResolvedInstanceSettings | null>(null);
 
   // Key on the profile id, not the object (perf audit 2.5).
@@ -333,10 +286,6 @@ function OverviewTab(props: { profile: InstanceView; onGoTab: (tab: string) => v
     on(
       () => props.profile.id,
       (id) => {
-        void instances.paths(id).then((r) => {
-          if (r.ok) setPaths(r.data);
-          else toast({ message: r.error.message, tone: "error" });
-        });
         void instances.resolvedSettings(id).then((r) => {
           if (r.ok) setResolved(r.data);
           else toast({ message: r.error.message, tone: "error" });
@@ -344,11 +293,6 @@ function OverviewTab(props: { profile: InstanceView; onGoTab: (tab: string) => v
       }
     )
   );
-
-  const copy = (value: string) => {
-    void navigator.clipboard.writeText(value);
-    toast({ message: t("common.copied"), tone: "success" });
-  };
 
   return (
     <div class="tab-stack">
@@ -370,23 +314,24 @@ function OverviewTab(props: { profile: InstanceView; onGoTab: (tab: string) => v
       </RmCard>
 
       <RmCard title={t("instanceDetail.overview.paths")}>
-        <For
-          each={[
-            { label: t("instanceDetail.browse.gameDir"), value: paths()?.game_dir },
-            { label: t("instanceDetail.browse.runDir"), value: paths()?.run_dir },
-            { label: t("instanceDetail.browse.mods"), value: paths()?.mods_dir },
-          ]}
-        >
-          {(row) => (
-            <Show when={row.value}>
-              <div class="path-row">
-                <span class="path-row-label">{row.label}</span>
-                <span class="path-row-value" title={row.value}>{elidePath(row.value!)}</span>
-                <RmIconButton icon="copy" label={t("common.copy")} onClick={() => copy(row.value!)} />
-              </div>
-            </Show>
-          )}
-        </For>
+        <div class="instance-folder-grid">
+          <For each={INSTANCE_FOLDERS}>
+            {(folder) => (
+              <button
+                class="instance-folder-btn"
+                type="button"
+                title={t(folder.labelKey)}
+                onClick={() => void revealInstanceFolder(props.profile.id, folder.id)}
+              >
+                <span class="instance-folder-btn-icon">
+                  <Icon name={folder.icon} size={18} />
+                </span>
+                <span>{t(folder.labelKey)}</span>
+              </button>
+            )}
+          </For>
+        </div>
+        <div class="muted-line">{t("instanceDetail.folders.hint")}</div>
       </RmCard>
 
       <RmCard title={t("instanceDetail.overview.quickActions")}>
@@ -498,23 +443,18 @@ function ModsTab(props: { profile: InstanceView }): JSX.Element {
   async function applyPlan(): Promise<void> {
     setApplying(true);
     toast({ message: t("tasks.download.started", { name: t("instanceDetail.mods.missingScan") }), tone: "info" });
-    const taskKey = downloadsStore.beginTask(
-      t("tasks.applyPlan.label", { instance: props.profile.name })
-    );
     const res: { ok: boolean; data?: AppliedPlanReport; message?: string } = await mods
       .applyPlan(props.profile.id)
       .then((r) => (r.ok ? { ok: true, data: r.data } : { ok: false, message: r.error.message }));
     setApplying(false);
     setScanOpen(false);
     if (res.ok && res.data) {
-      downloadsStore.finishTask(taskKey, true, `${res.data.installed.length}`);
       toast({
         message: t("instanceDetail.mods.applied", { n: res.data.installed.length }),
         tone: "success",
       });
       void refreshMods();
     } else {
-      downloadsStore.finishTask(taskKey, false, res.message);
       toast({ message: res.message ?? "", tone: "error" });
     }
   }
@@ -676,7 +616,9 @@ function LoadersTab(props: { profile: InstanceView }): JSX.Element {
   const [versions_, setVersions_] = createSignal<LoaderVersion[]>([]);
   const [loadingVersions, setLoadingVersions] = createSignal(false);
   const [selectedVersion, setSelectedVersion] = createSignal("");
-  const installing = createMemo(() => modloadersStore.forProfile(props.profile.id));
+  const installing = createMemo(() =>
+    tasksStore.forTarget(props.profile.id).filter((task) => task.kind === "modloader-install")
+  );
   const current = () => props.profile.mod_loader;
 
   async function openVersions(loaderType: string): Promise<void> {
@@ -734,7 +676,7 @@ function LoadersTab(props: { profile: InstanceView }): JSX.Element {
             const disabledReason = createMemo(() =>
               current() ? (incompatibleWith(current()!.loader_type).includes(card.id) ? current()!.loader_type : null) : null
             );
-            const installState = () => installing().find((i) => i.loaderType === card.id);
+            const installState = () => installing().find((task) => task.tag === card.id);
             return (
               <div class={`loader-card${isCurrent() ? " is-current" : ""}${disabledReason() ? " is-disabled" : ""}`}>
                 <div class="loader-card-head">
@@ -745,7 +687,7 @@ function LoadersTab(props: { profile: InstanceView }): JSX.Element {
                   <RmTag tone="success">✓ {current()!.loader_version}</RmTag>
                 </Show>
                 <Show when={installState()}>
-                  {(state) => <div class="loader-progress">{state().message} {state().percent}%</div>}
+                  {(state) => <div class="loader-progress">{state().currentStepLabel ?? state().message} {Math.round(state().overallPercent)}%</div>}
                 </Show>
                 <div class="loader-card-actions">
                   <Show
@@ -793,600 +735,6 @@ function LoadersTab(props: { profile: InstanceView }): JSX.Element {
           </div>
         </Show>
       </RmDialog>
-    </div>
-  );
-}
-
-// ── Tab 4 · Settings (inherit locks) ──
-
-const OVERRIDABLE_FIELDS = [
-  "java_path",
-  "memory_mb",
-  "min_memory_mb",
-  "metaspace_mb",
-  "width",
-  "height",
-  "fullscreen",
-  "process_priority",
-  "jvm_args",
-  "game_args",
-  "java_agents",
-  "wrapper",
-  "pre_launch_command",
-  "post_exit_command",
-  "use_native_glfw",
-  "use_native_openal",
-  "use_custom_natives",
-  "enable_debug_log_output",
-  "no_generated_jvm_args",
-  "no_generated_optimizing_jvm_args",
-] as const;
-
-const ICON_MAX_BYTES = 512 * 1024;
-
-/** Instance icon picker (profile.icon; stored as a data URL, "" clears). */
-function InstanceIconCard(props: { profile: InstanceView }): JSX.Element {
-  let fileInput: HTMLInputElement | undefined;
-  const icon = () => props.profile.icon;
-
-  async function saveIcon(dataUrl: string): Promise<void> {
-    const res = await updateInstance(props.profile.id, { icon: dataUrl });
-    if (res.ok) {
-      instancesStore.upsert(res.data);
-      toast({ message: t("common.saved"), tone: "success" });
-    } else {
-      toast({ message: res.error.message, tone: "error" });
-    }
-  }
-
-  function onPick(files: FileList | null): void {
-    const file = files?.[0];
-    if (!file) return;
-    if (!file.type.startsWith("image/")) {
-      toast({ message: t("instanceDetail.settings.icon.notImage"), tone: "error" });
-      return;
-    }
-    if (file.size > ICON_MAX_BYTES) {
-      toast({ message: t("instanceDetail.settings.icon.tooLarge"), tone: "error" });
-      return;
-    }
-    const reader = new FileReader();
-    reader.onload = () => void saveIcon(String(reader.result));
-    reader.onerror = () => toast({ message: t("instanceDetail.settings.icon.readFail"), tone: "error" });
-    reader.readAsDataURL(file);
-    // Allow re-picking the same file later.
-    if (fileInput) fileInput.value = "";
-  }
-
-  return (
-    <RmCard title={t("instanceDetail.settings.icon.title")}>
-      <div class="btn-row">
-        <Show when={icon()} fallback={<div class="instance-icon-slot"><Icon name="package" size={22} /></div>}>
-          <img class="instance-icon-preview" src={icon()!} alt="" />
-        </Show>
-        <input
-          ref={fileInput}
-          type="file"
-          accept="image/*"
-          class="visually-hidden"
-          onChange={(e) => onPick(e.currentTarget.files)}
-        />
-        <RmButton size="sm" icon="plus" onClick={() => fileInput?.click()}>
-          {icon() ? t("instanceDetail.settings.icon.replace") : t("instanceDetail.settings.icon.pick")}
-        </RmButton>
-        <Show when={icon()}>
-          <RmButton size="sm" variant="ghost" icon="trash" onClick={() => void saveIcon("")}>
-            {t("instanceDetail.settings.icon.clear")}
-          </RmButton>
-        </Show>
-      </div>
-      <div class="muted-line">{t("instanceDetail.settings.icon.hint")}</div>
-    </RmCard>
-  );
-}
-
-function SettingsTab(props: { profile: InstanceView }): JSX.Element {
-  const [resolved, setResolved] = createSignal<ResolvedInstanceSettings | null>(null);
-  const [javas, setJavas] = createSignal<JavaInfo[]>([]);
-  const [draftOverrides, setDraftOverrides] = createSignal<Set<string>>(
-    new Set(props.profile.override_properties)
-  );
-  // Auto-save state: every change patches the backend immediately (text/number
-  // inputs are debounced by 450ms). There is deliberately no Save button.
-  const [saving, setSaving] = createSignal(false);
-  const [savedAt, setSavedAt] = createSignal<number | null>(null);
-  let saveTimer: ReturnType<typeof setTimeout> | undefined;
-  let inFlight = false;
-  let pending = false;
-  // Revisions let a slow in-flight save finish without clearing the "unsaved"
-  // flag for edits the user made while the request was running.
-  let revision = 0;
-  let savedRevision = 0;
-  const markChanged = () => {
-    revision += 1;
-    setSavedAt(null);
-  };
-
-  // Isolation + completeness live here (the old Maintenance tab was removed).
-  const [isolation, setIsolation] = createSignal(props.profile.isolation ?? "never");
-  const [paths, setPaths] = createSignal<InstancePaths | null>(null);
-  const [missing, setMissing] = createSignal<MissingFileInfo[] | null>(null);
-  const [checking, setChecking] = createSignal(false);
-  const [repairing, setRepairing] = createSignal(false);
-
-  // env_vars is a plain (non-inherited) profile field (P2-15): KEY=VALUE lines.
-  const initialEnvText = Object.entries(props.profile.env_vars ?? {})
-    .map(([k, v]) => `${k}=${v}`)
-    .join("\n");
-  let envInitial = initialEnvText;
-  const [envText, setEnvText] = createSignal(initialEnvText);
-
-  // Local draft of the overridable values (initialized from the profile; the
-  // displayed value for inherited fields comes from `resolved`).
-  const [values, setValues] = createSignal<Record<string, unknown>>({
-    java_path: props.profile.java_path ?? "",
-    memory_mb: props.profile.memory_mb,
-    min_memory_mb: props.profile.min_memory_mb,
-    metaspace_mb: props.profile.metaspace_mb,
-    width: props.profile.width ?? 854,
-    height: props.profile.height ?? 480,
-    fullscreen: props.profile.fullscreen,
-    process_priority: props.profile.process_priority,
-    jvm_args: props.profile.jvm_args.join("\n"),
-    game_args: props.profile.game_args.join("\n"),
-    java_agents: props.profile.java_agents.join("\n"),
-    wrapper: props.profile.wrapper ?? "",
-    pre_launch_command: props.profile.pre_launch_command ?? "",
-    post_exit_command: props.profile.post_exit_command ?? "",
-    use_native_glfw: props.profile.use_native_glfw,
-    use_native_openal: props.profile.use_native_openal,
-    use_custom_natives: props.profile.use_custom_natives,
-    enable_debug_log_output: props.profile.enable_debug_log_output,
-    no_generated_jvm_args: props.profile.no_generated_jvm_args,
-    no_generated_optimizing_jvm_args: props.profile.no_generated_optimizing_jvm_args,
-  });
-
-  onMount(() => {
-    void instances.resolvedSettings(props.profile.id).then((r) => {
-      if (r.ok) setResolved(r.data);
-      else toast({ message: r.error.message, tone: "error" });
-    });
-    void settingsApi.detectJava().then((r) => {
-      if (r.ok) setJavas(r.data);
-      else toast({ message: r.error.message, tone: "error" });
-    });
-    void instances.paths(props.profile.id).then((r) => r.ok && setPaths(r.data));
-  });
-
-  onCleanup(() => {
-    if (saveTimer) {
-      clearTimeout(saveTimer);
-      saveTimer = undefined;
-      void persist();
-    }
-  });
-
-  const overridden = (field: string): boolean => draftOverrides().has(field);
-  const effective = (field: string): unknown => {
-    if (overridden(field)) return values()[field];
-    const data = resolved() as unknown as Record<string, unknown> | null;
-    if (!data) return undefined;
-    switch (field) {
-      case "memory_mb":
-        return data.max_memory_mb;
-      case "java_path":
-        return data.custom_java_path;
-      case "fullscreen":
-        return data.window_type === "fullscreen";
-      default:
-        return data[field];
-    }
-  };
-
-  // Resolution is one logical field: the lock covers width+height as a pair
-  // (P1-4) — a half-locked state must never silently drop the height edit.
-  const resolutionOn = () => overridden("width") || overridden("height");
-  function toggleResolutionLock(): void {
-    setDraftOverrides((set) => {
-      const next = new Set(set);
-      if (next.has("width") || next.has("height")) {
-        next.delete("width");
-        next.delete("height");
-      } else {
-        next.add("width");
-        next.add("height");
-      }
-      return next;
-    });
-    markChanged();
-    scheduleSave(true);
-  }
-
-  function toggleLock(field: string): void {
-    setDraftOverrides((set) => {
-      const next = new Set(set);
-      if (next.has(field)) next.delete(field);
-      else next.add(field);
-      return next;
-    });
-    markChanged();
-    scheduleSave(true);
-  }
-
-  function setValue(field: string, value: unknown): void {
-    setValues((v) => ({ ...v, [field]: value }));
-    markChanged();
-    scheduleSave();
-  }
-
-  function scheduleSave(immediate = false): void {
-    if (saveTimer) clearTimeout(saveTimer);
-    saveTimer = setTimeout(
-      () => {
-        saveTimer = undefined;
-        void persist();
-      },
-      immediate ? 0 : 450
-    );
-  }
-
-  /** Build the patch from the current draft (plain fields + override list). */
-  function draftPatch(): Record<string, unknown> {
-    const v = values();
-    const lines = (key: string) =>
-      String(v[key] ?? "")
-        .split("\n")
-        .map((l) => l.trim())
-        .filter(Boolean);
-    const opts: Record<string, unknown> = {
-      override_properties: [...draftOverrides()],
-    };
-    const overrides = new Set(draftOverrides());
-    // Resolution lock is a pair: keep width/height overrides in lockstep so
-    // the save loop below always writes both fields.
-    if (overrides.has("width") || overrides.has("height")) {
-      overrides.add("width");
-      overrides.add("height");
-    }
-    opts.override_properties = [...overrides];
-    for (const field of overrides) {
-      switch (field) {
-        case "java_path": opts.java_path = String(v.java_path) || null; break;
-        case "memory_mb": opts.memory_mb = Math.max(512, Math.min(32768, Number(v.memory_mb) || 0)); break;
-        case "min_memory_mb": opts.min_memory_mb = Math.max(128, Number(v.min_memory_mb) || 0); break;
-        case "metaspace_mb": opts.metaspace_mb = Math.max(0, Number(v.metaspace_mb) || 0); break;
-        case "width": opts.width = Number(v.width); break;
-        case "height": opts.height = Number(v.height); break;
-        case "fullscreen": opts.fullscreen = Boolean(v.fullscreen); break;
-        case "process_priority": opts.process_priority = String(v.process_priority); break;
-        case "jvm_args": opts.jvm_args = lines("jvm_args"); break;
-        case "game_args": opts.game_args = lines("game_args"); break;
-        case "java_agents": opts.java_agents = lines("java_agents"); break;
-        case "wrapper": opts.wrapper = String(v.wrapper) || null; break;
-        case "pre_launch_command": opts.pre_launch_command = String(v.pre_launch_command) || null; break;
-        case "post_exit_command": opts.post_exit_command = String(v.post_exit_command) || null; break;
-        case "use_native_glfw": opts.use_native_glfw = Boolean(v.use_native_glfw); break;
-        case "use_native_openal": opts.use_native_openal = Boolean(v.use_native_openal); break;
-        case "use_custom_natives": opts.use_custom_natives = Boolean(v.use_custom_natives); break;
-        case "enable_debug_log_output": opts.enable_debug_log_output = Boolean(v.enable_debug_log_output); break;
-        case "no_generated_jvm_args": opts.no_generated_jvm_args = Boolean(v.no_generated_jvm_args); break;
-        case "no_generated_optimizing_jvm_args": opts.no_generated_optimizing_jvm_args = Boolean(v.no_generated_optimizing_jvm_args); break;
-      }
-    }
-    return opts;
-  }
-
-  async function persist(): Promise<void> {
-    if (inFlight) {
-      pending = true;
-      return;
-    }
-    const rev = revision;
-    if (rev === savedRevision) return;
-    inFlight = true;
-    setSaving(true);
-    const res = await updateInstance(props.profile.id, draftPatch());
-    if (res.ok) {
-      instancesStore.upsert(res.data);
-      // env_vars is a plain field: follow the textarea, but only when it
-      // actually changed (no second IPC on untouched saves).
-      if (envText() !== envInitial) {
-        const env: Record<string, string> = {};
-        for (const line of envText().split("\n")) {
-          const idx = line.indexOf("=");
-          if (idx <= 0) continue;
-          env[line.slice(0, idx).trim()] = line.slice(idx + 1).trim();
-        }
-        const envRes = await updateInstance(props.profile.id, { env_vars: env });
-        if (envRes.ok) {
-          instancesStore.upsert(envRes.data);
-          envInitial = envText();
-        }
-      }
-      savedRevision = rev;
-      setSavedAt(Date.now());
-      void instances.resolvedSettings(props.profile.id).then((r) => r.ok && setResolved(r.data));
-    } else {
-      toast({ message: res.error.message, tone: "error" });
-    }
-    inFlight = false;
-    setSaving(false);
-    if (pending) {
-      pending = false;
-      scheduleSave(true);
-    }
-  }
-
-  async function changeIsolation(value: string): Promise<void> {
-    setIsolation(value);
-    const res = await updateInstance(props.profile.id, { isolation: value });
-    if (res.ok) {
-      instancesStore.upsert(res.data);
-      void instances.paths(props.profile.id).then((r) => r.ok && setPaths(r.data));
-      setSavedAt(Date.now());
-    } else {
-      toast({ message: res.error.message, tone: "error" });
-    }
-  }
-
-  async function checkCompletion(): Promise<void> {
-    setChecking(true);
-    const res = await instances.checkCompletion(props.profile.id);
-    setChecking(false);
-    if (res.ok) setMissing(res.data);
-    else toast({ message: res.error.message, tone: "error" });
-  }
-
-  async function repairInstance(): Promise<void> {
-    setRepairing(true);
-    const res = await instances.repair(props.profile.id);
-    setRepairing(false);
-    if (res.ok) {
-      toast({ message: t("instanceDetail.maintenance.repaired", { n: res.data }), tone: "success" });
-      void checkCompletion();
-    } else {
-      toast({ message: res.error.message, tone: "error" });
-    }
-  }
-
-  const lock = (field: string) => (
-    <RmInheritLock overridden={overridden(field)} onToggle={() => toggleLock(field)} />
-  );
-  const subtitle = (field: string) => (
-    <Show
-      when={overridden(field)}
-      fallback={
-        <span class="muted-line">
-          {t("instanceDetail.settings.inherit", { value: String(effective(field) ?? "—") })}
-        </span>
-      }
-    >
-      <span class="muted-line">{t("instanceDetail.settings.overridden")}</span>
-    </Show>
-  );
-
-  return (
-    <div class="tab-stack settings-stack">
-      <InstanceIconCard profile={props.profile} />
-
-      <RmCard title={t("instanceDetail.settings.runtime")}>
-        <RmFieldRow label={t("instanceDetail.settings.java")} hint={subtitle("java_path")}>
-          <div class="btn-row">
-            {lock("java_path")}
-            <RmSelect
-              value={overridden("java_path") ? String(values().java_path ?? "") : ""}
-              disabled={!overridden("java_path")}
-              onChange={(v) => setValue("java_path", v)}
-              options={[
-                { value: "", label: t("instanceDetail.settings.javaAuto") },
-                ...javas().map((j) => ({ value: j.path, label: `Java ${j.major_version} · ${j.vendor}${j.is_64bit ? " · 64-bit" : ""}` })),
-              ]}
-            />
-          </div>
-        </RmFieldRow>
-        <RmFieldRow label={t("instanceDetail.settings.maxMemory")} hint={subtitle("memory_mb")}>
-          <div class="btn-row">
-            {lock("memory_mb")}
-            <input
-              class="rm-input"
-              type="number"
-              min={512}
-              max={32768}
-              step={512}
-              disabled={!overridden("memory_mb")}
-              value={Number(overridden("memory_mb") ? values().memory_mb : effective("memory_mb"))}
-              onInput={(e) => setValue("memory_mb", Number(e.currentTarget.value))}
-            />
-          </div>
-        </RmFieldRow>
-        <RmFieldRow label={t("instanceDetail.settings.minMemory")} hint={subtitle("min_memory_mb")}>
-          <div class="btn-row">
-            {lock("min_memory_mb")}
-            <input
-              class="rm-input"
-              type="number"
-              min={128}
-              step={128}
-              disabled={!overridden("min_memory_mb")}
-              value={Number(overridden("min_memory_mb") ? values().min_memory_mb : effective("min_memory_mb") ?? 0)}
-              onInput={(e) => setValue("min_memory_mb", Number(e.currentTarget.value))}
-            />
-          </div>
-        </RmFieldRow>
-        <RmFieldRow label={t("instanceDetail.settings.metaspace")} hint={subtitle("metaspace_mb")}>
-          <div class="btn-row">
-            {lock("metaspace_mb")}
-            <input
-              class="rm-input"
-              type="number"
-              min={0}
-              step={64}
-              disabled={!overridden("metaspace_mb")}
-              value={Number(overridden("metaspace_mb") ? values().metaspace_mb : effective("metaspace_mb") ?? 0)}
-              onInput={(e) => setValue("metaspace_mb", Number(e.currentTarget.value))}
-            />
-          </div>
-        </RmFieldRow>
-      </RmCard>
-
-      <RmCard title={t("instanceDetail.settings.window")}>
-        <RmFieldRow label={t("instanceDetail.settings.resolution")} hint={subtitle("width")}>
-          <div class="btn-row">
-            <RmInheritLock overridden={resolutionOn()} onToggle={() => toggleResolutionLock()} />
-            <input class="rm-input" type="number" style={{ width: "100px" }} disabled={!resolutionOn()} value={Number(overridden("width") ? values().width : effective("width"))} onInput={(e) => setValue("width", Number(e.currentTarget.value))} />
-            ×
-            <input class="rm-input" type="number" style={{ width: "100px" }} disabled={!resolutionOn()} value={Number(overridden("height") ? values().height : effective("height"))} onInput={(e) => setValue("height", Number(e.currentTarget.value))} />
-          </div>
-        </RmFieldRow>
-        <RmFieldRow label={t("instanceDetail.settings.fullscreen")} hint={subtitle("fullscreen")}>
-          <div class="btn-row">
-            {lock("fullscreen")}
-            <RmSwitch checked={Boolean(overridden("fullscreen") ? values().fullscreen : effective("fullscreen"))} disabled={!overridden("fullscreen")} onChange={(v) => setValue("fullscreen", v)} />
-          </div>
-        </RmFieldRow>
-        <RmFieldRow label={t("instanceDetail.settings.priority")} hint={subtitle("process_priority")}>
-          <div class="btn-row">
-            {lock("process_priority")}
-            <RmSelect
-              value={overridden("process_priority") ? String(values().process_priority) : String(effective("process_priority") ?? "normal")}
-              disabled={!overridden("process_priority")}
-              onChange={(v) => setValue("process_priority", v)}
-              options={[
-                { value: "low", label: t("instanceDetail.settings.priority.low") },
-                { value: "below_normal", label: t("instanceDetail.settings.priority.below_normal") },
-                { value: "normal", label: t("instanceDetail.settings.priority.normal") },
-                { value: "above_normal", label: t("instanceDetail.settings.priority.above_normal") },
-                { value: "high", label: t("instanceDetail.settings.priority.high") },
-              ]}
-            />
-          </div>
-        </RmFieldRow>
-      </RmCard>
-
-      <RmAdvancedSection title={t("instanceDetail.settings.advancedArgs")} summary={t("instanceDetail.settings.argsSummary")}>
-        <RmFieldRow label={t("instanceDetail.settings.jvmArgs")} hint={subtitle("jvm_args")}>
-          <div class="btn-row">{lock("jvm_args")}</div>
-          <textarea class="rm-textarea rm-input-mono" rows={3} disabled={!overridden("jvm_args")} value={String(overridden("jvm_args") ? values().jvm_args : effective("jvm_args") ?? "")} onInput={(e) => setValue("jvm_args", e.currentTarget.value)} />
-        </RmFieldRow>
-        <RmFieldRow label={t("instanceDetail.settings.gameArgs")} hint={subtitle("game_args")}>
-          <div class="btn-row">{lock("game_args")}</div>
-          <textarea class="rm-textarea rm-input-mono" rows={2} disabled={!overridden("game_args")} value={String(overridden("game_args") ? values().game_args : effective("game_args") ?? "")} onInput={(e) => setValue("game_args", e.currentTarget.value)} />
-        </RmFieldRow>
-        <RmFieldRow label={t("instanceDetail.settings.wrapper")} hint={subtitle("wrapper")}>
-          <div class="btn-row">{lock("wrapper")}</div>
-          <input class="rm-input rm-input-mono" disabled={!overridden("wrapper")} value={String(overridden("wrapper") ? values().wrapper : effective("wrapper") ?? "")} onInput={(e) => setValue("wrapper", e.currentTarget.value)} />
-        </RmFieldRow>
-        <RmFieldRow label={t("instanceDetail.settings.preCommand")} hint={subtitle("pre_launch_command")}>
-          <div class="btn-row">{lock("pre_launch_command")}</div>
-          <input class="rm-input rm-input-mono" disabled={!overridden("pre_launch_command")} value={String(overridden("pre_launch_command") ? values().pre_launch_command : effective("pre_launch_command") ?? "")} onInput={(e) => setValue("pre_launch_command", e.currentTarget.value)} />
-        </RmFieldRow>
-        <RmFieldRow label={t("instanceDetail.settings.postCommand")} hint={subtitle("post_exit_command")}>
-          <div class="btn-row">{lock("post_exit_command")}</div>
-          <input class="rm-input rm-input-mono" disabled={!overridden("post_exit_command")} value={String(overridden("post_exit_command") ? values().post_exit_command : effective("post_exit_command") ?? "")} onInput={(e) => setValue("post_exit_command", e.currentTarget.value)} />
-        </RmFieldRow>
-        <RmFieldRow
-          label={t("instanceDetail.settings.envVars")}
-          hint={<span class="muted-line">{t("instanceDetail.settings.envVarsHint")}</span>}
-        >
-          <textarea
-            class="rm-textarea rm-input-mono"
-            rows={2}
-            value={envText()}
-            onInput={(e) => {
-              setEnvText(e.currentTarget.value);
-              markChanged();
-              scheduleSave();
-            }}
-          />
-        </RmFieldRow>
-      </RmAdvancedSection>
-
-      <RmAdvancedSection title={t("instanceDetail.settings.advancedDebug")}>
-        <For each={["use_native_glfw", "use_native_openal", "use_custom_natives", "enable_debug_log_output", "no_generated_jvm_args", "no_generated_optimizing_jvm_args"] as const}>
-          {(field) => (
-            <RmFieldRow label={t(`instanceDetail.settings.field.${field}`)} hint={subtitle(field)}>
-              <div class="btn-row">
-                {lock(field)}
-                <RmSwitch
-                  checked={Boolean(overridden(field) ? values()[field] : effective(field))}
-                  disabled={!overridden(field)}
-                  onChange={(v) => setValue(field, v)}
-                />
-              </div>
-            </RmFieldRow>
-          )}
-        </For>
-      </RmAdvancedSection>
-
-      <RmCard title={t("instanceDetail.maintenance.completion")}>
-        <div class="btn-row">
-          <RmButton icon="shield" loading={checking()} onClick={() => void checkCompletion()}>
-            {t("instanceDetail.maintenance.check")}
-          </RmButton>
-          <Show when={missing() && missing()!.length > 0}>
-            <RmButton variant="primary" icon="wrench" loading={repairing()} onClick={() => void repairInstance()}>
-              {t("instanceDetail.maintenance.repair", { n: missing()!.length })}
-            </RmButton>
-          </Show>
-        </div>
-        <Show when={missing()}>
-          {(list) => (
-            <div class="rm-list">
-              <For each={list()}>
-                {(file) => (
-                  <RmListRow
-                    icon={<Icon name="alert" size={16} class="text-warning" />}
-                    title={file.path}
-                    subtitle={`${file.kind} · ${file.description}`}
-                  />
-                )}
-              </For>
-            </div>
-          )}
-        </Show>
-      </RmCard>
-
-      <RmCard
-        title={t("instanceDetail.maintenance.isolation")}
-        actions={
-          <Show when={launchStore.isRunning(props.profile.id)}>
-            <RmTag tone="warning">{t("instances.running")}</RmTag>
-          </Show>
-        }
-      >
-        <div class="btn-row">
-          <RmSelect
-            value={isolation()}
-            disabled={launchStore.isRunning(props.profile.id)}
-            onChange={(v) => void changeIsolation(v)}
-            options={[
-              { value: "never", label: t("instanceDetail.maintenance.isolationShared") },
-              { value: "always", label: t("instanceDetail.maintenance.isolationIsolated") },
-              { value: "modded", label: t("instanceDetail.maintenance.isolationModded") },
-            ]}
-          />
-        </div>
-        <div class="muted-line">{t("instanceDetail.maintenance.isolationWarning")}</div>
-        <Show when={paths()}>
-          <div class="path-row">
-            <span class="path-row-label">{t("instanceDetail.browse.runDir")}</span>
-            <span class="path-row-value" title={paths()!.run_dir}>{elidePath(paths()!.run_dir)}</span>
-          </div>
-        </Show>
-      </RmCard>
-
-      <div class="settings-autosave" aria-live="polite">
-        <Show
-          when={saving()}
-          fallback={
-            <span>
-              {savedAt() ? t("instanceDetail.settings.saved") : t("instanceDetail.settings.autoSave")}
-            </span>
-          }
-        >
-          {t("instanceDetail.settings.saving")}
-        </Show>
-      </div>
     </div>
   );
 }

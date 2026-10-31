@@ -4,6 +4,7 @@
 //! two parts explicitly), so the same version id may exist in several roots
 //! without ambiguity (ADR-016).
 
+use crate::commands::tasks::TaskStart;
 use crate::state::AppState;
 use rmccc_error::IpcError;
 pub use rmccc_instance::{
@@ -306,6 +307,65 @@ pub async fn instance_paths(
     Ok(service.paths(&key)?)
 }
 
+/// Resolve an HMCL-style folder id to a path under the instance.
+///
+/// Keeping this match in one place is the security boundary: the frontend
+/// sends a symbolic id, never a path. Unknown ids are rejected.
+fn instance_folder_path(paths: &InstancePaths, folder: &str) -> Option<PathBuf> {
+    Some(match folder {
+        "run" => paths.run_dir.clone(),
+        "instance" => paths.instance_dir.clone(),
+        "game" => paths.game_dir.clone(),
+        "mods" => paths.mods_dir.clone(),
+        "resourcepacks" => paths.resourcepacks_dir.clone(),
+        "saves" => paths.saves_dir.clone(),
+        "schematics" => paths.run_dir.join("schematics"),
+        "shaderpacks" => paths.shaderpacks_dir.clone(),
+        "screenshots" => paths.screenshots_dir.clone(),
+        "config" => paths.config_dir.clone(),
+        "logs" => paths.logs_dir.clone(),
+        "crash-reports" => paths.run_dir.join("crash-reports"),
+        _ => return None,
+    })
+}
+
+/// Open one of an instance's well-known folders in the system file manager.
+///
+/// The folder is selected by a closed enum-like string (HMCL's "浏览" menu);
+/// the frontend never sends a raw path, so this cannot be used to open an
+/// arbitrary directory. Missing leaf folders (mods/saves/...) are created so
+/// a freshly installed instance still gives immediate feedback.
+#[tauri::command]
+#[tracing::instrument(skip(state))]
+pub async fn instance_reveal(
+    state: tauri::State<'_, AppState>,
+    key: String,
+    folder: Option<String>,
+) -> Result<(), IpcError> {
+    let requested = folder.as_deref().unwrap_or("run");
+    let target = {
+        let core = state.core.read().await;
+        let mut service = core.instances.lock().map_err(|_| locked_error())?;
+        let paths = service.paths(&key)?;
+        instance_folder_path(&paths, requested).ok_or_else(|| IpcError {
+            code: rmccc_error::ErrorCode::ValidationError,
+            message: format!("unknown instance folder: {requested}"),
+            retryable: false,
+        })?
+    };
+
+    std::fs::create_dir_all(&target).map_err(|e| IpcError {
+        code: rmccc_error::ErrorCode::Unknown,
+        message: format!("Failed to create instance folder {}: {e}", target.display()),
+        retryable: false,
+    })?;
+    tauri_plugin_opener::open_path(&target, None::<&str>).map_err(|e| IpcError {
+        code: rmccc_error::ErrorCode::Unknown,
+        message: format!("Failed to open instance folder: {e}"),
+        retryable: false,
+    })
+}
+
 #[tauri::command]
 #[tracing::instrument(skip(state))]
 pub async fn instance_select(
@@ -434,17 +494,59 @@ pub async fn instance_repair(
         let mut service = core.instances.lock().map_err(|_| locked_error())?;
         service.get(&key)?
     };
+    let task = state.tasks.create(
+        rmccc_tasks::TaskSpec::new(rmccc_tasks::TaskKind::InstanceRepair, "修复实例文件")
+            .subtitle(detail.summary.display_name.clone())
+            .target(key.clone())
+            .step("check", "检查缺失", 1)
+            .step("download", "补全文件", 8)
+            .step("commit", "提交", 1),
+    );
+    task.begin_step("check");
+    task.complete_step("check");
+    task.begin_step("download");
+
+    let progress_task = task.clone();
+    let progress: rmccc_core::pipeline::ProgressCb =
+        Arc::new(move |msg: &rmccc_core::pipeline::ProgressMsg| match msg {
+            rmccc_core::pipeline::ProgressMsg::Download { label, progress } => {
+                progress_task.message(label.clone());
+                progress_task.download(
+                    "download",
+                    rmccc_tasks::DownloadUpdate {
+                        completed_files: progress.completed_files,
+                        total_files: progress.total_files,
+                        downloaded_bytes: progress.downloaded_bytes,
+                        total_bytes: progress.total_bytes,
+                        current_file: progress.current_file.clone(),
+                    },
+                );
+            }
+            rmccc_core::pipeline::ProgressMsg::Stage(stage)
+            | rmccc_core::pipeline::ProgressMsg::StageDone(stage) => {
+                progress_task.message(stage.clone());
+            }
+        });
 
     let report = rmccc_core::pipeline::repair_instance_at(
         &core,
         &detail.summary.id,
         &detail.paths.game_dir,
-        None,
+        Some(&progress),
         rmccc_version::completion::CompletionVerify::Hash,
     )
-    .await?;
+    .await
+    .map_err(|error| {
+        let ipc: IpcError = error.into();
+        task.fail(crate::commands::tasks::ipc_error_view(&ipc));
+        ipc
+    })?;
 
     if !report.is_complete() {
+        task.fail(crate::commands::tasks::error_view(format!(
+            "{} 个文件下载失败",
+            report.failed_files
+        )));
         return Err(IpcError {
             code: rmccc_error::ErrorCode::DownloadFailed,
             message: format!(
@@ -458,6 +560,18 @@ pub async fn instance_repair(
     if let Ok(mut service) = core.instances.lock() {
         let _ = service.refresh(Some(detail.summary.directory_id.as_str()), true);
     }
+    task.complete_step("download");
+    task.clear_download();
+    task.begin_step("commit");
+    task.complete_step("commit");
+    task.succeed(rmccc_tasks::TaskResultView {
+        key: Some(key.clone()),
+        instance_id: Some(detail.summary.id.clone()),
+        directory_id: Some(detail.summary.directory_id.clone()),
+        name: Some(detail.summary.display_name.clone()),
+        installed_files: Some(report.total_files as u64),
+        ..rmccc_tasks::TaskResultView::default()
+    });
     tracing::info!(key = %key, files = report.total_files, "Instance repair completed");
     Ok(report.total_files)
 }
@@ -473,11 +587,19 @@ pub async fn instance_install(
     instance_id: Option<String>,
     loader_type: Option<String>,
     loader_version: Option<String>,
-) -> Result<(), IpcError> {
+) -> Result<TaskStart, IpcError> {
     let instance_id = instance_id
         .filter(|id| !id.trim().is_empty())
         .unwrap_or_else(|| mc_version.clone());
     rmccc_instance::validate_instance_id(&instance_id)?;
+    let has_loader = loader_type.is_some() && loader_version.is_some();
+    if has_loader && instance_id == mc_version {
+        return Err(IpcError {
+            code: rmccc_error::ErrorCode::ValidationError,
+            message: "loader installs need an instance name different from the base version".into(),
+            retryable: false,
+        });
+    }
 
     let core = {
         let core = state.core.read().await;
@@ -496,43 +618,66 @@ pub async fn instance_install(
         });
     }
 
+    let profile_id = format!("{directory_id}/{instance_id}");
+    let subtitle = match &loader_type {
+        Some(loader) => format!("{mc_version} · {loader}"),
+        None => mc_version.clone(),
+    };
+    let mut spec = rmccc_tasks::TaskSpec::new(
+        rmccc_tasks::TaskKind::InstanceInstall,
+        format!("安装 {instance_id}"),
+    )
+    .subtitle(subtitle)
+    .target(profile_id.clone())
+    .cancellable(true)
+    .step("prepare", "准备", 1)
+    .step("game", "游戏文件", 10);
+    if let Some(loader) = &loader_type {
+        spec = spec.tag(loader.clone()).step("loader", "加载器", 6);
+    }
+    spec = spec.step("commit", "提交实例", 1);
+
+    let task = state.tasks.create(spec);
+    let task_id = task.id().to_string();
     let app_handle = state.app_handle.clone();
-    let task_handle = app_handle.clone();
     tokio::spawn(async move {
-        if let Err(e) = run_install_background(
+        let fail_task = task.clone();
+        if let Err(error) = run_install_background(
             core,
-            task_handle.clone(),
+            app_handle,
             InstallRequest {
-                directory_id: directory_id.clone(),
+                directory_id,
                 game_dir,
-                mc_version: mc_version.clone(),
-                instance_id: instance_id.clone(),
-                loader_type: loader_type.clone(),
-                loader_version: loader_version.clone(),
+                mc_version,
+                instance_id,
+                loader_type,
+                loader_version,
             },
+            task,
         )
         .await
         {
-            tracing::error!(
-                directory = %directory_id,
-                instance = %instance_id,
-                version = %mc_version,
-                "Instance install failed: {e:?}"
-            );
-            let _ = task_handle.emit(
-                crate::events::DOWNLOAD_ERROR,
-                serde_json::json!({
-                    "batch_id": "",
-                    "directory_id": directory_id,
-                    "instance_id": instance_id,
-                    "version": mc_version,
-                    "error": e.message,
-                }),
-            );
+            tracing::error!("Instance install failed: {error:?}");
+            fail_task.fail(crate::commands::tasks::ipc_error_view(&error));
         }
     });
 
-    Ok(())
+    Ok(TaskStart::new(task_id))
+}
+
+/// Aborts a helper task on every return path, including `?` early exits.
+struct AbortOnDrop(tokio::task::JoinHandle<()>);
+
+impl AbortOnDrop {
+    fn abort(&self) {
+        self.0.abort();
+    }
+}
+
+impl Drop for AbortOnDrop {
+    fn drop(&mut self) {
+        self.0.abort();
+    }
 }
 
 struct InstallRequest {
@@ -548,6 +693,7 @@ async fn run_install_background(
     core: rmccc_core::CoreHandle,
     app_handle: tauri::AppHandle,
     request: InstallRequest,
+    task: rmccc_tasks::TaskHandle,
 ) -> Result<(), IpcError> {
     let InstallRequest {
         directory_id,
@@ -557,133 +703,219 @@ async fn run_install_background(
         loader_type,
         loader_version,
     } = request;
-    let last_batch_id = Arc::new(std::sync::Mutex::new(None::<String>));
-    let progress_handle = app_handle.clone();
-    let emitter = Arc::new(crate::events::ThrottledEmitter::new(
-        app_handle.clone(),
-        core.config.event_throttle_ms,
-    ));
-    let cb_last_batch = last_batch_id.clone();
-    let log_key = format!("{directory_id}/{instance_id}");
-    let key_for_progress = log_key.clone();
-    let progress_cb: rmccc_core::pipeline::ProgressCb =
+    // 有 loader 时先把原版装到标准版本 id，loader 的父版本才能被解析；
+    // 没 loader 时直接装进用户自定义的实例目录。
+    let has_loader = loader_type.is_some() && loader_version.is_some();
+    let base_id = if has_loader {
+        mc_version.clone()
+    } else {
+        instance_id.clone()
+    };
+
+    task.begin_step("prepare");
+    task.message("准备安装…");
+
+    // Batch id is learned from the first progress event; cancel/pause actions
+    // address the live batch through this slot. The watcher covers the race
+    // where the user cancels before the batch exists.
+    let batch_slot = Arc::new(std::sync::Mutex::new(None::<String>));
+    {
+        let manager = core.download_manager.clone();
+        let slot = batch_slot.clone();
+        task.set_cancel_action(move || {
+            if let Some(batch_id) = slot.lock().ok().and_then(|value| value.clone()) {
+                manager.cancel_batch(&batch_id);
+            }
+        });
+    }
+    {
+        let manager = core.download_manager.clone();
+        let slot = batch_slot.clone();
+        task.set_pause_action(move |paused| {
+            if let Some(batch_id) = slot.lock().ok().and_then(|value| value.clone()) {
+                if paused {
+                    manager.pause(&batch_id);
+                } else {
+                    manager.resume(&batch_id);
+                }
+            }
+        });
+    }
+
+    let cancel_flag = task.cancel_flag();
+    let watcher_slot = batch_slot.clone();
+    let watcher_manager = core.download_manager.clone();
+    let watcher = AbortOnDrop(tokio::spawn(async move {
+        loop {
+            if cancel_flag.load(std::sync::atomic::Ordering::Relaxed) {
+                if let Some(batch_id) = watcher_slot.lock().ok().and_then(|value| value.clone()) {
+                    watcher_manager.cancel_batch(&batch_id);
+                }
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        }
+    }));
+
+    let progress_cb: rmccc_core::pipeline::ProgressCb = {
+        let task = task.clone();
+        let slot = batch_slot.clone();
+        let manager = core.download_manager.clone();
         Arc::new(move |msg: &rmccc_core::pipeline::ProgressMsg| match msg {
-            rmccc_core::pipeline::ProgressMsg::Download { progress, .. } => {
-                *cb_last_batch.lock().unwrap() = Some(progress.batch_id.clone());
-                emitter.emit_progress(&crate::events::DownloadProgressPayload {
-                    batch_id: progress.batch_id.clone(),
-                    completed_files: progress.completed_files,
-                    total_files: progress.total_files,
-                    downloaded_bytes: progress.downloaded_bytes,
-                    total_bytes: progress.total_bytes,
-                    current_file: progress.current_file.clone(),
-                });
-                let _ = progress_handle.emit(
-                    crate::events::DOWNLOAD_PROGRESS,
-                    serde_json::json!({
-                        "batch_id": progress.batch_id,
-                        "completed_files": progress.completed_files,
-                        "total_files": progress.total_files,
-                        "downloaded_bytes": progress.downloaded_bytes,
-                        "total_bytes": progress.total_bytes,
-                        "current_file": progress.current_file,
-                        "key": key_for_progress,
-                    }),
+            rmccc_core::pipeline::ProgressMsg::Download { label, progress } => {
+                if let Ok(mut batch) = slot.lock() {
+                    *batch = Some(progress.batch_id.clone());
+                }
+                if task.is_paused() {
+                    manager.pause(&progress.batch_id);
+                }
+                if task.cancel_requested() {
+                    manager.cancel_batch(&progress.batch_id);
+                }
+                task.message(label.clone());
+                task.download(
+                    "game",
+                    rmccc_tasks::DownloadUpdate {
+                        completed_files: progress.completed_files,
+                        total_files: progress.total_files,
+                        downloaded_bytes: progress.downloaded_bytes,
+                        total_bytes: progress.total_bytes,
+                        current_file: progress.current_file.clone(),
+                    },
                 );
             }
             rmccc_core::pipeline::ProgressMsg::Stage(stage)
             | rmccc_core::pipeline::ProgressMsg::StageDone(stage) => {
-                tracing::debug!(key = %log_key, "{stage}");
+                task.message(stage.clone());
             }
-        });
+        })
+    };
 
-    let report =
-        rmccc_core::pipeline::install_game(&core, &game_dir, &instance_id, Some(&progress_cb))
-            .await?;
-    let real_batch_id = last_batch_id.lock().unwrap().clone().unwrap_or_default();
-
-    if !report.is_complete() {
-        let _ = app_handle.emit(
-            crate::events::DOWNLOAD_ERROR,
-            serde_json::json!({
-                "batch_id": real_batch_id,
-                "directory_id": directory_id,
-                "instance_id": instance_id,
-                "version": mc_version,
-                "failed_files": report.failed_files,
-            }),
-        );
+    task.begin_step("game");
+    let report = match rmccc_core::pipeline::install_game_into(
+        &core,
+        &game_dir,
+        &mc_version,
+        &base_id,
+        Some(&progress_cb),
+    )
+    .await
+    {
+        Ok(report) => report,
+        Err(error) => {
+            watcher.abort();
+            if task.cancel_requested() {
+                task.cancelled();
+                return Ok(());
+            }
+            return Err(error.into());
+        }
+    };
+    if task.cancel_requested() {
+        watcher.abort();
+        task.cancelled();
         return Ok(());
     }
+    if !report.is_complete() {
+        watcher.abort();
+        task.fail(crate::commands::tasks::error_view(format!(
+            "{} 个游戏文件下载失败",
+            report.failed_files
+        )));
+        return Ok(());
+    }
+    task.complete_step("game");
+    task.clear_download();
+    task.clear_pause_action();
 
-    let mut detail = rmccc_core::pipeline::commit_install(&core, &directory_id, &instance_id)?;
-    {
-        let mut service = core.instances.lock().map_err(|_| locked_error())?;
-        service.select_instance(Some(&detail.summary.key))?;
+    let mut detail = rmccc_core::pipeline::commit_install(&core, &directory_id, &base_id)?;
+    if let Ok(mut service) = core.instances.lock() {
+        let _ = service.select_instance(Some(&detail.summary.key));
     }
 
     // Optional loader: run it after the vanilla instance is fully committed so
     // the patch/installer can resolve its base manifest offline.
     if let (Some(loader_type), Some(loader_version)) = (loader_type, loader_version) {
         let Some(loader) = rmccc_modloader::ModLoaderType::from_str(&loader_type) else {
-            let _ = app_handle.emit(
-                crate::events::DOWNLOAD_ERROR,
-                serde_json::json!({
-                    "batch_id": real_batch_id,
-                    "directory_id": directory_id,
-                    "instance_id": instance_id,
-                    "version": mc_version,
-                    "error": format!("unknown loader type: {loader_type}"),
-                }),
-            );
+            watcher.abort();
+            task.fail(crate::commands::tasks::error_view(format!(
+                "unknown loader type: {loader_type}"
+            )));
             return Ok(());
         };
-        match rmccc_core::modloader::install_loader(&core, &detail, &loader, &loader_version, None)
-            .await
+        task.begin_step("loader");
+        task.clear_download();
+        let loader_progress: rmccc_modloader::InstallProgressCallback = {
+            let task = task.clone();
+            Arc::new(move |event: rmccc_modloader::InstallProgressEvent| {
+                if event.stage == "detail" {
+                    task.detail(event.message);
+                    return;
+                }
+                task.message(event.message);
+                task.set_step_percent("loader", event.percent as f64);
+            })
+        };
+        match rmccc_core::modloader::install_loader(
+            &core,
+            &detail,
+            &loader,
+            &loader_version,
+            Some(loader_progress),
+        )
+        .await
         {
             Ok(installed) => {
-                if let Ok(mut service) = core.instances.lock() {
-                    let _ = service.select_instance(Some(&installed.instance_key));
-                    if let Ok(updated) = service.get(&installed.instance_key) {
-                        detail = updated;
-                    }
-                }
+                let mut service = core.instances.lock().map_err(|_| locked_error())?;
+                // Loader 安装器生成的 id 通常带 `-<loader>-<version>`；向导里的
+                // 自定义实例名在 loader 成功后再改名，避免改名后父版本断链。
+                let installed = if installed.version_id != instance_id {
+                    service.rename(&installed.instance_key, &instance_id)?
+                } else {
+                    service.get(&installed.instance_key)?
+                };
+                service.select_instance(Some(&installed.summary.key))?;
+                detail = installed;
+                task.complete_step("loader");
             }
-            Err(e) => {
-                let _ = app_handle.emit(
-                    crate::events::DOWNLOAD_ERROR,
-                    serde_json::json!({
-                        "batch_id": real_batch_id,
-                        "directory_id": directory_id,
-                        "instance_id": instance_id,
-                        "version": mc_version,
-                        "error": format!("loader install failed: {e}"),
-                    }),
-                );
+            Err(error) => {
+                watcher.abort();
+                if task.cancel_requested() {
+                    task.cancelled();
+                    return Ok(());
+                }
+                let message = format!("加载器安装失败：{error}");
+                task.fail_step("loader", message.clone());
+                task.fail(crate::commands::tasks::error_view(message));
                 return Ok(());
             }
         }
     }
 
-    let _ = app_handle.emit(
-        crate::events::DOWNLOAD_COMPLETE,
-        serde_json::json!({
-            "batch_id": real_batch_id,
-            "directory_id": directory_id,
-            "instance_id": instance_id,
-            "key": detail.summary.key,
-            "version": mc_version,
-        }),
-    );
+    if task.cancel_requested() {
+        watcher.abort();
+        task.cancelled();
+        return Ok(());
+    }
+    watcher.abort();
+
+    task.begin_step("commit");
+    task.complete_step("commit");
+    task.message(format!("实例 {instance_id} 安装完成"));
     let _ = app_handle.emit(
         crate::events::INSTANCES_REFRESHED,
         serde_json::json!({ "key": detail.summary.key, "version": mc_version }),
     );
-    tracing::info!(
-        key = %detail.summary.key,
-        version = %mc_version,
-        "Instance install complete"
-    );
+    task.succeed(rmccc_tasks::TaskResultView {
+        key: Some(detail.summary.key.clone()),
+        instance_id: Some(detail.summary.id.clone()),
+        directory_id: Some(directory_id),
+        manual_directory: None,
+        name: Some(detail.summary.display_name.clone()),
+        installed_files: None,
+        version: Some(mc_version),
+    });
+    tracing::info!(key = %detail.summary.key, "Instance install complete");
     Ok(())
 }
 
@@ -709,4 +941,48 @@ pub async fn instance_update_global_settings(
     let mut service = core.instances.lock().map_err(|_| locked_error())?;
     service.update_global_settings(settings)?;
     Ok(service.global_settings().clone())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn sample_paths() -> InstancePaths {
+        let run = PathBuf::from("/game/versions/demo");
+        InstancePaths {
+            game_dir: PathBuf::from("/game"),
+            instance_dir: PathBuf::from("/game/versions/demo"),
+            run_dir: run.clone(),
+            mods_dir: run.join("mods"),
+            saves_dir: run.join("saves"),
+            resourcepacks_dir: run.join("resourcepacks"),
+            shaderpacks_dir: run.join("shaderpacks"),
+            screenshots_dir: run.join("screenshots"),
+            logs_dir: run.join("logs"),
+            config_dir: run.join("config"),
+            json_file: run.join("demo.json"),
+            jar_file: run.join("demo.jar"),
+            settings_file: run.join(".rmccc/instance.json"),
+            natives_dir: run.join("natives"),
+        }
+    }
+
+    #[test]
+    fn folder_shortcuts_resolve_to_known_directories_only() {
+        let paths = sample_paths();
+        assert_eq!(
+            instance_folder_path(&paths, "run"),
+            Some(PathBuf::from("/game/versions/demo"))
+        );
+        assert_eq!(
+            instance_folder_path(&paths, "crash-reports"),
+            Some(PathBuf::from("/game/versions/demo/crash-reports"))
+        );
+        assert_eq!(
+            instance_folder_path(&paths, "mods"),
+            Some(PathBuf::from("/game/versions/demo/mods"))
+        );
+        assert!(instance_folder_path(&paths, "../escape").is_none());
+        assert!(instance_folder_path(&paths, "/tmp").is_none());
+    }
 }

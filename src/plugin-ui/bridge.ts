@@ -31,6 +31,9 @@ const METHOD_TIMEOUTS: Record<string, number> = {
   "theme.get": 5_000,
   "settings.get": 10_000,
   "instances.list": 10_000,
+  "tasks.list": 10_000,
+  "launch.status": 5_000,
+  "server.status": 30_000,
   "network.request": 30_000,
   // ADR-013 S6: streaming replies arrive as `llm.delta/done/error` pushes;
   // this timeout only bounds the non-streaming completion wait.
@@ -55,9 +58,16 @@ export function dispatchPluginPush(pluginId: string, message: unknown): void {
   }
 }
 
+export interface BridgeCardContext {
+  title: string;
+  width: number;
+  height: number;
+}
+
 export interface BridgeOptions {
   pluginId: string;
   cardId: string;
+  card?: BridgeCardContext;
   frame: HTMLIFrameElement;
   /** Diagnostics sink (toast/log); never throws into the message handler. */
   onDiagnostic?: (message: string) => void;
@@ -76,6 +86,7 @@ interface WireMessage {
 export class PluginBridge {
   private readonly pluginId: string;
   private readonly cardId: string;
+  private readonly card?: BridgeCardContext;
   private readonly frame: HTMLIFrameElement;
   private readonly onDiagnostic?: (message: string) => void;
   private readonly onReady?: () => void;
@@ -116,6 +127,7 @@ export class PluginBridge {
   constructor(options: BridgeOptions) {
     this.pluginId = options.pluginId;
     this.cardId = options.cardId;
+    this.card = options.card;
     this.frame = options.frame;
     this.onDiagnostic = options.onDiagnostic;
     this.onReady = options.onReady;
@@ -225,6 +237,7 @@ export class PluginBridge {
       type: "init",
       pluginId: this.pluginId,
       cardId: this.cardId,
+      ...(this.card ? { card: this.card } : {}),
       theme: currentThemeTokens() ?? {},
       limits: {
         maxRequestBytes: MAX_REQUEST_BYTES,
