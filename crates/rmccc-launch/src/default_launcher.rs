@@ -1014,7 +1014,9 @@ fn batch_script(
 ) -> String {
     let mut s = String::from("@echo off\n");
     for (k, v) in env {
-        s.push_str(&format!("set {}={}\n", k, batch_quote(v)));
+        // `set "KEY=VALUE"` keeps spaces inside VALUE; percent signs must be
+        // doubled because cmd expands `%VAR%` even inside a quoted argument.
+        s.push_str(&format!("set \"{}={}\"\n", k, v.replace('%', "%%")));
     }
     s.push_str(&format!("cd /D {}\n", batch_quote(run_dir)));
     if let Some(pre) = &launcher.options.pre_launch_command {
@@ -1254,7 +1256,9 @@ fn shell_quote(s: &str) -> String {
 }
 
 fn batch_quote(s: &str) -> String {
-    format!("\"{}\"", s.replace('"', "\"\""))
+    // `%` is expanded by cmd even inside quotes. `!` only matters when
+    // delayed expansion is enabled, which this generated script does not do.
+    format!("\"{}\"", s.replace('"', "\"\"").replace('%', "%%"))
 }
 
 fn pwsh_quote(s: &str) -> String {
@@ -1346,6 +1350,7 @@ mod tests {
         assert_eq!(shell_quote("it's"), "'it'\\''s'");
         assert_eq!(pwsh_quote("it's"), "'it''s'");
         assert_eq!(batch_quote("a\"b"), "\"a\"\"b\"");
+        assert_eq!(batch_quote("C:\\100%\\game"), "\"C:\\100%%\\game\"");
     }
 
     /// Build a launcher backed by a temp game dir with a fake client JAR.
@@ -1524,6 +1529,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    #[cfg(unix)]
     #[test]
     fn test_make_launch_script_sh() {
         let (l, dir) = test_launcher_on_disk();
@@ -1588,6 +1594,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    #[cfg(unix)]
     #[test]
     fn test_launch_script_prefix_precedes_java() {
         let (l, dir) = test_launcher_on_disk_opts(ProcessPriority::Low, Some("mywrap -c"));

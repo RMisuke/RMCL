@@ -163,20 +163,21 @@ impl<'a> InstallerJarRunner<'a> {
         // 安装器要解压大量库 + 跑 processors，慢机上可达数分钟；完全无超时
         // 才是原状（此前挂起会永久卡住安装命令）。
         const INSTALLER_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(600);
-        let spawned = tokio::process::Command::new(self.java_path)
+        let mut installer_cmd = tokio::process::Command::new(self.java_path);
+        installer_cmd
             .arg("-jar")
             .arg(installer_path)
             .arg("--installClient")
             .arg(self.game_dir)
             .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::piped())
-            .spawn()
-            .map_err(|e| {
-                RmcccError::Other(format!(
-                    "Failed to run {} installer: {e}",
-                    loader_type.display_name()
-                ))
-            })?;
+            .stderr(std::process::Stdio::piped());
+        rmccc_platform::process::hide_console_window(installer_cmd.as_std_mut());
+        let spawned = installer_cmd.spawn().map_err(|e| {
+            RmcccError::Other(format!(
+                "Failed to run {} installer: {e}",
+                loader_type.display_name()
+            ))
+        })?;
         let mut child = spawned;
         let stdout = child.stdout.take();
         let stderr = child.stderr.take();

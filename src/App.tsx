@@ -6,7 +6,7 @@
  * The window is borderless/hidden at creation; this shell owns the reveal
  * handshake (unchanged from the previous design).
  */
-import { ParentComponent, Show, createSignal, onMount } from "solid-js";
+import { ParentComponent, Show, createSignal, onCleanup, onMount } from "solid-js";
 import { availableMonitors, getCurrentWindow } from "@tauri-apps/api/window";
 import TitleBar from "./components/TitleBar";
 import { AccountDock } from "./components/AccountDock";
@@ -54,49 +54,37 @@ async function ensureReachable(win: AppWindow): Promise<void> {
 
 const App: ParentComponent = (props) => {
   const [dragActive, setDragActive] = createSignal(false);
-  let dragDepth = 0;
+  let unlistenDragDrop: (() => void) | undefined;
+  onCleanup(() => unlistenDragDrop?.());
 
-  function isFileDrag(event: DragEvent): boolean {
-    return Array.from(event.dataTransfer?.types ?? []).includes("Files");
-  }
+  /** Native Tauri drag-drop is the only reliable source of absolute paths on
+   *  Windows/WebView2. HTML5 `File.path` is non-standard and undefined there. */
+  async function registerDragDrop(): Promise<void> {
+    try {
+      const { getCurrentWebview } = await import("@tauri-apps/api/webview");
+      unlistenDragDrop = await getCurrentWebview().onDragDropEvent((event) => {
+        const payload = event.payload;
+        if (payload.type === "enter" || payload.type === "over") {
+          setDragActive(true);
+          return;
+        }
+        setDragActive(false);
+        if (payload.type !== "drop") return;
 
-  function onDragEnter(event: DragEvent): void {
-    if (!isFileDrag(event)) return;
-    event.preventDefault();
-    dragDepth += 1;
-    setDragActive(true);
-  }
-
-  function onDragOver(event: DragEvent): void {
-    if (!isFileDrag(event)) return;
-    event.preventDefault();
-    if (event.dataTransfer) event.dataTransfer.dropEffect = "copy";
-    setDragActive(true);
-  }
-
-  function onDragLeave(event: DragEvent): void {
-    if (!isFileDrag(event)) return;
-    dragDepth = Math.max(0, dragDepth - 1);
-    if (dragDepth === 0) setDragActive(false);
-  }
-
-  function onDrop(event: DragEvent): void {
-    if (!isFileDrag(event)) return;
-    event.preventDefault();
-    dragDepth = 0;
-    setDragActive(false);
-    const file = event.dataTransfer?.files?.[0];
-    if (!file) return;
-    const path = (file as unknown as { path?: string }).path;
-    if (!path) {
-      toast({ message: t("modpack.dropUnavailable"), tone: "info" });
-      return;
+        const path = payload.paths[0];
+        if (!path) {
+          toast({ message: t("modpack.dropUnavailable"), tone: "info" });
+          return;
+        }
+        if (!/\.(zip|mrpack)$/i.test(path)) {
+          toast({ message: t("modpack.dropHint"), tone: "info" });
+          return;
+        }
+        void modpacksStore.inspectPath(path);
+      });
+    } catch (error) {
+      console.warn("App: native drag-drop unavailable", error);
     }
-    if (!/\.(zip|mrpack)$/i.test(path)) {
-      toast({ message: t("modpack.dropHint"), tone: "info" });
-      return;
-    }
-    void modpacksStore.inspectPath(path);
   }
 
   onMount(async () => {
@@ -110,6 +98,7 @@ const App: ParentComponent = (props) => {
       await win.show();
       await win.setFocus();
       await ensureReachable(win);
+      await registerDragDrop();
     } catch (e) {
       console.warn("App: window API unavailable", e);
       void reportFrontendMessage(`window shell failed to reveal: ${String(e)}`);
@@ -117,13 +106,7 @@ const App: ParentComponent = (props) => {
   });
 
   return (
-    <div
-      class="app-root"
-      onDragEnter={onDragEnter}
-      onDragOver={onDragOver}
-      onDragLeave={onDragLeave}
-      onDrop={onDrop}
-    >
+    <div class="app-root">
       <ThemeBackdrop />
       <BackgroundVideo />
       {/* The still image is the top wallpaper layer; the video stays beneath. */}

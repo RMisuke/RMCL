@@ -105,7 +105,7 @@ RMCL/
 │   │   └── src/                  # directory registry, settings, service, migration
 │   ├── rmccc-platform/           # 平台适配层（Phase 1，指南 §5.7）
 │   │   └── src/                  # descriptor / fs / process / shell / java
-│   │                             # macOS 后端 + Windows/Linux 占位 + mock
+│   │                             # macOS/Windows 后端 + Linux 占位 + mock
 │   ├── rmccc-plugin/             # 声明式插件系统（Phase 2，ADR-003/004）
 │   │   └── src/                  # manifest / version / capability / package /
 │   │                             # installer / registry / permissions /
@@ -1604,7 +1604,7 @@ Before adding any crate, evaluate:
 | Feature | Windows | macOS | Linux |
 |---------|---------|-------|-------|
 | WebView | WebView2 (built-in Win10+) | WebKit (system) | WebKit2GTK |
-| Java detection | Registry + PATH + common paths | `/usr/libexec/java_home` + PATH | `update-alternatives` + PATH |
+| Java detection | `JAVA_HOME` + PATH + common vendor dirs (registry deferred) | `/usr/libexec/java_home` + PATH | `update-alternatives` + PATH |
 | Game directory | `%APPDATA%/.minecraft` | `~/Library/Application Support/minecraft` | `~/.minecraft` |
 | Process spawn | `CreateProcess` | `fork+exec` | `fork+exec` |
 | File separator | `\` | `/` | `/` |
@@ -1986,7 +1986,8 @@ Logging is infrastructure, not polish. Adding it late means retrofitting spans i
 
 路径/zip 校验是 OS 无关逻辑；**原子替换**与权限收紧经
 [`PlatformFs`](../crates/rmccc-platform/src/fs.rs)（`atomic_replace` / `restrict_owner_only`），
-`rmccc-plugin` 内零 `#[cfg]`。Windows/Linux 后端返回 `UnsupportedPlatform`，原生验证 deferred。
+`rmccc-plugin` 内零 `#[cfg]`。Windows 后端已实现（`icacls` ACL + std `rename`），
+Linux 仍返回 `UnsupportedPlatform`；Windows 原生编译与实机验证 deferred。
 
 ## 21. Dashboard 布局引擎与主题（Phase 3）
 
@@ -2300,8 +2301,9 @@ stdin/stdout，一行一个 JSON：
 - **随前端重构落地**：设置页 MCP 分区、确认卡、归因徽标/toast（`mcp://call`
   与 `mcp://confirmation` 的消费方）、`plugin://push` 的 iframe 中继、
   事件 payload `origin` 字段（当前以 `mcp://call` 替代）。
-- Windows/Linux：vault 的 `restrict_owner_only` 为 `UnsupportedPlatform`
-  → **deferred / release-blocked**（权限语义与账号 vault 相同）。
+- Windows：vault 的 `restrict_owner_only` 已由 `windows.rs` 用 `icacls` 实现；
+  原生 Windows 编译/ACL 实测 deferred。
+- Linux：vault 的 `restrict_owner_only` 仍为 `UnsupportedPlatform` → deferred。
 - 旧面清理：`/agent` 路由重定向到 `/settings`；`agent_*` 9 条 IPC 移除，
   前端无引用（`ipc_tests` 计数断言 93）。
 

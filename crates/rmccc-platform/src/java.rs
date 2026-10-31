@@ -121,11 +121,11 @@ pub fn probe_java_binary(path: &Path) -> Option<JavaInstallation> {
         return None;
     }
 
-    let output = Command::new(path)
-        .arg("-XshowSettings:properties")
-        .arg("-version")
-        .output()
-        .ok()?;
+    let mut cmd = Command::new(path);
+    cmd.arg("-XshowSettings:properties").arg("-version");
+    // GUI 启动时不要为每次 Java 探测闪出一个控制台窗口。
+    crate::process::hide_console_window(&mut cmd);
+    let output = cmd.output().ok()?;
 
     // `-version` 写 stderr；properties 也主要写 stderr。
     let combined = format!(

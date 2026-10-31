@@ -29,8 +29,7 @@ key 文件经 `PlatformFs::restrict_owner_only` 收紧为 `0600`。
 
 缺点：
 
-- 三套原生 API + 三套错误语义；Windows/Linux 本机无法验证（指南 §1.4 → deferred / release-blocked），
-  等于把一个 Phase 6 的入口能力卡在无法验收的后端上。
+- 三套原生 API + 三套错误语义；Windows 已由文件 vault + `icacls` ACL 适配（原生实测 deferred），Linux 本机无法验证（指南 §1.4 → deferred / release-blocked）。
 - `security-framework` / `keyring` 类依赖会进入主可执行文件；ADR-011 的 stripped 余量只剩
   ~2 MiB（当前 7.96 MiB），一个跨平台 keyring 栈通常 +0.3–1 MiB，且无法用 `opt-level=s` 压掉。
 - 需要处理"钥匙串被锁定 / 用户拒绝授权 / 无 GUI 会话（CLI）"的分支，失败模式比文件 vault 多。

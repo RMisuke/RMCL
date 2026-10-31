@@ -47,7 +47,12 @@ export const cacheStore = createRoot(() => {
 
   /** 缓存协议地址（配合 <img onError> 回退直连，兼容开关关闭/未命中）。 */
   function iconSrc(url: string): string {
-    return `rmcccicon://k/${encodeURIComponent(url)}`;
+    // Tauri/WebView2 在 Windows 上把自定义协议映射为
+    // `http://<scheme>.localhost/...`；原样使用 `rmcccicon://` 不会命中
+    // 协议 handler（macOS/Linux WebKit 才使用 scheme:// 形式）。
+    const windows = typeof navigator !== "undefined" && /Windows/i.test(navigator.userAgent);
+    const origin = windows ? "http://rmcccicon.localhost" : "rmcccicon://";
+    return `${origin}/k/${encodeURIComponent(url)}`;
   }
 
   // 60s 去重：同一 URL 的重复刷新合并成一次 IPC。

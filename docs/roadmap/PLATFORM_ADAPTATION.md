@@ -2,7 +2,7 @@
 
 > **目的**：把指南 §5.7 的"平台特定能力归档到适配层、核心只定义 trait"落为可逐项销账的清单。
 > **当前事实来源**：对 `crates/` 与 `src-tauri/` 的 `#[cfg(target_os`/`cfg!(windows`/`cfg(unix` 全量 grep（2026-10-20）。
-> **执行约束**：本机仅 macOS；Windows/Linux 后端 deferred，但 trait 与 macOS 后端须先行。
+> **执行约束**：本机仅 macOS；Windows 后端代码已落地但原生编译/实机验收 deferred，Linux 仍 deferred。
 
 ## 1. 归属规则（重申，服从指南 §5.7.1）
 
@@ -38,7 +38,7 @@
 | `rmccc-launch/default_launcher.rs` `cfg!(windows)` 文件分隔符 | 命令行 | 文件/路径分隔符 | ✅ `descriptor.is_windows()` | ✅ 1.1c 完成 |
 | `rmccc-launch/default_launcher.rs` `nice -n` 前缀 | 进程优先级 | Unix nice 前缀 | ✅ `process.priority_command_prefix(priority)`（Unix `nice -n N` / 其他空） | ✅ 1.1c 完成 |
 | `rmccc-launch/default_launcher.rs` symlink / 0755 / `-Xdock:name` / 非 ASCII natives 兜底 | 文件+数据 | symlink、Unix 权限、macOS dock 参数 | ✅ `fs.symlink`/`fs.remove_symlink`/`fs.make_executable`；`descriptor.extra_jvm_args()`；`descriptor.needs_non_ascii_natives_workaround()` | ✅ 1.1c 完成 |
-| `rmccc-launch/java.rs` 的 4 处 `#[cfg(target_os)]`（`java_home` / 注册表 / `/usr/lib/jvm` / 常见路径） | Java 探测 | per-OS `mod` | ✅ `JavaDetector` trait + `JavaInstallation` DTO 迁入 `rmccc-platform::java`；macOS 后端 `MacosJavaDetector`，Windows/Linux 返回 `UnsupportedPlatform`；`launch/java.rs` 只剩 re-export | ✅ 1.1d 完成 |
+| `rmccc-launch/java.rs` 的 4 处 `#[cfg(target_os)]`（`java_home` / 注册表 / `/usr/lib/jvm` / 常见路径） | Java 探测 | per-OS `mod` | ✅ `JavaDetector` trait + `JavaInstallation` DTO 迁入 `rmccc-platform::java`；macOS 后端 `MacosJavaDetector`，Windows 后端 `WindowsJavaDetector`；Linux 返回 `UnsupportedPlatform`；`launch/java.rs` 只剩 re-export | ✅ 1.1d 完成 |
 | `rmccc-version/file_layout.rs` 的 `platform_classifier()` + natives 目录命名 | 路径/数据 | `natives-{platform}` | ✅ `platform_classifier(desc)` / `native_dir_name(desc)` / `native_dir(.., desc)` / `resolve_native_dir(.., desc)` | ✅ 1.1b 完成 |
 | `rmccc-version/arguments.rs` 的 `current_os_name/current_arch` + classpath 分隔符 | 数据筛选 | 应用 Mojang `rules[].os/arch` | ✅ 已删除两个 `cfg` 函数；`build_template_vars`/`resolve_arguments`/`rules_match` 全部收 `&PlatformDescriptor` | ✅ 1.1b 完成（2026-10-21） |
 | `rmccc-version/libraries.rs` 的 `cfg!` OS/arch + `minecraft_arch()` + per-OS classifier 分支 | 数据筛选 | library OS/arch 过滤 | ✅ `library_applies(lib, desc)` / `resolve_library_items(.., desc)` / `collect_classpath(.., desc)` / `is_current_platform_classifier(.., desc)`；classifier 事实来源收归 `PlatformDescriptor::native_classifier_candidates()` | ✅ 1.1b 完成 |
@@ -83,14 +83,14 @@ grep -rn 'cfg(unix)|cfg(windows)|cfg(target_os|cfg!(target_os' crates/*/src --in
 | trait / DTO | 文件 | macOS 后端 | Windows | Linux |
 |---|---|---|---|---|
 | `PlatformDescriptor`（os/arch/分隔符/exe 后缀/native classifier/规则匹配） | `descriptor.rs` | ✅ 数据层 | ✅ 数据层（本机不验） | ✅ 数据层（本机不验） |
-| `PlatformFs`（`restrict_owner_only` / `make_executable` / `symlink` / `remove_symlink` / `atomic_replace`） | `fs.rs` | ✅ `chmod 600/755` + symlink + `rename(2)` | ⛔ `UnsupportedPlatform` | ⛔ 同上（实现可直接复用 macOS） |
-| `PlatformProcessControl`（`terminate_tree` / `set_priority` / `priority_command_prefix` / `configure_child_process_group`） | `process.rs` | ✅ `killpg` + `setpriority` + `nice` 前缀 + `process_group(0)` | ⛔ `UnsupportedPlatform`（Job Object 待 CI） | ⛔ 同上 |
-| `PlatformShell`（`open_url` 仅 http(s) / `open_path`） | `shell.rs` | ✅ `open` | ⛔ `UnsupportedPlatform` | ⛔ 同上 |
+| `PlatformFs`（`restrict_owner_only` / `make_executable` / `symlink` / `remove_symlink` / `atomic_replace`） | `fs.rs` / `windows.rs` | ✅ `chmod 600/755` + symlink + `rename(2)` | ✅ `icacls` ACL + `make_executable` no-op + std `rename`（原生编译/实机 deferred） | ⛔ 同上（实现可直接复用 macOS） |
+| `PlatformProcessControl`（`terminate_tree` / `set_priority` / `priority_command_prefix` / `configure_child_process_group`） | `process.rs` / `windows.rs` | ✅ `killpg` + `setpriority` + `nice` 前缀 + `process_group(0)` | ✅ `taskkill /T /F` + `TerminateProcess` 兜底 + `SetPriorityClass`（原生编译/实机 deferred） | ⛔ 同上 |
+| `PlatformShell`（`open_url` 仅 http(s) / `open_path`） | `shell.rs` / `windows.rs` | ✅ `open` | ✅ `ShellExecuteW`（原生编译/实机 deferred） | ⛔ 同上 |
 | `ProcessPriority` | `process.rs` | ✅ 数据 | ✅ 数据 | ✅ 数据 |
-| `JavaDetector`（`detect_all` / `find` + `select_for` 纯函数选版） | `java.rs` | ✅ `java_home -V` + `JAVA_HOME` + 常见路径 | ⛔ `UnsupportedPlatform`（注册表 + `Program Files` 待 CI） | ⛔ 同上（`/usr/lib/jvm` + `update-alternatives`） |
+| `JavaDetector`（`detect_all` / `find` + `select_for` 纯函数选版） | `java.rs` / `windows.rs` | ✅ `java_home -V` + `JAVA_HOME` + 常见路径 | ✅ `JAVA_HOME` + `PATH` + `Program Files`/Adoptium/Microsoft/Zulu/Corretto/JetBrains 等（注册表暂未接入；原生编译/实机 deferred） | ⛔ 同上（`/usr/lib/jvm` + `update-alternatives`） |
 | `VideoEngine` / `VideoTranscoder`（MP4 探测、原生分辨率 HEVC 缓存、精确帧率/帧数校验） | `video.rs` / `video/` | ✅ `avconvert PresetHEVCHighestQuality`（超规格 H.264 转 HEVC，尺寸与时序严格校验） | ⚠️ WinRT `MediaTranscoder::CreateHevc` 代码已落地（强制硬件加速），原生 Windows CI 待验 | ⛔ `UnsupportedPlatform`（不静默回退可能软解的原片；VA-API/GStreamer deferred） |
 | `CredentialStore` | — | **未定义**（延后到评估 Keychain 时，见下） | — | — |
-| 插件包解压 | `rmccc-plugin::package` | ✅ 纯 OS 无关 + `PlatformFs::atomic_replace` | ⛔ 依赖 `atomic_replace`（deferred） | ⛔ 同上 |
+| 插件包解压 | `rmccc-plugin::package` | ✅ 纯 OS 无关 + `PlatformFs::atomic_replace` | ⚠️ 依赖已实现的 `atomic_replace`；原生 Windows 安装事务待验 | ⛔ 同上 |
 
 后端选择器只有一处：`Platform::current()`（`lib.rs`）。测试替身：`Platform::mock()` 返回
 `Arc<MockPlatform>`，可断言调用序列并模拟单次失败。
@@ -103,7 +103,7 @@ grep -rn 'cfg(unix)|cfg(windows)|cfg(target_os|cfg!(target_os' crates/*/src --in
 | 后端 | 状态 | 说明 |
 |---|---|---|
 | macOS (`aarch64-apple-darwin`) | ✅ 本机实现 + **真机实测** | 含真实子进程 `setpgid`+`killpg` 烟测、真实 Java 探测、MP4 探测与原生分辨率 HEVC 转码；完整链路烟测：安装 1.20.4（3870 文件）→ 装 Fabric 0.15.11 → 启动到主菜单（Mixin + OpenAL 就绪） |
-| Windows (`x86_64-pc-windows-msvc`) | **deferred / release-blocked** | 文件/进程/shell/Java 仍返回 `UnsupportedPlatform`；`video::WindowsVideoTranscoder` 代码已落地（WinRT `MediaTranscoder` + 强制硬件加速），需原生 CI 首次编译，以及本机 HEVC 编解码器/GPU/驱动和 WebView2 D3D11 硬解实测 |
+| Windows (`x86_64-pc-windows-msvc`) | **⚠️ 适配层已实现 / 原生验收 deferred** | 文件/进程/shell/Java/内存已切到 `windows.rs`（ACL、taskkill、ShellExecuteW、Java 目录扫描、GlobalMemoryStatusEx）；WinRT HEVC 仍待原生编译。首次原生 Windows 编译、ACL、Java 探测、启动/停止、WebView2 与 HEVC 实测前不得宣称 Windows 可用 |
 | Linux (`x86_64-unknown-linux-gnu`) | **deferred** | 同上；视频准备返回 `UnsupportedPlatform` 并向前端显式报错，不回退可能软解的原视频 |
 | macOS Intel (`x86_64-apple-darwin`) | **deferred** | 不在本机构建（Apple Silicon 单架构） |
 
@@ -134,7 +134,7 @@ rmcli -d /tmp/rmccc-smoke2 launch run ...       # 启动到主菜单：OpenAL �
   （同一份 manifest 喂不同描述符 → 结果互补）。原先散落的 `#[cfg(target_os)] assert!`
   已全部删除——那些断言在非 macOS 上从未被执行过，正是 P2-12 那个 bug 藏身之处。
 - macOS 后端：真实 macOS 烟测（启动/解压/权限位）。
-- Windows/Linux 后端：原生 CI 触达后补；当前以"trait 存在 + 返回 unsupported_on_platform"为最低验收。
+- Windows 后端：代码已落地，原生 Windows CI 触达后补编译/ACL/进程/Java/WebView2 实测；Linux 仍以"trait 存在 + 返回 unsupported_on_platform"为最低验收。
 - zip-slip：正负向单测（恶意条目被拒）。
 - 数据筛选：用不同 `PlatformDescriptor` 喂同一 manifest，断言 library/asset 选择正确。
 

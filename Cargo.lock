@@ -3884,6 +3884,7 @@ name = "rmccc-logic"
 version = "0.1.0"
 dependencies = [
  "rmccc-error",
+ "rmccc-platform",
  "serde",
  "serde_json",
  "tracing",

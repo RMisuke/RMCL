@@ -13,12 +13,12 @@
 //!    不得静默失败或 panic。
 //! 5. 后端选择在组装层（`CoreContext`）完成一次注入，下游全链路依赖 trait。
 //!
-//! # 当前状态（macOS-only 开发）
+//! # 当前状态
 //!
 //! | 后端 | 状态 |
 //! |------|------|
 //! | macOS（aarch64） | ✅ 实现并本机实测（含原生分辨率 HEVC 壁纸） |
-//! | Windows | ⚠️ 原生 HEVC WinRT 后端已落地，其余能力 `UnsupportedPlatform`（deferred，待原生 CI） |
+//! | Windows（x86_64） | ⚠️ 适配层已实现（ACL/进程/Java/内存/shell + WinRT HEVC），待原生 Windows 编译与实机验收 |
 //! | Linux | ⛔ `UnsupportedPlatform`（deferred，待原生 CI） |
 //!
 //! 各能力域的迁移清单与逐项销账见 `docs/roadmap/PLATFORM_ADAPTATION.md`。
@@ -48,9 +48,13 @@ pub mod video;
 
 #[cfg(target_os = "macos")]
 mod macos;
-#[cfg(not(target_os = "macos"))]
+#[cfg(not(any(target_os = "macos", target_os = "windows")))]
 mod unsupported;
+#[cfg(target_os = "windows")]
+mod windows;
 
+#[cfg(target_os = "windows")]
+pub use self::windows::WindowsFs;
 pub use descriptor::{PlatformArch, PlatformDescriptor, PlatformOs};
 pub use fs::PlatformFs;
 pub use java::{JavaDetector, JavaInstallation};
@@ -107,11 +111,11 @@ impl Platform {
         {
             Self {
                 descriptor: PlatformDescriptor::current(),
-                fs: Arc::new(unsupported::UnsupportedFs),
-                process: Arc::new(unsupported::UnsupportedProcess),
-                shell: Arc::new(unsupported::UnsupportedShell),
-                java: Arc::new(unsupported::UnsupportedJavaDetector),
-                memory: Arc::new(unsupported::UnsupportedSystemMemory),
+                fs: Arc::new(self::windows::WindowsFs),
+                process: Arc::new(self::windows::WindowsProcess),
+                shell: Arc::new(self::windows::WindowsShell),
+                java: Arc::new(self::windows::WindowsJavaDetector),
+                memory: Arc::new(self::windows::WindowsSystemMemory),
                 video: Arc::new(CachedVideoEngine::new(video::WindowsVideoTranscoder)),
             }
         }

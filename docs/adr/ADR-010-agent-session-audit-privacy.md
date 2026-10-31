@@ -101,8 +101,8 @@ Agent 是"受控编排层"，不是"能任意调用工具的聊天窗口"。要�
 ## 跨平台验证方式
 
 - macOS ARM64（本机）：JSONL 追加/读取、脱敏正负向、保留期裁剪纯函数、审计写入失败可见。
-- Windows / Linux：纯 Rust 逻辑可跑，但目录权限收紧为 `UnsupportedPlatform` →
-  **deferred / release-blocked**。
+- Windows：目录/文件权限已由 `windows.rs` 的 `icacls` ACL 实现；原生 Windows 编译/实测 deferred。
+- Linux：目录权限收紧仍为 `UnsupportedPlatform` → deferred。
 
 ## 状态变更记录
 

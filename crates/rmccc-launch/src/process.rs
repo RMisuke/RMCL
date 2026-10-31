@@ -59,14 +59,20 @@ pub fn build_response_file(
 /// - Arguments are separated by whitespace or newlines
 /// - A double-quote within a quoted string is represented by two
 ///   double-quote characters (`""`), **not** backslash-quote (`\"`)
-/// - No other escape sequences are recognized
+/// - A backslash inside a quoted string is an escape character; a literal
+///   Windows path separator must therefore be written as `\\`
 ///
 /// Fixes Bug #6: macOS paths containing spaces (e.g. "Application Support")
 /// were incorrectly escaped with `\"` causing `ClassNotFoundException`.
+/// Also fixes Windows paths with spaces: `"C:\Users\A B\game"` previously lost
+/// every backslash when the JVM parsed the argfile.
 fn java_argfile_escape(s: &str) -> String {
     let cleaned = s.replace(['\n', '\r'], " ");
-    if cleaned.contains(char::is_whitespace) || cleaned.contains('"') {
-        format!("\"{}\"", cleaned.replace('"', "\"\""))
+    if cleaned.contains(char::is_whitespace) || cleaned.contains('"') || cleaned.contains('\\') {
+        // Backslash first, then quotes: Java treats both as escapes inside a
+        // quoted argfile token.
+        let escaped = cleaned.replace('\\', "\\\\").replace('"', "\"\"");
+        format!("\"{escaped}\"")
     } else {
         cleaned
     }
@@ -437,6 +443,24 @@ mod tests {
         assert_eq!(args, vec!["run", "/usr/bin/java", "@/game/.launch-args-3"]);
     }
 
+    /// Windows paths inside a quoted Java argfile token need doubled
+    /// backslashes. Java 25 was used to reproduce the failure: without the
+    /// doubling, `"C:\Users\A B\game"` is read back as `C:UsersA Bgame`.
+    #[test]
+    fn test_java_argfile_escape_windows_backslashes() {
+        assert_eq!(
+            java_argfile_escape(r"C:\Users\A B\game"),
+            r#""C:\\Users\\A B\\game""#
+        );
+        assert_eq!(
+            java_argfile_escape(r"-Djava.library.path=C:\Users\A B\natives"),
+            r#""-Djava.library.path=C:\\Users\\A B\\natives""#
+        );
+        // No backslash / whitespace / quote remains an unquoted token.
+        assert_eq!(java_argfile_escape("--username"), "--username");
+        assert_eq!(java_argfile_escape("Steve"), "Steve");
+    }
+
     #[test]
     fn test_command_builder_add_default() {
         let mut cmd = CommandBuilder::new();
@@ -518,7 +542,8 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("rmcl-test-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&dir).unwrap();
 
-        let platform = Platform::current();
+        // 使用 mock fs：这里验证 argfile 内容/生命周期，不依赖宿主 ACL。
+        let platform = Platform::mock().0;
         let result = build_response_file(
             &["-Xmx2G".to_string(), "-Dfoo=bar".to_string()],
             &["--username".to_string(), "Steve".to_string()],
@@ -541,7 +566,8 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("rmcl-test-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&dir).unwrap();
 
-        let platform = Platform::current();
+        // 使用 mock fs：这里验证 argfile 内容/生命周期，不依赖宿主 ACL。
+        let platform = Platform::mock().0;
         let path = build_response_file(
             &["-Xmx2G".to_string()],
             &["--accessToken".to_string(), "SECRET".to_string()],

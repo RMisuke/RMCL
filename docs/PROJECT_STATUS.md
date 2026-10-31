@@ -1874,3 +1874,46 @@ export CARGO_HOME=$HOME/.cargo
 - 不支持整合包导出、在线整合包市场、MultiMC 未知组件的无损 JSON-Patch 变换；
 - Curse 无 API key 时依赖 `mod.mcimirror.top` 只读镜像（与 HMCL BMCLAPI 回退规则一致）；
 - 非 macOS 的 GUI 拖放/安装实测按平台指南 §1.4 记为 deferred。
+
+---
+
+## 11. 2026-10-31：Windows 平台适配层（原生验收 deferred）
+
+### 交付
+
+- **`crates/rmccc-platform/src/windows.rs`** 新增 Windows 后端：
+  - `WindowsFs`：`icacls` 移除继承 ACE、只授权当前用户；`make_executable` 为 no-op；
+    `atomic_replace` 使用 Windows 上带替换语义的 `std::fs::rename`；symlink 需开发者模式，
+    失败显式报错。
+  - `WindowsProcess`：`taskkill /PID <pid> /T /F` 终止进程树；失败回退单进程
+    `TerminateProcess`；`SetPriorityClass` 实现优先级；`priority_command_prefix` 为空。
+  - `WindowsShell`：`ShellExecuteW` 打开 http(s) URL 和目录。
+  - `WindowsJavaDetector`：`JAVA_HOME`、`PATH`、`Program Files` / `Program Files (x86)` /
+    `LOCALAPPDATA` / `.jdks` 下的 Oracle、Adoptium、Microsoft、Zulu、BellSoft、
+    Corretto、Semeru、GraalVM、JetBrains、Android Studio JBR；注册表暂未接入。
+  - `WindowsSystemMemory`：`GlobalMemoryStatusEx`。
+  - `Platform::current()` 的 Windows 分支已从 `Unsupported*` 切到上述实现。
+- `process::hide_console_window`：Java 探测、`taskkill`、modloader 安装器/processor、
+  logic helper 统一设置 `CREATE_NO_WINDOW`，避免 GUI 进程闪黑框。
+- **Java argfile 修复**：带空格的 Windows 路径在 quoted token 中把 `\` 转义为 `\\`；
+  否则 `C:\Users\A B\game` 会被 JVM 读成 `C:UsersA Bgame`。
+- **测试可移植性**：`mcp` 测试不再硬编码 `MacosFs`；`managed` 测试按 Unix/Windows
+  选择 `sh`/`cmd`；Unix-only 启动脚本测试加 `cfg(unix)`；response-file 测试改用 mock fs。
+- **前端 Windows 兼容**：
+  - `rmcccicon` 在 Windows 使用 `http://rmcccicon.localhost/...`；
+  - 整合包拖放改用 Tauri 原生 `onDragDropEvent` 的绝对路径，不再依赖 `File.path`；
+  - `dragDropEnabled` 开启。
+
+### 验证（本机 macOS）
+
+- `cargo check --workspace` ✅
+- `cargo test -p rmccc-platform`：48 passed / 3 ignored ✅
+- `cargo test -p rmccc-launch`：56 passed ✅
+- `pnpm typecheck` ✅、`pnpm test`：67 passed ✅
+
+### 已知边界（Windows 原生验收前不得宣称可用）
+
+- 未在本机交叉编译 Windows；`windows.rs` 的 Win32/WinRT API、`icacls`、`taskkill`、
+  Java 目录扫描、`ShellExecuteW` 需在原生 Windows runner 首次编译/烟测。
+- Windows Java 注册表发现、HEVC 扩展/GPU/驱动、WebView2 透明玻璃与高 DPI 仍 deferred。
+- Windows 隔离插件 UI 仍按 ADR-006 门禁降级为声明式卡片。

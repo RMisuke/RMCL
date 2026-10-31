@@ -276,6 +276,7 @@ impl ForgeNewInstallTask {
             .args(&args)
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped());
+        rmccc_platform::process::hide_console_window(cmd.as_std_mut());
 
         tracing::debug!(classpath = ?classpath, args = ?args, "Running processor");
 

@@ -1,7 +1,8 @@
 //! 进程控制（指南 §5.7.2「进程控制」）。
 //!
-//! Unix 用进程组 + `killpg`/`setpriority`；Windows 需 Job Object 或
-//! `taskkill /T`，本机 deferred。领域层只依赖 [`PlatformProcessControl`]。
+//! Unix 用进程组 + `killpg`/`setpriority`；Windows 用 `taskkill /T /F`
+//! （失败时回退到 `TerminateProcess`）。领域层只依赖
+//! [`PlatformProcessControl`]。
 
 use rmccc_error::Result;
 
@@ -45,8 +46,26 @@ pub trait PlatformProcessControl: Send + Sync {
     /// 配置子进程自成进程组（Unix `setpgid(0,0)`）。
     ///
     /// 只有这样才能在退出时一次性终止 Java 及其子进程，而不误伤启动器本身。
-    /// Windows 后端为 no-op（Job Object 待原生 CI 实现）。
+    /// Windows 用 `taskkill /T /F` 终止整棵树；本方法保持 no-op。
     fn configure_child_process_group(&self, cmd: &mut std::process::Command) -> Result<()>;
+}
+
+/// Windows GUI 进程启动子进程时隐藏控制台窗口。
+///
+/// `java -version`、`taskkill`、`reg` 等控制台程序在 GUI 进程中默认会闪出
+/// 黑框；平台后端统一用这个 helper 设置 `CREATE_NO_WINDOW`。非 Windows
+/// 目标上是空操作，调用方不需要写 `cfg`。
+pub fn hide_console_window(cmd: &mut std::process::Command) {
+    #[cfg(target_os = "windows")]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        cmd.creation_flags(CREATE_NO_WINDOW);
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = cmd;
+    }
 }
 
 /// 后端标识（日志 / 诊断）。

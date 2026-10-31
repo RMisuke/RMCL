@@ -52,17 +52,18 @@ impl LogicHost {
 
     /// Spawn a specific helper binary (tests use this).
     pub fn spawn(executable: &Path) -> Result<Self, LogicError> {
-        let mut child = Command::new(executable)
-            .stdin(Stdio::piped())
+        let mut cmd = Command::new(executable);
+        cmd.stdin(Stdio::piped())
             .stdout(Stdio::piped())
-            .stderr(Stdio::inherit())
-            .spawn()
-            .map_err(|e| {
-                LogicError::new(
-                    LogicErrorCode::Internal,
-                    format!("cannot spawn {}: {e}", executable.display()),
-                )
-            })?;
+            .stderr(Stdio::inherit());
+        // GUI 宿主启动 helper 时不要闪出控制台窗口；非 Windows 为空操作。
+        rmccc_platform::process::hide_console_window(&mut cmd);
+        let mut child = cmd.spawn().map_err(|e| {
+            LogicError::new(
+                LogicErrorCode::Internal,
+                format!("cannot spawn {}: {e}", executable.display()),
+            )
+        })?;
 
         let stdin = child
             .stdin

@@ -592,7 +592,13 @@ mod session_tests {
                 .as_nanos()
         ));
         std::fs::create_dir_all(&dir).unwrap();
-        Arc::new(McpHandle::new(&dir, Arc::new(rmccc_core::rmccc_platform::MacosFs)).unwrap())
+        Arc::new(
+            McpHandle::new(
+                &dir,
+                rmccc_core::rmccc_platform::Platform::current().fs.clone(),
+            )
+            .unwrap(),
+        )
     }
 
     /// 直接注入 Running 态（不起 HTTP 任务）：register/session_exists 只依赖它。

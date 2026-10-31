@@ -305,6 +305,7 @@ mod tests {
         }
     }
 
+    #[cfg(unix)]
     fn spawn_child(script: &str) -> tokio::process::Child {
         tokio::process::Command::new("sh")
             .arg("-c")
@@ -315,13 +316,33 @@ mod tests {
             .unwrap()
     }
 
+    #[cfg(windows)]
+    fn spawn_child(script: &str) -> tokio::process::Child {
+        tokio::process::Command::new("cmd")
+            .arg("/C")
+            .arg(script)
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .unwrap()
+    }
+
+    #[cfg(unix)]
+    const OK_SCRIPT: &str = "echo hello; echo err >&2; exit 0";
+    #[cfg(windows)]
+    const OK_SCRIPT: &str = "echo hello & echo err 1>&2 & exit /b 0";
+    #[cfg(unix)]
+    const FAIL_SCRIPT: &str = "exit 3";
+    #[cfg(windows)]
+    const FAIL_SCRIPT: &str = "exit /b 3";
+
     #[test]
     fn test_managed_process_streams_and_exit() {
         let rt = tokio::runtime::Runtime::new().unwrap();
         rt.block_on(async {
             let managed = Arc::new(ManagedProcess::new(
                 "test".into(),
-                spawn_child("echo hello; echo err >&2; exit 0"),
+                spawn_child(OK_SCRIPT),
                 500,
             ));
             let recorder = Arc::new(Recorder {
@@ -350,7 +371,7 @@ mod tests {
         rt.block_on(async {
             let managed = Arc::new(ManagedProcess::new(
                 "test".into(),
-                spawn_child("exit 3"),
+                spawn_child(FAIL_SCRIPT),
                 500,
             ));
             let recorder = Arc::new(Recorder {
