@@ -26,8 +26,18 @@ use crate::protocol::{LogicError, LogicErrorCode, Request, RequestParams, Respon
 /// outside the app bundle.
 pub const HELPER_ENV: &str = "RMCCC_LOGIC_HOST";
 
-/// Binary name looked up next to the launcher executable.
+/// Binary name looked up next to the launcher executable, **without** the
+/// platform executable suffix (use [`helper_file_name`] to get the real name).
 pub const HELPER_NAME: &str = "rmccc-logic-host";
+
+/// File name of the helper on the current platform.
+///
+/// Windows binaries always carry `.exe` (`rmccc-logic-host.exe`); every other
+/// target uses the bare name. Hard-coding [`HELPER_NAME`] made `is_file()`
+/// return false on Windows, so every logic plugin reported "helper not found".
+pub fn helper_file_name() -> String {
+    format!("{HELPER_NAME}{}", std::env::consts::EXE_SUFFIX)
+}
 
 /// Default per-call budget when the caller does not pass limits.
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(5);
@@ -310,15 +320,42 @@ pub fn resolve_helper() -> Result<PathBuf, LogicError> {
 
     let current = std::env::current_exe()
         .map_err(|e| LogicError::new(LogicErrorCode::Internal, format!("current exe: {e}")))?;
-    let sibling = current.with_file_name(HELPER_NAME);
+    let file_name = helper_file_name();
+    let sibling = current.with_file_name(&file_name);
     if sibling.is_file() {
         return Ok(sibling);
+    }
+    // A helper installed without the platform suffix (hand-copied build,
+    // wrapper script) still works: fall back to the bare name.
+    let bare = current.with_file_name(HELPER_NAME);
+    if bare.is_file() {
+        return Ok(bare);
     }
     Err(LogicError::new(
         LogicErrorCode::Internal,
         format!(
-            "logic helper not found: set {HELPER_ENV} or install {HELPER_NAME} next to {}",
+            "logic helper not found: set {HELPER_ENV} or install {file_name} next to {}",
             current.display()
         ),
     ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn helper_file_name_carries_the_platform_exe_suffix() {
+        let name = helper_file_name();
+        assert!(name.starts_with(HELPER_NAME));
+        assert_eq!(
+            name.len(),
+            HELPER_NAME.len() + std::env::consts::EXE_SUFFIX.len()
+        );
+        // Windows resolves the helper as `.exe`; Unix keeps the bare name.
+        #[cfg(windows)]
+        assert_eq!(name, "rmccc-logic-host.exe");
+        #[cfg(not(windows))]
+        assert_eq!(name, "rmccc-logic-host");
+    }
 }

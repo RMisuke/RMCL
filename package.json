@@ -10,6 +10,7 @@
     "preview": "vite preview",
     "typecheck": "tsc --noEmit",
     "tauri": "tauri",
+    "prep:host": "node scripts/prepare-logic-host.mjs",
     "plugin:validate": "node plugin-sdk/scripts/cli.mjs validate",
     "plugin:pack": "node plugin-sdk/scripts/cli.mjs pack",
     "sdk:test": "node --test plugin-sdk/test/",

@@ -94,17 +94,21 @@ jobs:
         run: cargo audit
 
   # P2-23：E2E 冒烟测试（tauri-driver + WebDriver）。
-  # 需 GUI/WebDriver 环境，仅在 macos（原生带 Safari WebDriver 生态）运行；
-  # 无环境时由普通 test job 的 RMCCC_SKIP_E2E=1 兜底跳过。
+  #
+  # 2026-11-01 Windows 审计：`tauri-driver` 只支持 Windows（自动下载
+  # msedgedriver）与 Linux（WebKitWebDriver），**不支持 macOS**。此前这个 job
+  # 跑在 macos-14 上，从未真正驱动过应用。现在改到 windows-latest：
+  # 一次性验证 Windows 原生构建 + WebView2 首帧渲染。
+  # 首次接入期间标 `continue-on-error`（可见但不阻塞合并），Windows 实机
+  # 验收完成后应去掉。
   e2e:
-    name: E2E (tauri-driver)
-    runs-on: macos-14
+    name: E2E (Windows / WebView2)
+    runs-on: windows-latest
+    continue-on-error: true
     steps:
       - uses: actions/checkout@v4
 
       - uses: dtolnay/rust-toolchain@stable
-        with:
-          components: rustfmt, clippy
 
       - uses: Swatinem/rust-cache@v2
 
@@ -120,25 +124,38 @@ jobs:
       - name: Install frontend deps
         run: pnpm install --frozen-lockfile
 
-      - name: Build debug bundle
-        run: pnpm tauri build --debug
+      # `--no-bundle`：只产出可执行文件（NSIS/WiX 由发布流程负责），
+      # 同时验证 tauri.conf 的图标与 externalBin 能正确进入产物。
+      - name: Build app (debug, no bundle)
+        run: pnpm tauri build --debug --no-bundle
+
+      - name: Install tauri-driver
+        run: cargo install tauri-driver --locked --version 2
 
       - name: Start tauri-driver (WebDriver server)
+        shell: bash
         run: |
-          # 安装并后台启动 tauri-driver
-          cargo install tauri-driver --locked --version 2
-          nohup tauri-driver --port 4444 > /tmp/tauri-driver.log 2>&1 &
-          # 等待端口就绪
+          nohup tauri-driver --port 4444 > tauri-driver.log 2>&1 &
+          ready=0
           for i in $(seq 1 30); do
-            if curl -sf http://localhost:4444/status >/dev/null 2>&1; then break; fi
+            if curl -sf http://localhost:4444/status >/dev/null 2>&1; then
+              ready=1
+              break
+            fi
             sleep 2
           done
+          if [ "$ready" != "1" ]; then
+            echo "tauri-driver did not start"
+            cat tauri-driver.log
+            exit 1
+          fi
 
       - name: Run E2E smoke test
+        shell: bash
         run: |
           cd src-tauri
           cargo test --test e2e_smoke app_boots_and_serves_frontend
         env:
           TAURI_DRIVER_URL: "http://localhost:4444"
-          RMCCC_APP_URL: "http://localhost:1420"
+          RMCCC_E2E_BINARY: "${{ github.workspace }}/target/debug/rmccc.exe"
           RMCCC_RUN_E2E: "1"

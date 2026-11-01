@@ -7,7 +7,7 @@
     "frontendDist": "../dist",
     "devUrl": "http://localhost:1420",
     "beforeDevCommand": "pnpm dev",
-    "beforeBuildCommand": "pnpm build"
+    "beforeBuildCommand": "pnpm build && pnpm prep:host"
   },
   "app": {
     "withGlobalTauri": false,
@@ -38,6 +38,14 @@
   "bundle": {
     "active": true,
     "targets": "all",
+    "externalBin": [
+      "binaries/rmccc-logic-host"
+    ],
+    "windows": {
+      "webviewInstallMode": {
+        "type": "downloadBootstrapper"
+      }
+    },
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",
@@ -51,7 +59,10 @@
       "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDU5OEEwODEyQjJDMUQxQ0MKUldUTTBjR3lFZ2lLV1hlbUFsOFR2cGRqOXdqSE9Mb3h3WGtJbjNrR00vZXcyWGV6RWhkVXlhNmsK",
       "endpoints": [
         "https://github.com/<owner>/<repo>/releases/latest/download/latest.json"
-      ]
+      ],
+      "windows": {
+        "installMode": "passive"
+      }
     }
   }
 }

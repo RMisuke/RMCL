@@ -1,4 +1,4 @@
-# RMCCC 项目现状与继续开发交接（2026-10-31 更新）
+# RMCCC 项目现状与继续开发交接（2026-11-01 更新）
 
 > 本文档是**变更记录与交接入口**，按轮次记录"这轮改了什么"。
 > **完整架构说明 + 功能矩阵 + 技术债台账**见 [`audits/AUDIT_2026-10-20.md`](audits/AUDIT_2026-10-20.md)（横切全景，不按轮次组织）。
@@ -9,6 +9,38 @@
 ---
 
 ## 0. 更新记录
+
+**2026-11-01（Windows 兼容性审计 + 首轮整改；应用图标换新版）**：
+
+1. **审计**：新增 [`audits/AUDIT_2026-11-01_WINDOWS.md`](audits/AUDIT_2026-11-01_WINDOWS.md)，
+   15 项发现（P0×2、P1×7、P2×5、已知降级×1），本轮修 7 项。核心结论：平台适配层的 trait
+   边界没有阻塞，问题都藏在"非 trait"的资产与调用约定里。
+2. **构建阻塞（P0）**：`src-tauri/icons/*` 五个文件此前都是同一个 **1×1 PNG**（`icon.ico`
+   不是 ICO、`icon.icns` 不是 ICNS），Windows 资源编译必然失败。现用上传图（居中补方形）
+   经 `pnpm tauri icon` 重生成，`file` 校验为 `MS Windows icon resource` / `Mac OS X icon`。
+3. **逻辑插件（P0）**：`resolve_helper()` 现在按 `EXE_SUFFIX` 拼 `rmccc-logic-host.exe`
+   （含裸名回退）；同时 `bundle.externalBin` + `pnpm prep:host` 把 helper 真正打进安装包。
+4. **日志编码（P1）**：`PlatformDescriptor` 拆出 `stdout_encoding()`（全平台 UTF-8），
+   `file.encoding` 在 Windows 保持 GBK 不动；日志泵从 `BufReader::lines()` 改为字节级
+   `read_until` + lossy 解码——中文 Windows 上 GBK 输出不再终止日志泵（否则日志冻结、
+   管道写满会阻塞游戏进程）。
+5. **权限（P1）**：argfile 的 `restrict_owner_only` 失败改为告警继续（exFAT/网络盘上
+   `icacls` 必然失败，曾导致"游戏装在移动盘就启动不了"）；vault 仍 fail-closed，错误文案补
+   卷类型提示。
+6. **启动链路（P1）**：前后置命令经 `cmd /C` / `sh -c` 执行（含空格路径/`.bat`/内建命令）；
+   数据目录改 `%LOCALAPPDATA%` 并带一次性的旧目录迁移。
+7. **壁纸（P1）**：Windows 转码目标改 H.264（WebView2 可直接硬解，HEVC 需付费扩展），
+   删除转码前预建空文件的写法；`PREPARE_RECIPE` 升 `native-timing-v2`，缓存 key 加入后端名
+   与目标编码。
+8. **打包/发布（P1/P2）**：release 产物路径改 `target/**/release/bundle/**/*`（workspace 产物
+   根在仓库根）、去掉不存在的 `/tmp/rmccc.key` 兜底、补 `bundle.windows.webviewInstallMode` 与
+   `plugins.updater.windows.installMode`；CI 的 E2E job 从 `macos-14`（tauri-driver 不支持）
+   迁到 `windows-latest`，测试改用 `tauri:options.application` 驱动真实应用。
+9. **本机验证**：`cargo fmt --check` ✅、`cargo clippy --workspace --all-targets -D warnings` ✅、
+   `cargo test --workspace` ✅（744 passed / 3 ignored）、`pnpm typecheck` ✅、`pnpm test` ✅（67）、
+   `pnpm build` ✅、`pnpm tauri build --bundles app` ✅。
+10. **仍未验收**：Windows 原生编译、ACL/Java/进程/WebView2/壁纸实机行为、NSIS/MSI 安装包、
+    插件隔离 UI（ADR-006）。口径保持 `deferred / release-blocked`，清单见审计文档 §5。
 
 **2026-10-31（底部 Dock 与账号/启动面板：自适应浅白玻璃）**：
 

@@ -6,6 +6,8 @@
 
 # === Rust 构建产物 ===
 /target/
+# `pnpm prep:host` 生成的 Tauri externalBin（名为 <name>-<target-triple>）
+/src-tauri/binaries/
 /poc/*/target/
 **/*.rs.bk
 *.pdb

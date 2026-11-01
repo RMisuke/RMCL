@@ -257,10 +257,31 @@ async fn read_lines<R: tokio::io::AsyncRead + Unpin>(
 ) {
     use tokio::io::{AsyncBufReadExt, BufReader};
 
-    let buf = BufReader::new(&mut reader);
-    let mut line_reader = buf.lines();
+    let mut buf = BufReader::new(&mut reader);
+    let mut pending: Vec<u8> = Vec::new();
 
-    while let Ok(Some(line)) = line_reader.next_line().await {
+    loop {
+        pending.clear();
+        match buf.read_until(b'\n', &mut pending).await {
+            // EOF.
+            Ok(0) => break,
+            Ok(_) => {}
+            // A read error ends only this pump; the exit waiter still reports
+            // the process exit, so the UI never hangs on a broken pipe.
+            Err(_) => break,
+        }
+        // `read_until` keeps the delimiter; drop CR/LF so Windows line endings
+        // do not leak into the log panel.
+        while matches!(pending.last(), Some(b'\n') | Some(b'\r')) {
+            pending.pop();
+        }
+        // The JVM is asked for UTF-8 log streams (`stdout_encoding`), but a mod
+        // writing raw code-page bytes to `System.out` must not kill the pump:
+        // `lines()` used to return `InvalidData` on the first such byte and the
+        // whole stdout pump ended (silent log freeze + a full pipe that blocks
+        // the game). Decode lossily instead.
+        let line = String::from_utf8_lossy(&pending).into_owned();
+
         // Buffer for UI consumers (recent_lines / drain_lines).
         {
             let mut lines = lines.lock().await;
@@ -385,6 +406,35 @@ mod tests {
             let exits = recorder.exits.lock().unwrap();
             assert_eq!(exits.len(), 1);
             assert_eq!(exits[0], 3);
+        });
+    }
+
+    /// 回归（Windows 审计 2026-11-01）：日志泵曾用 `BufReader::lines()`，
+    /// 只接受 UTF-8。中文 Windows 上 JVM/mod 输出代码页字节会让泵在第一条
+    /// 非 UTF-8 行直接结束（日志冻结，管道写满后游戏进程被阻塞）。
+    #[test]
+    fn read_lines_survives_non_utf8_bytes() {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        rt.block_on(async {
+            // "hello" + CRLF + GBK 编码的 "中文" + CRLF + 末行无换行符。
+            let data: &[u8] = b"hello\r\n\xD6\xD0\xCE\xC4\r\nlast";
+            let lines = Arc::new(Mutex::new(Vec::new()));
+            let listeners = Arc::new(Mutex::new(Vec::new()));
+
+            read_lines(data, lines.clone(), 100, false, listeners).await;
+
+            let captured = lines.lock().await;
+            assert_eq!(
+                captured.len(),
+                3,
+                "泵必须在乱码行之后继续工作: {captured:?}"
+            );
+            assert_eq!(captured[0], "hello", "CRLF 不应残留");
+            assert!(
+                !captured[1].is_empty(),
+                "GBK 字节应被 lossy 解码而不是丢弃整行"
+            );
+            assert_eq!(captured[2], "last", "缺少结尾换行符的末行也要保留");
         });
     }
 }

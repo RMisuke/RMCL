@@ -43,7 +43,19 @@ pub fn build_response_file(
     std::fs::write(&file_path, &content)?;
 
     // 仅属主可读写（argfile 里有 accessToken）。经平台后端，无裸 cfg。
-    platform.fs.restrict_owner_only(&file_path)?;
+    //
+    // 收紧失败**不能让启动失败**：Windows 上 `icacls` 做不到 ACL 的卷
+    // （exFAT/FAT32 移动硬盘、部分网络盘、受限账户）恰恰是玩家常用的游戏目录，
+    // 硬报错等于"游戏装在哪就决定能不能启动"。这里降级为告警：文件仍然只在
+    // 游戏目录停留数秒（`schedule_response_file_cleanup` 5s 后删除），并在日志
+    // 里明写暴露窗口，便于排查而不静默。
+    if let Err(error) = platform.fs.restrict_owner_only(&file_path) {
+        tracing::warn!(
+            path = %file_path.display(),
+            error = ?error,
+            "Could not restrict launch argfile permissions; continuing (file is removed after launch)"
+        );
+    }
 
     tracing::debug!(
         path = %file_path.display(),

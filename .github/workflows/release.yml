@@ -64,13 +64,19 @@ jobs:
         run: pnpm tauri build ${{ matrix.args }}
         env:
           TAURI_SIGNING_IDENTITY: ${{ startsWith(matrix.platform, 'macos') && secrets.APPLE_SIGNING_IDENTITY || '' }}
-          TAURI_SIGNING_PRIVATE_KEY_PATH: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PATH || '/tmp/rmccc.key' }}
+          # updater 签名：只在配置了 secret 时注入（未配置时跳过签名，仍可出包）。
+          # 此前兜底值是 `/tmp/rmccc.key` —— Windows runner 上 `/tmp` 不存在，
+          # 且指向一个永远不会存在的文件。
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
           name: bundle-${{ matrix.name }}
-          path: src-tauri/target/release/bundle/**/*
+          # 产物根在仓库根 `target/`（src-tauri 只是 workspace 成员）。
+          # macOS 交叉构建还会多一层 `target/<triple>/release/bundle`。
+          path: target/**/release/bundle/**/*
 
       # P1-09：macOS 公证（notarytool）并对 .app/.dmg 打 staple
       - name: Notarize & staple (macOS)
@@ -82,11 +88,14 @@ jobs:
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: |
           set -euo pipefail
-          bundle_dir="src-tauri/target/release/bundle"
-          if [ -d "$bundle_dir/macos" ]; then
+          shopt -s nullglob
+          # workspace 产物在仓库根 target/；`--target <triple>` 会多一层。
+          found=0
+          for bundle_dir in target/release/bundle target/*/release/bundle; do
+            [ -d "$bundle_dir/macos" ] || continue
+            found=1
             # 公证 .app
             for app in "$bundle_dir"/macos/*.app; do
-              [ -e "$app" ] || continue
               zip_path="${app%.app}-notary.zip"
               ditto -c -k --keepParent "$app" "$zip_path"
               xcrun notarytool submit "$zip_path" \
@@ -97,12 +106,16 @@ jobs:
             done
             # 公证 .dmg
             for dmg in "$bundle_dir"/macos/*.dmg; do
-              [ -e "$dmg" ] || continue
               xcrun notarytool submit "$dmg" \
                 --apple-id "$APPLE_ID" --password "$APPLE_PASSWORD" --team-id "$APPLE_TEAM_ID" \
                 --wait --timeout 20m
               xcrun stapler staple "$dmg"
             done
+          done
+          if [ "$found" = "0" ]; then
+            echo "::error::no macOS bundle found under target/**/release/bundle"
+            find target -maxdepth 4 -name bundle -type d 2>/dev/null || true
+            exit 1
           fi
 
       # P1-08：打 tag 自动发布 GitHub Release（tauri-action 上传全部 bundle）
@@ -110,7 +123,8 @@ jobs:
       - uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TAURI_SIGNING_PRIVATE_KEY_PATH: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PATH || '/tmp/rmccc.key' }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
           tagName: ${{ github.ref_name }}
           releaseName: "RMCCC ${{ github.ref_name }}"

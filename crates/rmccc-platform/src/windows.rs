@@ -135,7 +135,8 @@ fn set_owner_only_acl(path: &Path, rights: &str) -> Result<()> {
     }
 
     Err(RmcccError::Other(format!(
-        "无法收紧 ACL {}: {last_error}",
+        "无法收紧 ACL {}: {last_error}（该卷可能不支持 NTFS ACL，如 exFAT/FAT32 移动盘或网络盘；\
+         敏感文件请放在 %LOCALAPPDATA% 下）",
         path.display()
     )))
 }

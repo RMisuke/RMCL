@@ -6,10 +6,50 @@
 use std::path::{Path, PathBuf};
 
 /// Default data directory for RMCCC.
+///
+/// 用 **local** data dir：Windows 上是 `%LOCALAPPDATA%\rmccc`，而不是
+/// `%APPDATA%`（Roaming）。实例目录里的 `assets/`、`libraries/` 动辄数 GB，
+/// 放进 Roaming 会在域/漫游配置环境里每次登录同步一遍。macOS 上
+/// `data_local_dir()` 与 `data_dir()` 同为 `~/Library/Application Support`，
+/// 行为不变。
 pub fn default_data_dir() -> PathBuf {
-    dirs::data_dir()
+    data_root().join("rmccc")
+}
+
+/// 平台数据根目录（优先 local data dir，取不到再退到 Roaming/home）。
+fn data_root() -> PathBuf {
+    dirs::data_local_dir()
+        .or_else(dirs::data_dir)
         .unwrap_or_else(|| PathBuf::from("."))
-        .join("rmccc")
+}
+
+/// 把旧版（Roaming）数据目录搬到当前数据目录一次。
+///
+/// 仅当“新目录不存在 + 旧目录存在 + 两者不同”时动作；`rename` 失败（跨卷、
+/// 占用）只告警不阻塞启动——数据仍在旧位置，用户启动后重建即可。macOS 上两个
+/// 根路径相同，这里恒为 no-op。
+fn migrate_legacy_data_dir() {
+    let (Some(legacy_root), Some(current_root)) = (dirs::data_dir(), dirs::data_local_dir()) else {
+        return;
+    };
+    let legacy = legacy_root.join("rmccc");
+    let current = current_root.join("rmccc");
+    if legacy == current || current.exists() || !legacy.is_dir() {
+        return;
+    }
+    match std::fs::rename(&legacy, &current) {
+        Ok(()) => tracing::info!(
+            from = %legacy.display(),
+            to = %current.display(),
+            "Migrated launcher data to the local data directory"
+        ),
+        Err(error) => tracing::warn!(
+            from = %legacy.display(),
+            to = %current.display(),
+            error = ?error,
+            "Could not migrate the legacy data directory; a fresh one will be created"
+        ),
+    }
 }
 
 /// Default game root directory.
@@ -102,6 +142,7 @@ pub fn agent_audit_path(data_dir: &Path) -> PathBuf {
 
 /// Ensure all required directories exist.
 pub fn ensure_dirs() -> std::io::Result<()> {
+    migrate_legacy_data_dir();
     let dirs = [
         default_data_dir(),
         default_game_dir(),
@@ -175,6 +216,16 @@ fn clean_path(path: &Path) -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn default_data_dir_prefers_the_local_data_dir() {
+        let dir = default_data_dir();
+        assert!(dir.ends_with("rmccc"), "{} 应以 rmccc 结尾", dir.display());
+        // Windows 审计 2026-11-01：实例数据不能落在 Roaming（%APPDATA%）。
+        if let Some(local) = dirs::data_local_dir() {
+            assert_eq!(dir.parent(), Some(local.as_path()));
+        }
+    }
 
     #[test]
     fn test_safe_join_normal() {

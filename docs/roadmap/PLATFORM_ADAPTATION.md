@@ -76,6 +76,26 @@ grep -rn 'cfg(unix)|cfg(windows)|cfg(target_os|cfg!(target_os' crates/*/src --in
   | grep -v rmccc-platform/src      → 0（只剩文档注释里提到）
 ```
 
+## 4.2 2026-11-01 Windows 兼容审计整改
+
+首轮 Windows 原生编译前的静态审计（全文见
+[`audits/AUDIT_2026-11-01_WINDOWS.md`](../audits/AUDIT_2026-11-01_WINDOWS.md)）在
+**适配层之外**发现了 6 处会让 Windows 构建或运行失败的问题，已在本轮修复：
+
+| # | 问题 | 归属层 |
+|---|---|---|
+| W-1 | `src-tauri/icons/*` 五个文件都是同一个 1×1 PNG，`icon.ico` 不是 ICO、`icon.icns` 不是 ICNS（Windows 资源编译 + 托盘/安装包图标全空） | 打包资源 |
+| W-2 | `resolve_helper()` 拼 `rmccc-logic-host` 不带 `.exe` → Windows 上逻辑插件全灭 | `rmccc-logic` |
+| W-3 | JVM 以 `file.encoding`（中文系统 GBK）输出日志，日志泵却按 UTF-8 逐行解码 → 首个非 UTF-8 行即终止泵（日志冻结 + 管道写满阻塞游戏） | `rmccc-platform` + `rmccc-launch` |
+| W-4 | argfile 的 `restrict_owner_only` 失败被当成致命错误（`icacls` 在 exFAT/网络盘/受限账户必然失败）→ 游戏装在移动盘就无法启动 | `rmccc-launch` |
+| W-5 | 前后置命令按空白切词、不经 shell → 含空格路径 / `.bat` / 内建命令全废，且会闪控制台 | `rmccc-launch` |
+| W-6 | 数据目录用 `%APPDATA%`（Roaming）→ GB 级实例目录被域漫游同步 | `rmccc-config` |
+| W-7 | WinRT 转码先 `File::create(output)` 再交给 MediaTranscoder（目标已存在必失败），且输出 HEVC 需要付费扩展才能被 WebView2 播放 | `rmccc-platform` |
+
+对应规则沉淀：日志流编码（`stdout_encoding`）与文件编码（`default_encoding`）**必须分开**；
+敏感文件权限收紧是**尽力而为**，不得成为启动/登录的前置条件；平台差异仍只允许出现在
+`rmccc-platform` 后端文件与 `PlatformDescriptor` 数据方法里。
+
 ## 5. 后端实现状态
 
 **crate 已落地**：`crates/rmccc-platform`（2026-10-21，Phase 1.1a）
@@ -88,7 +108,7 @@ grep -rn 'cfg(unix)|cfg(windows)|cfg(target_os|cfg!(target_os' crates/*/src --in
 | `PlatformShell`（`open_url` 仅 http(s) / `open_path`） | `shell.rs` / `windows.rs` | ✅ `open` | ✅ `ShellExecuteW`（原生编译/实机 deferred） | ⛔ 同上 |
 | `ProcessPriority` | `process.rs` | ✅ 数据 | ✅ 数据 | ✅ 数据 |
 | `JavaDetector`（`detect_all` / `find` + `select_for` 纯函数选版） | `java.rs` / `windows.rs` | ✅ `java_home -V` + `JAVA_HOME` + 常见路径 | ✅ `JAVA_HOME` + `PATH` + `Program Files`/Adoptium/Microsoft/Zulu/Corretto/JetBrains 等（注册表暂未接入；原生编译/实机 deferred） | ⛔ 同上（`/usr/lib/jvm` + `update-alternatives`） |
-| `VideoEngine` / `VideoTranscoder`（MP4 探测、原生分辨率 HEVC 缓存、精确帧率/帧数校验） | `video.rs` / `video/` | ✅ `avconvert PresetHEVCHighestQuality`（超规格 H.264 转 HEVC，尺寸与时序严格校验） | ⚠️ WinRT `MediaTranscoder::CreateHevc` 代码已落地（强制硬件加速），原生 Windows CI 待验 | ⛔ `UnsupportedPlatform`（不静默回退可能软解的原片；VA-API/GStreamer deferred） |
+| `VideoEngine` / `VideoTranscoder`（MP4 探测、原生分辨率缓存、精确帧率/帧数校验） | `video.rs` / `video/` | ✅ `avconvert PresetHEVCHighestQuality`（超规格 H.264 转 HEVC，尺寸与时序严格校验） | ⚠️ WinRT `MediaTranscoder::CreateMp4`（**H.264**，强制硬件加速），原生 Windows CI 待验 | ⛔ `UnsupportedPlatform`（不静默回退可能软解的原片；VA-API/GStreamer deferred） |
 | `CredentialStore` | — | **未定义**（延后到评估 Keychain 时，见下） | — | — |
 | 插件包解压 | `rmccc-plugin::package` | ✅ 纯 OS 无关 + `PlatformFs::atomic_replace` | ⚠️ 依赖已实现的 `atomic_replace`；原生 Windows 安装事务待验 | ⛔ 同上 |
 
@@ -103,7 +123,7 @@ grep -rn 'cfg(unix)|cfg(windows)|cfg(target_os|cfg!(target_os' crates/*/src --in
 | 后端 | 状态 | 说明 |
 |---|---|---|
 | macOS (`aarch64-apple-darwin`) | ✅ 本机实现 + **真机实测** | 含真实子进程 `setpgid`+`killpg` 烟测、真实 Java 探测、MP4 探测与原生分辨率 HEVC 转码；完整链路烟测：安装 1.20.4（3870 文件）→ 装 Fabric 0.15.11 → 启动到主菜单（Mixin + OpenAL 就绪） |
-| Windows (`x86_64-pc-windows-msvc`) | **⚠️ 适配层已实现 / 原生验收 deferred** | 文件/进程/shell/Java/内存已切到 `windows.rs`（ACL、taskkill、ShellExecuteW、Java 目录扫描、GlobalMemoryStatusEx）；WinRT HEVC 仍待原生编译。首次原生 Windows 编译、ACL、Java 探测、启动/停止、WebView2 与 HEVC 实测前不得宣称 Windows 可用 |
+| Windows (`x86_64-pc-windows-msvc`) | **⚠️ 适配层已实现 / 原生验收 deferred** | 文件/进程/shell/Java/内存已切到 `windows.rs`（ACL、taskkill、ShellExecuteW、Java 目录扫描、GlobalMemoryStatusEx）；WinRT 转码改 H.264（2026-11-01 审计）。首次原生 Windows 编译、ACL、Java 探测、启动/停止、WebView2 与壁纸实测前不得宣称 Windows 可用 |
 | Linux (`x86_64-unknown-linux-gnu`) | **deferred** | 同上；视频准备返回 `UnsupportedPlatform` 并向前端显式报错，不回退可能软解的原视频 |
 | macOS Intel (`x86_64-apple-darwin`) | **deferred** | 不在本机构建（Apple Silicon 单架构） |
 

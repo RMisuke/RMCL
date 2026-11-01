@@ -412,14 +412,22 @@ impl DefaultLauncher {
         cmd.add_all_default(&self.options.jvm_args);
 
         // 7. Encoding.
-        let encoding = self.options.platform.descriptor.default_encoding();
-        cmd.add_default("-Dfile.encoding=", encoding);
+        //
+        // `file.encoding` stays at the platform default (GBK on Chinese
+        // Windows, like HMCL) so legacy mods keep reading/writing their config
+        // files the way they always did. The **log streams** are always UTF-8:
+        // the launcher's line pump decodes UTF-8, and a GBK byte would end it.
+        cmd.add_default(
+            "-Dfile.encoding=",
+            self.options.platform.descriptor.default_encoding(),
+        );
+        let stream_encoding = self.options.platform.descriptor.stdout_encoding();
         if jv < 19 {
-            cmd.add_default("-Dsun.stdout.encoding=", encoding);
-            cmd.add_default("-Dsun.stderr.encoding=", encoding);
+            cmd.add_default("-Dsun.stdout.encoding=", stream_encoding);
+            cmd.add_default("-Dsun.stderr.encoding=", stream_encoding);
         } else {
-            cmd.add_default("-Dstdout.encoding=", encoding);
-            cmd.add_default("-Dstderr.encoding=", encoding);
+            cmd.add_default("-Dstdout.encoding=", stream_encoding);
+            cmd.add_default("-Dstderr.encoding=", stream_encoding);
         }
 
         // 8. Log4j RCE fixes.
@@ -710,9 +718,14 @@ impl DefaultLauncher {
 
         // Pre-launch command.
         if let Some(pre) = &self.options.pre_launch_command {
-            run_external_command(pre, &self.get_env_vars(), &self.run_dir)
-                .await
-                .map_err(|e| LaunchError::Other(format!("Pre-launch command failed: {e}")))?;
+            run_external_command(
+                pre,
+                &self.get_env_vars(),
+                &self.run_dir,
+                self.options.platform.descriptor.is_windows(),
+            )
+            .await
+            .map_err(|e| LaunchError::Other(format!("Pre-launch command failed: {e}")))?;
         }
 
         // The run directory may not exist yet — an isolated instance gets its own
@@ -787,6 +800,7 @@ impl DefaultLauncher {
                 env: self.get_env_vars(),
                 dir: self.run_dir.clone(),
                 instance_root: instance_root.clone(),
+                shell_is_windows: self.options.platform.descriptor.is_windows(),
             })),
             (Some(l), None) => Some(Arc::new(PostExitListener {
                 inner: Some(l.clone()),
@@ -794,6 +808,7 @@ impl DefaultLauncher {
                 env: self.get_env_vars(),
                 dir: self.run_dir.clone(),
                 instance_root,
+                shell_is_windows: self.options.platform.descriptor.is_windows(),
             })),
             (None, Some(cmd)) => Some(Arc::new(PostExitListener {
                 inner: None,
@@ -801,6 +816,7 @@ impl DefaultLauncher {
                 env: self.get_env_vars(),
                 dir: self.run_dir.clone(),
                 instance_root,
+                shell_is_windows: self.options.platform.descriptor.is_windows(),
             })),
             (None, None) => None,
         }
@@ -1173,21 +1189,38 @@ fn replace_templates_owned(arg: &str, vars: &HashMap<String, String>) -> String 
     rmccc_version::replace_templates(arg, vars)
 }
 
-/// Run a pre/post launch command (tokenized by whitespace) with env + cwd.
+/// Run a pre/post launch command with env + cwd.
+///
+/// The command text is user-written shell (HMCL 的"启动前/后执行命令"), so it
+/// must be handed to a shell: `sh -c` on Unix and `cmd /C` on Windows. The old
+/// whitespace tokenizer broke every quoted path, every `.bat`/built-in command,
+/// and `C:\Program Files\...` on Windows in particular.
 async fn run_external_command(
     command: &str,
     env: &HashMap<String, String>,
     dir: &Path,
+    shell_is_windows: bool,
 ) -> std::io::Result<()> {
-    let tokens: Vec<&str> = command.split_whitespace().collect();
-    if tokens.is_empty() {
+    let trimmed = command.trim();
+    if trimmed.is_empty() {
         return Ok(());
     }
-    let mut child = tokio::process::Command::new(tokens[0]);
-    child.args(&tokens[1..]).current_dir(dir);
+
+    let mut child = if shell_is_windows {
+        let mut cmd = tokio::process::Command::new("cmd");
+        cmd.arg("/C").arg(trimmed);
+        cmd
+    } else {
+        let mut cmd = tokio::process::Command::new("sh");
+        cmd.arg("-c").arg(trimmed);
+        cmd
+    };
+    child.current_dir(dir);
     for (k, v) in env {
         child.env(k, v);
     }
+    // GUI 宿主执行用户命令时不要闪出控制台窗口（非 Windows 为空操作）。
+    rmccc_platform::process::hide_console_window(child.as_std_mut());
     let status = child.status().await?;
     if status.success() {
         Ok(())
@@ -1207,6 +1240,9 @@ struct PostExitListener {
     env: HashMap<String, String>,
     dir: PathBuf,
     instance_root: PathBuf,
+    /// 后置命令用哪个 shell 执行（Windows `cmd /C`，其余 `sh -c`）。数据由
+    /// `PlatformDescriptor` 注入，领域代码不写 `cfg`。
+    shell_is_windows: bool,
 }
 
 impl ProcessListener for PostExitListener {
@@ -1237,8 +1273,9 @@ impl ProcessListener for PostExitListener {
             let command = self.command.clone();
             let env = self.env.clone();
             let dir = self.dir.clone();
+            let shell_is_windows = self.shell_is_windows;
             tokio::spawn(async move {
-                if let Err(e) = run_external_command(&command, &env, &dir).await {
+                if let Err(e) = run_external_command(&command, &env, &dir, shell_is_windows).await {
                     tracing::warn!("Post-exit command failed: {e}");
                 }
             });

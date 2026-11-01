@@ -185,14 +185,31 @@ impl PlatformDescriptor {
         }
     }
 
-    /// 默认进程输出编码（Windows 用系统代码页兜底，Unix 统一 UTF-8）。
+    /// JVM 的 `file.encoding`（读写游戏/ mod 配置文件时的默认字符集）。
+    ///
+    /// Windows 保持系统代码页（中文系统为 GBK），与 HMCL 等启动器一致：老 mod
+    /// 常按系统默认字符集读写 `.cfg`/`.txt`，强行改 UTF-8 会让这些文件出现乱码。
+    ///
+    /// **注意**：这只是文件字符集，不是日志流字符集 —— 日志流见
+    /// [`PlatformDescriptor::stdout_encoding`]，两者混用曾导致 Windows 上日志泵
+    /// 按 UTF-8 解码 GBK 字节而中断。
     pub fn default_encoding(&self) -> &'static str {
         if self.is_windows() {
-            // Windows 控制台代码页在中文系统上通常是 GBK；检测失败时的兜底。
+            // Windows 控制台代码页在中文系统上通常是 GBK。
             "GBK"
         } else {
             "UTF-8"
         }
+    }
+
+    /// JVM 标准输出/错误流的字符集：**所有平台统一 UTF-8**。
+    ///
+    /// 启动器的日志泵按 UTF-8 逐行解码（见 `rmccc_launch::managed`）。若让
+    /// Windows 上的 JVM 按代码页输出 GBK 字节，泵会在第一条非 UTF-8 行上
+    /// 结束，日志面板从此不更新；管道缓冲写满后游戏进程还会被阻塞。
+    /// 因此这里显式要求 JVM 以 UTF-8 输出日志，而 `file.encoding` 保持不动。
+    pub fn stdout_encoding(&self) -> &'static str {
+        "UTF-8"
     }
 
     /// 该平台可接受的 Mojang native classifier 列表，**按优先级降序**。

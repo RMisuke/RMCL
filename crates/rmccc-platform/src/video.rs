@@ -1,10 +1,13 @@
 //! Native-resolution video wallpaper preparation.
 //!
 //! The system WebView remains responsible for GPU decode and composition. This
-//! module only selects a hardware-safe MP4, converts oversized H.264 to native
-//! HEVC when necessary, and validates that conversion did not change the image
-//! dimensions or playback timing. Platform modules contain only transcoder
-//! execution; policy, cache and validation stay shared.
+//! module only selects a hardware-safe MP4, re-encodes oversized H.264 at native
+//! resolution when necessary, and validates that conversion did not change the
+//! image dimensions or playback timing. The **target codec is chosen by the
+//! platform backend** (`VideoTranscoder::target_codec`: HEVC on macOS, H.264 on
+//! Windows where WebView2 cannot rely on a system HEVC decoder). Platform
+//! modules contain only transcoder execution; policy, cache and validation stay
+//! shared.
 
 use rmccc_error::{Result, RmcccError};
 use sha1::{Digest, Sha1};
@@ -25,8 +28,12 @@ pub use video_macos::MacosVideoTranscoder;
 #[cfg(target_os = "windows")]
 pub use video_windows::WindowsVideoTranscoder;
 
-/// Cache recipe. Changing codec, sizing or validation requires a new version.
-pub const PREPARE_RECIPE: &str = "hevc-native-timing-v1";
+/// Cache recipe. Changing sizing or validation requires a new version.
+///
+/// v2：缓存 key 加入了后端名与目标编码。此前所有平台共用一套 key，而
+/// Windows 现在输出 H.264（WebView2 可硬解）、macOS 输出 HEVC，同一份
+/// 缓存不能跨后端复用。
+pub const PREPARE_RECIPE: &str = "native-timing-v2";
 
 /// Conservative H.264 single-axis limits for the system WebView GPU path.
 pub const H264_HARDWARE_MAX_WIDTH: u32 = 4096;
@@ -98,9 +105,17 @@ pub struct PreparedVideo {
     pub backend: &'static str,
 }
 
-/// Platform transcoder seam. Implementations write native-resolution HEVC.
+/// Platform transcoder seam.
 pub trait VideoTranscoder: Send + Sync {
     fn backend_name(&self) -> &'static str;
+
+    /// 输出编码。默认 HEVC（macOS `avconvert` 的 PresetHEVCHighestQuality）。
+    ///
+    /// Windows 必须覆盖成 H.264：WebView2/Edge 的硬解依赖系统媒体基础能力，
+    /// HEVC 需要额外安装（付费的）"HEVC 视频扩展"，在干净系统上播不出来。
+    fn target_codec(&self) -> VideoCodec {
+        VideoCodec::Hevc
+    }
 
     fn transcode(&self, request: &VideoPrepareRequest, output: &Path) -> Result<()>;
 }
@@ -153,8 +168,9 @@ impl<T: VideoTranscoder + 'static> VideoEngine for CachedVideoEngine<T> {
         }
 
         std::fs::create_dir_all(&request.cache_dir)?;
-        let output = cache_path(request)?;
-        if output.is_file() && validate_output(&output, &request.metadata).is_ok() {
+        let target = self.backend.target_codec();
+        let output = cache_path(request, self.backend.backend_name(), &target)?;
+        if output.is_file() && validate_output(&output, &request.metadata, &target).is_ok() {
             return Ok(self.prepared(
                 output,
                 request.metadata.clone(),
@@ -168,13 +184,13 @@ impl<T: VideoTranscoder + 'static> VideoEngine for CachedVideoEngine<T> {
             let _ = std::fs::remove_file(&temp);
             return Err(error);
         }
-        if let Err(error) = validate_output(&temp, &request.metadata) {
+        if let Err(error) = validate_output(&temp, &request.metadata, &target) {
             let _ = std::fs::remove_file(&temp);
             return Err(error);
         }
 
         // Another process may have completed the same immutable cache entry.
-        if output.is_file() && validate_output(&output, &request.metadata).is_ok() {
+        if output.is_file() && validate_output(&output, &request.metadata, &target).is_ok() {
             let _ = std::fs::remove_file(&temp);
             return Ok(self.prepared(
                 output,
@@ -213,7 +229,11 @@ pub fn needs_native_transcode(metadata: &VideoMetadata) -> bool {
         && (metadata.width > H264_HARDWARE_MAX_WIDTH || metadata.height > H264_HARDWARE_MAX_HEIGHT)
 }
 
-fn cache_path(request: &VideoPrepareRequest) -> Result<PathBuf> {
+fn cache_path(
+    request: &VideoPrepareRequest,
+    backend: &str,
+    target: &VideoCodec,
+) -> Result<PathBuf> {
     let file_meta = std::fs::metadata(&request.source)?;
     let modified = file_meta
         .modified()
@@ -225,6 +245,8 @@ fn cache_path(request: &VideoPrepareRequest) -> Result<PathBuf> {
 
     let mut hasher = Sha1::new();
     hasher.update(PREPARE_RECIPE.as_bytes());
+    hasher.update(backend.as_bytes());
+    hasher.update(target.label().as_bytes());
     hasher.update(request.source.to_string_lossy().as_bytes());
     hasher.update(file_meta.len().to_le_bytes());
     hasher.update(modified.to_le_bytes());
@@ -279,16 +301,21 @@ fn cleanup_stale_staging(cache_dir: &Path) {
     }
 }
 
-fn validate_output(path: &Path, source: &VideoMetadata) -> Result<()> {
+fn validate_output(path: &Path, source: &VideoMetadata, target: &VideoCodec) -> Result<()> {
     let output = probe_mp4(path)?;
-    validate_metadata(&output, source)
+    validate_metadata(&output, source, target)
 }
 
-fn validate_metadata(output: &VideoMetadata, source: &VideoMetadata) -> Result<()> {
-    if output.codec != VideoCodec::Hevc {
+fn validate_metadata(
+    output: &VideoMetadata,
+    source: &VideoMetadata,
+    target: &VideoCodec,
+) -> Result<()> {
+    if &output.codec != target {
         return Err(RmcccError::Validation(format!(
-            "wallpaper output codec is {}, expected hevc",
-            output.codec.label()
+            "wallpaper output codec is {}, expected {}",
+            output.codec.label(),
+            target.label()
         )));
     }
     if (output.width, output.height) != (source.width, source.height) {
@@ -347,10 +374,10 @@ mod tests {
     }
 
     #[test]
-    fn only_oversized_h264_selects_native_hevc() {
+    fn only_oversized_h264_needs_a_native_transcode() {
         assert!(needs_native_transcode(&metadata(4126, 2596)));
         assert!(needs_native_transcode(&metadata(4096, 2305)));
-        assert_eq!(PREPARE_RECIPE, "hevc-native-timing-v1");
+        assert_eq!(PREPARE_RECIPE, "native-timing-v2");
     }
 
     #[test]
@@ -365,32 +392,46 @@ mod tests {
         let source = metadata(4126, 2596);
         let mut output = source.clone();
         output.codec = VideoCodec::Hevc;
-        assert!(validate_metadata(&output, &source).is_ok());
+        assert!(validate_metadata(&output, &source, &VideoCodec::Hevc).is_ok());
 
         output.width = 1920;
-        assert!(validate_metadata(&output, &source).is_err());
+        assert!(validate_metadata(&output, &source, &VideoCodec::Hevc).is_err());
         output.width = source.width;
         output.frame_rate_num = 30;
         output.frame_rate_den = 1;
-        assert!(validate_metadata(&output, &source).is_err());
+        assert!(validate_metadata(&output, &source, &VideoCodec::Hevc).is_err());
         output.frame_rate_num = source.frame_rate_num;
         output.frame_rate_den = source.frame_rate_den;
         output.frame_count += 1;
-        assert!(validate_metadata(&output, &source).is_err());
+        assert!(validate_metadata(&output, &source, &VideoCodec::Hevc).is_err());
         output.frame_count = source.frame_count;
         output.duration_ms += 201;
-        assert!(validate_metadata(&output, &source).is_err());
+        assert!(validate_metadata(&output, &source, &VideoCodec::Hevc).is_err());
+    }
+
+    /// Windows 后端的输出是 H.264（WebView2 才不需要额外 HEVC 扩展），
+    /// 因此校验的“期望编码”必须跟着后端走，而不是写死 HEVC。
+    #[test]
+    fn validation_accepts_the_backend_target_codec() {
+        let source = metadata(4126, 2596);
+        let mut output = source.clone();
+        output.codec = VideoCodec::H264;
+        assert!(validate_metadata(&output, &source, &VideoCodec::H264).is_ok());
+        assert!(
+            validate_metadata(&output, &source, &VideoCodec::Hevc).is_err(),
+            "编码不匹配必须被拒"
+        );
     }
 
     #[test]
     fn validation_rejects_h264_or_scaled_cache_entries() {
         let source = metadata(4126, 2596);
-        assert!(validate_metadata(&source, &source).is_err());
+        assert!(validate_metadata(&source, &source, &VideoCodec::Hevc).is_err());
         let mut scaled = source.clone();
         scaled.codec = VideoCodec::Hevc;
         scaled.width = 1920;
         scaled.height = 1208;
-        assert!(validate_metadata(&scaled, &source).is_err());
+        assert!(validate_metadata(&scaled, &source, &VideoCodec::Hevc).is_err());
     }
 
     #[test]
@@ -419,7 +460,7 @@ mod tests {
         assert_eq!(prepared.mode, VideoPrepareMode::Transcoded);
         assert_eq!(prepared.metadata, metadata);
         let output = probe_mp4(&prepared.path).expect("probe output");
-        assert!(validate_metadata(&output, &metadata).is_ok());
+        assert!(validate_metadata(&output, &metadata, &VideoCodec::Hevc).is_ok());
         let _ = std::fs::remove_dir_all(dir);
     }
 }
