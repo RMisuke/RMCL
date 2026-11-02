@@ -558,7 +558,10 @@ mod tests {
         let cwd = temp("hmcl-cwd");
         let game = temp("hmcl-game");
         std::fs::create_dir_all(game.join("versions")).unwrap();
-        let hmcl_home = home.join("Library/Application Support/hmcl");
+        // `.hmcl` is scanned on every platform. `Library/Application Support/hmcl`
+        // is macOS-only in `hmcl_homes()`, so using it here would make this test
+        // fail on Windows/Linux despite the implementation being correct.
+        let hmcl_home = home.join(".hmcl");
         std::fs::create_dir_all(hmcl_home.join("config")).unwrap();
         std::fs::write(
             hmcl_home.join("config/game-directories.json"),
