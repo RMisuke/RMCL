@@ -10,6 +10,22 @@
 
 ## 0. 更新记录
 
+**2026-11-02（Phase 1 UI 收口 + Phase 2 Windows 窗口/控制台适配）**：
+
+1. **Phase 1（macOS 已实测）**：启动卡改为自适应高度，修复版本行被启动按钮覆盖；
+   实例菜单 `RmMenu` 增加 portal 定位并挂 `.app-root`，不再被卡片 `overflow:hidden` 裁切；
+   皮肤 stage 迁入 `.app-root`，任务中心 z90 稳定覆盖 z70；窗口控制键移入 `.app-root`，
+   日志头右侧预留 112px 安全区，关闭 X 不再被遮挡。
+2. **Phase 2（代码侧，Windows 待实机）**：release 主程序声明 `windows_subsystem = "windows"`；
+   游戏 `java.exe` spawn 统一走 `hide_console_window`（`CREATE_NO_WINDOW`）。
+3. **Windows 窗口 chrome**：通过 DWM 关闭系统圆角（`DWMWCP_DONOTROUND`）与 1px 边框
+   （`DWMWA_COLOR_NONE`），由 CSS 的 18px 圆角单独绘制；最大化时 `[data-window-maximized]`
+   将 `.app-root` 圆角归零；非 Home 页 `.app-body` 在 Windows 下改为 6px，与 18px 外框同心。
+4. **本机验证**：`pnpm typecheck` ✅、`pnpm test`（67）✅、`pnpm build` ✅、
+   `cargo check --workspace` ✅、`cargo test --workspace` ✅（exit 0）。
+5. **未验收**：macOS 不编译 `#[cfg(target_os = "windows")]` 分支，DWM/`windows_subsystem`/
+   `CREATE_NO_WINDOW` 及窗口实机行为仍为 Windows 原生验收项（审计 W-13/W-16 与 §5）。
+
 **2026-11-01（Windows 兼容性审计 + 首轮整改；应用图标换新版）**：
 
 1. **审计**：新增 [`audits/AUDIT_2026-11-01_WINDOWS.md`](audits/AUDIT_2026-11-01_WINDOWS.md)，

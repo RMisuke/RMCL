@@ -189,48 +189,119 @@ export function RmMenu(props: {
   /** `below` (default) | `right`（侧栏/工具栏向右弹出）| `up`（向上弹出，不遮住按钮）。 */
   side?: "below" | "right" | "up";
   /**
-   * Render the popup in a body portal with fixed positioning. Needed inside
-   * `overflow` containers (the instance sidebar clips a normally-positioned
-   * menu). The menu is right-aligned to the trigger and bottom-aligned to it.
+   * Render the popup in the app-root overlay context with fixed positioning.
+   * Needed inside `overflow` containers (the launch card clips a normally
+   * positioned menu). The placement follows `align`/`side` and is clamped to
+   * the viewport.
    */
   portal?: boolean;
 }): JSX.Element {
   const [open, setOpen] = createSignal(false);
-  const [anchor, setAnchor] = createSignal<{ left: number; bottom: number } | null>(null);
+  const [anchor, setAnchor] = createSignal<{ left: number; top: number } | null>(null);
   let root: HTMLDivElement | undefined;
   let menu: HTMLDivElement | undefined;
-  const close = () => setOpen(false);
-  const toggle = () => {
-    if (!open() && props.portal && root) {
-      const rect = root.getBoundingClientRect();
-      setAnchor({
-        left: rect.right + 6,
-        bottom: Math.max(8, window.innerHeight - rect.bottom),
-      });
-    }
-    setOpen(!open());
+  let positionFrame = 0;
+  const close = () => {
+    setOpen(false);
+    setAnchor(null);
   };
+
+  /** The portal target lives inside `.app-root`, so the menu shares the same
+   *  stacking context as the panels it must cover. */
+  const portalMount = (): HTMLElement =>
+    document.querySelector<HTMLElement>(".app-root") ?? document.body;
+
+  const clamp = (value: number, min: number, max: number): number =>
+    Math.min(Math.max(value, min), Math.max(min, max));
+
+  const updatePosition = () => {
+    if (!props.portal || !open() || !root || !menu) return;
+    const trigger = root.getBoundingClientRect();
+    const popup = menu.getBoundingClientRect();
+    const margin = 8;
+    const gap = 6;
+    const viewportW = window.innerWidth;
+    const viewportH = window.innerHeight;
+    const width = popup.width;
+    const height = popup.height;
+    let left: number;
+    let top: number;
+
+    if (props.side === "right") {
+      left = trigger.right + gap;
+      top = trigger.top;
+      if (left + width > viewportW - margin) left = trigger.left - width - gap;
+    } else if (props.side === "up") {
+      left = props.align === "right" ? trigger.right - width : trigger.left;
+      top = trigger.top - height - gap;
+      if (top < margin) top = trigger.bottom + gap;
+    } else {
+      left = props.align === "right" ? trigger.right - width : trigger.left;
+      top = trigger.bottom + gap;
+      if (top + height > viewportH - margin) top = trigger.top - height - gap;
+    }
+
+    left = clamp(left, margin, viewportW - width - margin);
+    top = clamp(top, margin, viewportH - height - margin);
+    setAnchor({ left, top });
+  };
+
+  const schedulePosition = () => {
+    if (!props.portal) return;
+    cancelAnimationFrame(positionFrame);
+    positionFrame = requestAnimationFrame(updatePosition);
+  };
+
+  const toggle = () => {
+    const next = !open();
+    setOpen(next);
+    if (!next) {
+      setAnchor(null);
+      return;
+    }
+    if (props.portal) {
+      setAnchor(null);
+      schedulePosition();
+    }
+  };
+
   const onDocClick = (e: MouseEvent) => {
     const target = e.target as Node;
     if (open() && root && !root.contains(target) && !menu?.contains(target)) close();
   };
-  onMount(() => document.addEventListener("mousedown", onDocClick));
-  onCleanup(() => document.removeEventListener("mousedown", onDocClick));
+  const onViewportChange = () => {
+    if (open() && props.portal) schedulePosition();
+  };
+  onMount(() => {
+    document.addEventListener("mousedown", onDocClick);
+    window.addEventListener("resize", onViewportChange);
+    window.addEventListener("scroll", onViewportChange, true);
+  });
+  onCleanup(() => {
+    document.removeEventListener("mousedown", onDocClick);
+    window.removeEventListener("resize", onViewportChange);
+    window.removeEventListener("scroll", onViewportChange, true);
+    cancelAnimationFrame(positionFrame);
+  });
 
   const menuNode = () => (
     <div
-      ref={menu}
+      ref={(el) => {
+        menu = el;
+        schedulePosition();
+      }}
       class={`rm-menu rm-menu-${props.align ?? "left"}${
         props.side && props.side !== "below" ? ` rm-menu-pop-${props.side}` : ""
       }${props.portal ? " rm-menu-portal" : ""}`}
       style={
-        props.portal && anchor()
+        props.portal
           ? {
               position: "fixed",
-              left: `${anchor()!.left}px`,
-              bottom: `${anchor()!.bottom}px`,
-              top: "auto",
+              left: `${anchor()?.left ?? 0}px`,
+              top: `${anchor()?.top ?? 0}px`,
               right: "auto",
+              bottom: "auto",
+              visibility: anchor() ? "visible" : "hidden",
             }
           : undefined
       }
@@ -267,7 +338,7 @@ export function RmMenu(props: {
         {props.children}
       </div>
       <Show when={open()}>
-        {props.portal ? <Portal>{menuNode()}</Portal> : menuNode()}
+        {props.portal ? <Portal mount={portalMount()}>{menuNode()}</Portal> : menuNode()}
       </Show>
     </div>
   );

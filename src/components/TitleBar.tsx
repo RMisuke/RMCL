@@ -28,22 +28,38 @@ const SETTINGS_ITEM: DockItem = { href: "/settings", icon: "settings", label: "n
 const TitleBar: Component = () => {
   let appWindow: any = null;
   const [maximized, setMaximized] = createSignal(false);
+  // Window controls must live inside .app-root so their z-index participates
+  // in the same stacking context as the log/task panels. Portaling to body
+  // made the controls paint above every panel, including the log close button.
+  const [chromeMount, setChromeMount] = createSignal<HTMLElement>();
   const location = useLocation();
   const navigate = useNavigate();
   // Registered in the synchronous component scope: an onCleanup after an
   // awaited onMount has no owner and silently never runs (P1-6).
   let unlistenResized: (() => void) | undefined;
-  onCleanup(() => unlistenResized?.());
+  onCleanup(() => {
+    unlistenResized?.();
+    delete document.documentElement.dataset.windowMaximized;
+  });
+
+  const syncMaximized = async () => {
+    const next = await appWindow.isMaximized();
+    setMaximized(next);
+    // CSS corners must vanish when the window fills the screen; otherwise
+    // the transparent 18px radius leaves four desktop-coloured notches.
+    document.documentElement.dataset.windowMaximized = next ? "true" : "false";
+  };
 
   onMount(async () => {
+    setChromeMount(document.querySelector<HTMLElement>(".app-root") ?? document.body);
     try {
       const mod = await import("@tauri-apps/api/window");
       appWindow = mod.getCurrentWindow();
-      setMaximized(await appWindow.isMaximized());
+      await syncMaximized();
 
       unlistenResized = await appWindow.onResized(async () => {
         try {
-          setMaximized(await appWindow.isMaximized());
+          await syncMaximized();
         } catch {}
       });
     } catch (e) {
@@ -129,32 +145,34 @@ const TitleBar: Component = () => {
       <div class="titlebar-right">
         <TaskIndicator compact />
         <DockLink item={SETTINGS_ITEM} />
-        <Portal>
-          <div class="titlebar-controls">
-            <button class="titlebar-btn" onClick={minimize} title={t("titlebar.minimize")}>
-              <svg width="10" height="10" viewBox="0 0 10 10">
-                <line x1="1" y1="5" x2="9" y2="5" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" />
-              </svg>
-            </button>
-            <button class="titlebar-btn" onClick={toggleMax} title={t("titlebar.maximize")}>
-              <svg width="10" height="10" viewBox="0 0 10 10">
-                <Show when={maximized()}>
-                  <rect x="3" y="0.5" width="6.5" height="6.5" rx="0.8" fill="none" stroke="currentColor" stroke-width="1" />
-                  <rect x="0.5" y="3" width="6.5" height="6.5" rx="0.8" fill="var(--surface-card)" stroke="currentColor" stroke-width="1" />
-                </Show>
-                <Show when={!maximized()}>
-                  <rect x="1.5" y="1.5" width="7" height="7" rx="1" fill="none" stroke="currentColor" stroke-width="1.2" />
-                </Show>
-              </svg>
-            </button>
-            <button class="titlebar-btn titlebar-btn-close" onClick={close} title={t("titlebar.close")}>
-              <svg width="10" height="10" viewBox="0 0 10 10">
-                <line x1="1.5" y1="1.5" x2="8.5" y2="8.5" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" />
-                <line x1="8.5" y1="1.5" x2="1.5" y2="8.5" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" />
-              </svg>
-            </button>
-          </div>
-        </Portal>
+        <Show when={chromeMount()}>
+          <Portal mount={chromeMount()!}>
+            <div class="titlebar-controls">
+              <button class="titlebar-btn" onClick={minimize} title={t("titlebar.minimize")}>
+                <svg width="10" height="10" viewBox="0 0 10 10">
+                  <line x1="1" y1="5" x2="9" y2="5" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" />
+                </svg>
+              </button>
+              <button class="titlebar-btn" onClick={toggleMax} title={t("titlebar.maximize")}>
+                <svg width="10" height="10" viewBox="0 0 10 10">
+                  <Show when={maximized()}>
+                    <rect x="3" y="0.5" width="6.5" height="6.5" rx="0.8" fill="none" stroke="currentColor" stroke-width="1" />
+                    <rect x="0.5" y="3" width="6.5" height="6.5" rx="0.8" fill="var(--surface-card)" stroke="currentColor" stroke-width="1" />
+                  </Show>
+                  <Show when={!maximized()}>
+                    <rect x="1.5" y="1.5" width="7" height="7" rx="1" fill="none" stroke="currentColor" stroke-width="1.2" />
+                  </Show>
+                </svg>
+              </button>
+              <button class="titlebar-btn titlebar-btn-close" onClick={close} title={t("titlebar.close")}>
+                <svg width="10" height="10" viewBox="0 0 10 10">
+                  <line x1="1.5" y1="1.5" x2="8.5" y2="8.5" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" />
+                  <line x1="8.5" y1="1.5" x2="1.5" y2="8.5" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" />
+                </svg>
+              </button>
+            </div>
+          </Portal>
+        </Show>
       </div>
     </div>
   );

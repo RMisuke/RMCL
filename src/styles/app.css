@@ -1957,7 +1957,8 @@ html[data-motion="on"] .toast {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: var(--rmccc-space-3) var(--rmccc-space-4);
+  /* Keep the close button clear of the floating window controls (top-right). */
+  padding: var(--rmccc-space-3) 112px var(--rmccc-space-3) var(--rmccc-space-4);
   border-bottom: 1px solid var(--rmccc-border);
   gap: var(--rmccc-space-2);
 }

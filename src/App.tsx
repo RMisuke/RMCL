@@ -88,6 +88,11 @@ const App: ParentComponent = (props) => {
   }
 
   onMount(async () => {
+    // Used by the Windows-only shell radius rule; WebView2 reports "Windows"
+    // in the UA, so no extra Tauri OS plugin is needed.
+    document.documentElement.dataset.platform = /Windows/i.test(navigator.userAgent)
+      ? "windows"
+      : "other";
     try {
       const win = getCurrentWindow();
       // Theme and locale both gate the first visible paint; load them in

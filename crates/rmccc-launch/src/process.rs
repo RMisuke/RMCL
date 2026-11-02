@@ -153,6 +153,11 @@ pub async fn spawn_game(
         .process
         .configure_child_process_group(cmd.as_std_mut())?;
 
+    // Windows GUI 进程拉起 java.exe 时默认会分配一个控制台窗口；游戏启动的
+    // 几秒黑框就是这么来的。与 Java 探测/Forge installer 共用平台 helper，
+    // 非 Windows 上是空操作。
+    rmccc_platform::process::hide_console_window(cmd.as_std_mut());
+
     // Inject environment variables
     if let Some(env) = extra_env {
         for (key, value) in env {

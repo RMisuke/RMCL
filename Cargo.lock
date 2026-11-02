@@ -3671,6 +3671,7 @@ dependencies = [
  "ts-rs",
  "uuid",
  "wat",
+ "windows",
 ]
 
 [[package]]

@@ -1,3 +1,5 @@
+#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+
 mod bindings;
 mod bundle;
 mod commands;
@@ -86,6 +88,59 @@ fn report_broken_bundle(window: tauri::WebviewWindow, report: &bundle::BundleRep
             }
         }
         Err(e) => tracing::error!(error = %e, "Could not encode the broken-bundle page"),
+    }
+}
+
+/// Windows 11 draws its own rounded frame and a 1px border around borderless
+/// transparent windows. The webview paints an 18px rounded surface itself, so
+/// the system frame shows through as a second edge. Turn both DWM decorations
+/// off and let CSS be the only painter; on Windows 10 these attributes are
+/// unsupported and the call fails harmlessly.
+#[cfg(target_os = "windows")]
+fn apply_windows_window_chrome(window: &tauri::WebviewWindow) {
+    use std::ffi::c_void;
+    use windows::Win32::Graphics::Dwm::{
+        DwmSetWindowAttribute, DWMWA_BORDER_COLOR, DWMWA_COLOR_NONE,
+        DWMWA_WINDOW_CORNER_PREFERENCE, DWMWCP_DONOTROUND,
+    };
+
+    let hwnd = match window.hwnd() {
+        Ok(hwnd) => hwnd,
+        Err(error) => {
+            tracing::warn!(%error, "Could not get the native window handle for DWM chrome");
+            return;
+        }
+    };
+
+    // DWMWCP_DONOTROUND = 1. Keep CSS border-radius authoritative.
+    let corner = DWMWCP_DONOTROUND.0 as u32;
+    // SAFETY: `hwnd` is the live top-level window handle; the pointer is valid
+    // for the duration of the call and the size matches the expected `u32`.
+    let corner_result = unsafe {
+        DwmSetWindowAttribute(
+            hwnd,
+            DWMWA_WINDOW_CORNER_PREFERENCE,
+            &corner as *const u32 as *const c_void,
+            std::mem::size_of::<u32>() as u32,
+        )
+    };
+    if let Err(error) = corner_result {
+        tracing::debug!(%error, "DWM corner preference is not supported");
+    }
+
+    // DWMWA_COLOR_NONE removes the thin native border (Windows 11 22000+).
+    let border = DWMWA_COLOR_NONE;
+    // SAFETY: same contract as above.
+    let border_result = unsafe {
+        DwmSetWindowAttribute(
+            hwnd,
+            DWMWA_BORDER_COLOR,
+            &border as *const u32 as *const c_void,
+            std::mem::size_of::<u32>() as u32,
+        )
+    };
+    if let Err(error) = border_result {
+        tracing::debug!(%error, "DWM border colour is not supported");
     }
 }
 
@@ -206,6 +261,8 @@ fn main() {
             // affected by `show()` timing, so this only shortens the
             // invisible-window phase instead of racing IPC readiness.
             if let Some(window) = app.get_webview_window("main") {
+                #[cfg(target_os = "windows")]
+                apply_windows_window_chrome(&window);
                 window.show().ok();
                 window.set_focus().ok();
             }

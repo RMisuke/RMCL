@@ -414,7 +414,7 @@ export default function Home(): JSX.Element {
                   {selected() ? t("home.launch") : t("home.noInstance.cta")}
                 </RmButton>
               </Show>
-              <RmMenu align="right" side="up" items={[...sortedByLastPlayed().map((profile) => ({ label: `${profile.summary.display_name} · ${profile.summary.game_version}`, icon: "gamepad" as const, onSelect: () => void instancesStore.selectInstance(profile.summary.key) })), { label: t("home.instanceSettings"), icon: "sliders" as const, onSelect: () => selected() && navigate(`/instances/${selected()!.summary.key}#settings`) }]}>
+              <RmMenu align="right" side="up" portal items={[...sortedByLastPlayed().map((profile) => ({ label: `${profile.summary.display_name} · ${profile.summary.game_version}`, icon: "gamepad" as const, onSelect: () => void instancesStore.selectInstance(profile.summary.key) })), { label: t("home.instanceSettings"), icon: "sliders" as const, onSelect: () => selected() && navigate(`/instances/${selected()!.summary.key}#settings`) }]}>
                 <button class="soft-launch-picker" aria-label={t("home.pickInstance")}><Icon name="layers" size={18} /><Icon name="chevron-down" size={13} /></button>
               </RmMenu>
             </div>

@@ -52,7 +52,8 @@
 | W-10 | P2 | `bundle` 无 `resources`/`externalBin`：`rmccc-logic-host` 不进安装包 | `tauri.conf.json` | 打包版逻辑插件失效（各平台） | ✅ `externalBin` + `pnpm prep:host` 暂存 |
 | W-11 | P2 | `bundle.windows.webviewInstallMode` / `plugins.updater.windows.installMode` 缺失 | `tauri.conf.json` | WebView2 安装策略与更新安装模式落到 Tauri 默认值，行为不确定 | ✅ 显式配置 |
 | W-12 | P2 | E2E job 跑在 `macos-14`，而 `tauri-driver` **不支持 macOS**；测试还把 caps 换成 `chrome()` 并 `goto` 外部 URL | `.github/workflows/ci.yml:101`、`src-tauri/tests/e2e_smoke.rs` | 唯一的 WebView2 自动化窗口被浪费，E2E 实际从未驱动过应用 | ✅ 迁到 `windows-latest` + 改用 `tauri:options.application` |
-| W-13 | P2 | `transparent: true` + `decorations: false` 只在 macOS 验证 | `tauri.conf.json:25-26` | Windows 丢 DWM 阴影/Aero Snap，Win10 透明+最大化表现待测 | ⏳ 待实机（见 §5） |
+| W-13 | P2 | `transparent: true` + `decorations: false` 只在 macOS 验证 | `tauri.conf.json:25-26` | Windows 丢 DWM 阴影/Aero Snap，Win10 透明+最大化表现待测 | 🟡 代码侧已处理：DWM 关闭系统圆角/边框；最大化时 CSS 圆角归零；待 Windows 实机（见 §5） |
+| W-16 | P1 | 主程序未声明 `windows_subsystem`；游戏 `java.exe` spawn 未设 `CREATE_NO_WINDOW` | `src-tauri/src/main.rs:1`；`crates/rmccc-launch/src/process.rs:156` | release 主程序弹控制台；启动游戏闪黑框 | 🟡 代码已加 `cfg_attr` + `hide_console_window`；待 Windows 实机 |
 | W-14 | P2 | 长路径（>260）无 `longPathAware`，深目录整合包可能失败 | — | 解压/安装报 OS error 108 | ⏳ 待实机确认触发面 |
 | W-15 | 已知降级 | 插件隔离 UI 在 `platform_id` 以 `windows` 开头时禁用 | `crates/rmccc-plugin/src/manager.rs:278`、ADR-006 | 插件卡片/页面降级为声明式 | ⏳ release-blocked（非本轮范围） |
 
@@ -170,9 +171,10 @@ target/release/bundle/macos/SNGL.app
 5. 启动 → 主菜单 → 停止：日志面板持续更新（含中文输出）、`taskkill /T /F` 收干净进程树。
 6. 实例/游戏路径含中文、空格、深目录（长路径）。
 7. 壁纸：H.264 超大 MP4 的 WinRT 转码成功，且 WebView2 能播放（`<video>` 首帧）。
-8. `transparent + decorations:false` 的窗口行为：阴影、贴边、最大化、多屏 DPI。
-9. NSIS/MSI 安装包构建与升级（`bundle.windows` 配置生效）。
-10. 插件隔离 UI 的 WebView2 注入问题（ADR-006），解除后需验证 `rmcccplugin://` →
+8. `transparent + decorations:false` 的窗口行为：DWM 系统圆角/边框是否被关闭、CSS 圆角是否无双边、阴影、贴边、最大化、多屏 DPI。
+9. release 主程序启动不出现控制台；启动游戏、Forge installer/processor 时均不闪黑框（`windows_subsystem` + `CREATE_NO_WINDOW`）。
+10. NSIS/MSI 安装包构建与升级（`bundle.windows` 配置生效）。
+11. 插件隔离 UI 的 WebView2 注入问题（ADR-006），解除后需验证 `rmcccplugin://` →
     `http://rmcccplugin.localhost` 的 URL 形态。
 
 ---

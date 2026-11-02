@@ -8,7 +8,7 @@
  * - 库走动态 import 独立分包（three.js 体积大，不进首屏 chunk）。
  *
  * 渲染架构（三轮踩坑后的定版，改动前先读）：
- * 1. canvas 归"常驻舞台层"所有——一个挂在 document.body 上的
+ * 1. canvas 归"常驻舞台层"所有——一个挂在 `.app-root` 内的
  *    `position:fixed` 元素，应用生命周期内只创建一次；组件挂载时把舞台
  *    按占位元素的 getBoundingClientRect() 定位过去（几何同步），卸载时
  *    隐藏舞台并暂停渲染。**canvas 节点从不移动、从不重建。**
@@ -90,6 +90,13 @@ function diag(message: string): void {
   );
 }
 
+/** Stage must live inside `.app-root`: its `isolation:isolate` is the stacking
+ *  context the log/task-center layers rely on. Appending to body makes the
+ *  stage paint above every app-root panel regardless of their z-index. */
+function stageHost(): HTMLElement {
+  return document.querySelector<HTMLElement>(".app-root") ?? document.body;
+}
+
 /** 创建（或复用）常驻舞台。w/h 为首个占位的尺寸，避免 0×0 画布。 */
 function ensureStage(w: number, h: number): Promise<SkinStage> {
   if (stage) {
@@ -104,7 +111,7 @@ function ensureStage(w: number, h: number): Promise<SkinStage> {
     svLib = lib;
     const root = document.createElement("div");
     root.className = "skin-stage";
-    document.body.appendChild(root);
+    stageHost().appendChild(root);
     const canvas = document.createElement("canvas");
     root.appendChild(canvas);
     const viewer = new lib.SkinViewer({

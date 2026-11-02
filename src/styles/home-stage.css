@@ -302,8 +302,11 @@
    reserved for the primary action, the label and the active instance. */
 .soft-launch-card {
   position: relative;
+  display: flex;
   flex: 1;
-  min-height: 118px;
+  flex-direction: column;
+  gap: 6px;
+  min-height: 134px;
   padding: 10px 14px;
   overflow: hidden;
   border: 1px solid color-mix(in srgb, var(--rmccc-accent) 28%, rgba(255, 255, 255, .12));
@@ -341,18 +344,33 @@
 .soft-launch-orb.o2 { width: 130px; height: 130px; left: -64px; bottom: -72px; }
 .soft-launch-top {
   display: flex;
+  flex: 0 0 auto;
   justify-content: space-between;
   color: var(--deck-accent);
   font-size: 8.5px;
   font-weight: 750;
   letter-spacing: .16em;
 }
-.soft-launch-body { display: flex; align-items: center; justify-content: space-between; height: 46px; }
-.soft-launch-body p { margin-bottom: 2px; color: rgba(242, 238, 231, .55); font-size: 9px; letter-spacing: .06em; text-transform: uppercase; }
-.soft-launch-body h2 { color: var(--noctis-chrome-ink); font-family: var(--font-display); font-size: 28px; font-weight: 800; line-height: 1; letter-spacing: -.06em; }
-.soft-launch-body span { color: rgba(242, 238, 231, .58); font-size: 9.5px; }
-.soft-launch-cube { transform: scale(.64) rotate(3deg); transform-origin: center; }
-.soft-launch-actions { display: flex; align-items: center; gap: 8px; }
+.soft-launch-body {
+  display: flex;
+  flex: 1 1 auto;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-height: 58px;
+  height: auto;
+}
+.soft-launch-body > div:first-child {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  min-width: 0;
+}
+.soft-launch-body p { margin: 0 0 3px; color: rgba(242, 238, 231, .55); font-size: 9px; line-height: 1.2; letter-spacing: .06em; text-transform: uppercase; }
+.soft-launch-body h2 { max-width: 100%; margin: 0; overflow: hidden; color: var(--noctis-chrome-ink); font-family: var(--font-display); font-size: 28px; font-weight: 800; line-height: 1; letter-spacing: -.06em; text-overflow: ellipsis; white-space: nowrap; }
+.soft-launch-body span { margin-top: 3px; color: rgba(242, 238, 231, .58); font-size: 9.5px; line-height: 1.2; }
+.soft-launch-cube { flex: 0 0 auto; transform: scale(.64) rotate(3deg); transform-origin: center; }
+.soft-launch-actions { display: flex; flex: 0 0 auto; align-items: center; gap: 8px; }
 .soft-launch-actions > .rm-btn {
   flex: 1;
   height: 34px;
