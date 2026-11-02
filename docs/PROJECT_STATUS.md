@@ -1,4 +1,4 @@
-# RMCCC 项目现状与继续开发交接（2026-11-01 更新）
+# RMCCC 项目现状与继续开发交接（2026-11-02 更新）
 
 > 本文档是**变更记录与交接入口**，按轮次记录"这轮改了什么"。
 > **完整架构说明 + 功能矩阵 + 技术债台账**见 [`audits/AUDIT_2026-10-20.md`](audits/AUDIT_2026-10-20.md)（横切全景，不按轮次组织）。
@@ -9,6 +9,26 @@
 ---
 
 ## 0. 更新记录
+
+**2026-11-02（SNGL 便携数据根 + 单配置文件 + Background 壁纸库）**：
+
+1. **数据根重命名与双模式**：标准根统一为 `SNGL`（Windows `%LOCALAPPDATA%`、macOS
+   `Application Support`、Linux `$XDG_DATA_HOME`）；Windows 默认便携，macOS/Linux 默认标准。
+   便携根为可执行文件/`.app` 同级 `SNGL/`，游戏根为同级 `.minecraft/`；`.portable`/`.standard`
+   marker 决定启动模式，模式选择不依赖 settings.json。
+2. **单配置文件**：`config/launcher-settings.json`、`state/launcher-state.json`、`user-settings.json`
+   合并为 `SNGL/settings.json`（`AppConfig` + `launcher_state` + `user_settings.background`）；
+   旧文件首次启动归档到 `backup/pre-sngl/`。背景策略写入同一文件。
+3. **切换与剪切迁移**：设置 → 通用新增数据目录卡；可切换标准/便携并选择迁移。迁移执行
+   复制 → 逐字节校验 → 源目录清空（剪切），自动改写 settings/registry/profile 中的绝对路径；
+   失败不删除源。Windows 安装在不可写目录时自动回退标准根。
+4. **Background 壁纸库**：`SNGL/Background/` 统一存放图片/MP4；设置 → 外观改为下拉选择，
+   支持打开文件夹/刷新、单张/轮播、间隔分钟、每次启动切换、遮罩；视频仍走 H.264 代理缓存。
+5. **缓存集中**：应用缓存、背景视频转码缓存、Windows WebView2 缓存（`WEBVIEW2_USER_DATA_FOLDER`）
+   均位于数据根 `cache/`；macOS WKWebView 缓存保持在系统位置（平台限制，已接受）。
+6. **本机验证**：macOS 标准模式迁移 2.2G 数据后 4 实例/账户正常；Background 选择/轮播/持久化
+   实测通过；`pnpm typecheck/test/build`、`cargo check/test --workspace` 通过。Windows 原生编译与
+   实机仍为 release-blocked，不得宣称已验收。
 
 **2026-11-02（Phase 1 UI 收口 + Phase 2 Windows 窗口/控制台适配）**：
 
@@ -1442,7 +1462,7 @@ FIXED 2 / PARTIAL 9 / STILL 40，另新增 19 项（P1×3 + P2×4 + P3×12），
 
 | 层 | 类型 | 存储 |
 |----|------|------|
-| 全局默认值 | `AppConfig`（新增 jvm/game args、isolation、窗口、优先级、auto_memory） | `config/launcher-settings.json` |
+| 全局默认值 | `AppConfig`（新增 jvm/game args、isolation、窗口、优先级、auto_memory） | `settings.json` |
 | 实例值 + 覆盖名单 | `Profile`（新增 `override_properties`、`isolation`） | `profiles/{id}.json` |
 | 生效值 | `ResolvedInstanceSettings`（`Profile::resolve`） | 不落盘 |
 

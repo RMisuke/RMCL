@@ -162,7 +162,10 @@ fn ipc_command_count_is_stable() {
     // → 123：ADR-020 合并壁纸 prepare + asset grant，移除 background_video_allow。
     // → 125：dialog_pick_background_image / background_image_prepare（图片壁纸）。
     // → 126：server_status（主页服务器信息卡的 SLP 查询）。
-    assert_eq!(crate::handlers::IPC_COMMANDS.len(), 126);
+    // → 132：data_mode_get / data_mode_switch（SNGL 标准/便携根切换与剪切迁移）、
+    //        background_catalog / background_open_folder /
+    //        background_settings_get / background_settings_set（Background 目录与轮播策略）。
+    assert_eq!(crate::handlers::IPC_COMMANDS.len(), 132);
 }
 
 // ────────────────────────── 2. 错误码契约 ──────────────────────────

@@ -256,7 +256,7 @@ pub async fn dialog_pick_background_image(
 
 /// Prepared wallpaper asset returned after its exact file has been whitelisted.
 #[derive(Debug, serde::Serialize, ts_rs::TS)]
-#[ts(export)]
+#[ts(export_to = "types.ts")]
 pub struct BackgroundVideoAsset {
     pub path: String,
     pub width: u32,
@@ -348,6 +348,204 @@ pub fn background_image_prepare(app: tauri::AppHandle, path: String) -> Result<S
         "Image wallpaper ready"
     );
     Ok(resolved.display().to_string())
+}
+
+/// One file available in the user's centralized `Background/` folder.
+#[derive(Debug, serde::Serialize, ts_rs::TS)]
+#[ts(export_to = "types.ts")]
+pub struct BackgroundFileView {
+    pub name: String,
+    pub path: String,
+    pub kind: String,
+    pub bytes: u64,
+}
+
+#[derive(Debug, serde::Serialize, ts_rs::TS)]
+#[ts(export_to = "types.ts")]
+pub struct BackgroundCatalogView {
+    pub dir: String,
+    pub images: Vec<BackgroundFileView>,
+    pub videos: Vec<BackgroundFileView>,
+}
+
+fn background_kind(path: &Path) -> Option<&'static str> {
+    let ext = path.extension()?.to_str()?.to_ascii_lowercase();
+    if BACKGROUND_IMAGE_EXTENSIONS.contains(&ext.as_str()) {
+        Some("image")
+    } else if ext == "mp4" {
+        Some("video")
+    } else {
+        None
+    }
+}
+
+/// Enumerate `SNGL/Background/` so the settings page can offer names instead of
+/// opening a native file dialog for every wallpaper change.
+#[tauri::command]
+#[tracing::instrument(skip(state))]
+pub async fn background_catalog(
+    state: tauri::State<'_, AppState>,
+) -> Result<BackgroundCatalogView, IpcError> {
+    let dir = {
+        let core = state.core.read().await;
+        rmccc_config::paths::background_dir(&core.data_dir)
+    };
+    std::fs::create_dir_all(&dir).map_err(io_error)?;
+    let mut images = Vec::new();
+    let mut videos = Vec::new();
+    for entry in std::fs::read_dir(&dir).map_err(io_error)? {
+        let entry = entry.map_err(io_error)?;
+        let path = entry.path();
+        let Ok(metadata) = std::fs::symlink_metadata(&path) else {
+            continue;
+        };
+        if !metadata.is_file() {
+            continue;
+        }
+        let Some(kind) = background_kind(&path) else {
+            continue;
+        };
+        let Some(name) = path.file_name().and_then(|value| value.to_str()) else {
+            continue;
+        };
+        let item = BackgroundFileView {
+            name: name.to_string(),
+            path: path.display().to_string(),
+            kind: kind.to_string(),
+            bytes: metadata.len(),
+        };
+        if kind == "image" {
+            images.push(item);
+        } else {
+            videos.push(item);
+        }
+    }
+    images.sort_by(|left, right| left.name.to_lowercase().cmp(&right.name.to_lowercase()));
+    videos.sort_by(|left, right| left.name.to_lowercase().cmp(&right.name.to_lowercase()));
+    Ok(BackgroundCatalogView {
+        dir: dir.display().to_string(),
+        images,
+        videos,
+    })
+}
+
+/// Open the centralized wallpaper folder in the system file manager.
+#[tauri::command]
+#[tracing::instrument(skip(state))]
+pub async fn background_open_folder(state: tauri::State<'_, AppState>) -> Result<String, IpcError> {
+    let dir = {
+        let core = state.core.read().await;
+        rmccc_config::paths::background_dir(&core.data_dir)
+    };
+    std::fs::create_dir_all(&dir).map_err(io_error)?;
+    tauri_plugin_opener::open_path(&dir, None::<&str>).map_err(|error| IpcError {
+        code: ErrorCode::Unknown,
+        message: format!("could not open background folder: {error}"),
+        retryable: false,
+    })?;
+    Ok(dir.display().to_string())
+}
+
+#[tauri::command]
+#[tracing::instrument(skip(state))]
+pub async fn background_settings_get(
+    state: tauri::State<'_, AppState>,
+) -> Result<rmccc_config::BackgroundSettings, IpcError> {
+    let core = state.core.read().await;
+    Ok(core.user_settings.background.clone())
+}
+
+fn checked_background_name(name: &str, allow_video: bool) -> Result<(), IpcError> {
+    if name.is_empty() {
+        return Ok(());
+    }
+    if name.contains(['/', '\\']) || name == "." || name == ".." {
+        return Err(IpcError {
+            code: ErrorCode::ValidationError,
+            message: "background file name must be a plain file name".into(),
+            retryable: false,
+        });
+    }
+    let path = Path::new(name);
+    let valid = if allow_video {
+        path.extension()
+            .and_then(|ext| ext.to_str())
+            .is_some_and(|ext| ext.eq_ignore_ascii_case("mp4"))
+    } else {
+        path.extension()
+            .and_then(|ext| ext.to_str())
+            .is_some_and(|ext| {
+                BACKGROUND_IMAGE_EXTENSIONS
+                    .iter()
+                    .any(|allowed| ext.eq_ignore_ascii_case(allowed))
+            })
+    };
+    if !valid {
+        return Err(IpcError {
+            code: ErrorCode::ValidationError,
+            message: "unsupported background file type".into(),
+            retryable: false,
+        });
+    }
+    Ok(())
+}
+
+#[tauri::command]
+#[tracing::instrument(skip(state, settings))]
+pub async fn background_settings_set(
+    state: tauri::State<'_, AppState>,
+    settings: rmccc_config::BackgroundSettings,
+) -> Result<rmccc_config::BackgroundSettings, IpcError> {
+    checked_background_name(&settings.image.file, false)?;
+    checked_background_name(&settings.video.file, true)?;
+    if settings.carousel_interval_minutes == 0 || settings.carousel_interval_minutes > 24 * 60 {
+        return Err(IpcError {
+            code: ErrorCode::ValidationError,
+            message: "carousel interval must be between 1 minute and 24 hours".into(),
+            retryable: false,
+        });
+    }
+
+    let mut core = state.core.write().await;
+    let dir = rmccc_config::paths::background_dir(&core.data_dir);
+    std::fs::create_dir_all(&dir).map_err(io_error)?;
+    let dir = std::fs::canonicalize(&dir).map_err(io_error)?;
+    for name in [&settings.image.file, &settings.video.file] {
+        if name.is_empty() {
+            continue;
+        }
+        let path = dir.join(name);
+        let resolved = std::fs::canonicalize(&path).map_err(|error| IpcError {
+            code: ErrorCode::ValidationError,
+            message: format!("background file is not accessible: {error}"),
+            retryable: false,
+        })?;
+        if !resolved.starts_with(&dir) {
+            return Err(IpcError {
+                code: ErrorCode::ValidationError,
+                message: "background file escapes the Background directory".into(),
+                retryable: false,
+            });
+        }
+    }
+    core.user_settings.background = settings.clone();
+    let path = rmccc_config::paths::launcher_settings_path(&core.data_dir);
+    let content = core.settings_json().map_err(|error| IpcError {
+        code: ErrorCode::Unknown,
+        message: error.to_string(),
+        retryable: false,
+    })?;
+    core.file_saver.save(path, content);
+    core.file_saver.wait_for_all_saves();
+    Ok(settings)
+}
+
+fn io_error(error: std::io::Error) -> IpcError {
+    IpcError {
+        code: ErrorCode::Unknown,
+        message: error.to_string(),
+        retryable: false,
+    }
 }
 
 #[cfg(test)]

@@ -70,6 +70,13 @@ pub fn generate_types() -> Result<String, String> {
         ts::<rmccc_config::AppConfig>()?,
         ts::<rmccc_config::LauncherState>()?,
         ts::<rmccc_config::UserSettings>()?,
+        ts::<rmccc_config::BackgroundSettings>()?,
+        ts::<rmccc_config::BackgroundSelection>()?,
+        ts::<rmccc_config::BackgroundImageMode>()?,
+        ts::<crate::commands::external::BackgroundFileView>()?,
+        ts::<crate::commands::external::BackgroundCatalogView>()?,
+        ts::<crate::commands::data_paths::DataLocationView>()?,
+        ts::<crate::commands::data_paths::DataModeSwitchResult>()?,
         ts::<rmccc_error::IpcError>()?,
         ts::<rmccc_error::ErrorCode>()?,
         ts::<crate::commands::external::BackgroundVideoAsset>()?,
@@ -198,7 +205,14 @@ pub fn generate_types() -> Result<String, String> {
         out.push_str(t);
         out.push('\n');
     }
-    Ok(out)
+    // ts-rs emits trailing spaces after struct fields; keep the generated
+    // file clean so `git diff --check` stays usable.
+    Ok(out
+        .lines()
+        .map(str::trim_end)
+        .collect::<Vec<_>>()
+        .join("\n")
+        + "\n")
 }
 
 /// 将生成的类型写入 `src/ipc/types.ts`（相对 src-tauri manifest 目录）。

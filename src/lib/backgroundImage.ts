@@ -95,6 +95,13 @@ export function setBackgroundImageEnabled(enabled: boolean): void {
   persist({ ...prefs(), enabled });
 }
 
+/** Apply a file selected from the centralized Background catalog. */
+export function applyBackgroundImage(path: string, enabled: boolean, dim: number): void {
+  invalidatePreparation();
+  setIssueSignal("");
+  persist({ path, enabled, dim: clampDim(dim) });
+}
+
 export function setBackgroundImageDim(dim: number): void {
   persist({ ...prefs(), dim: clampDim(dim) });
 }

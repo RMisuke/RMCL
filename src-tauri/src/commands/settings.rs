@@ -151,10 +151,12 @@ pub async fn settings_set(
     }
 
     // P4：经 FileSaver 防抖写盘（200ms 合并连续 settings_set），退出时统一 flush。
+    // 单文件 settings.json 同时包含 config/state/user 三段，保存前先同步。
     let data_dir = core.config.resolved_data_dir();
     let path = rmccc_config::paths::launcher_settings_path(&data_dir);
-    let content = serde_json::to_string_pretty(&core.config)?;
+    let content = core.settings_json()?;
     core.file_saver.save(path, content);
+    core.file_saver.wait_for_all_saves();
 
     Ok(core.config.clone())
 }
@@ -305,9 +307,10 @@ pub async fn settings_set_user(
 
     // P4：与 settings_set 一致，经 FileSaver 防抖写盘并在退出时统一 flush。
     let data_dir = core.config.resolved_data_dir();
-    let path = rmccc_config::paths::user_settings_path(&data_dir);
-    let content = serde_json::to_string_pretty(&core.user_settings)?;
+    let path = rmccc_config::paths::launcher_settings_path(&data_dir);
+    let content = core.settings_json()?;
     core.file_saver.save(path, content);
+    core.file_saver.wait_for_all_saves();
 
     Ok(core.user_settings.clone())
 }

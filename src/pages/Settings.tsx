@@ -10,8 +10,8 @@ import { PageHeader } from "../components/PageHeader";
 import { RmButton, RmIconButton, RmInput, RmSelect, RmSwitch, RmTag } from "../components/rm/controls";
 import { RmDialog, RmMenu } from "../components/rm/overlays";
 import { RmCard, RmSideTabs, RmListRow, RmAdvancedSection, RmFieldRow, RmEmptyState, RmErrorState } from "../components/rm/surfaces";
-import { settings as settingsApi, userSettings, instances, gameDirectories, logs, external, mcp as mcpApi, ai as aiApi, plugins as pluginsApi, dashboard, storage } from "../ipc/api";
-import type { AppInfoView, JavaInfo, InstanceDetail, LocaleInfo, McpToolView, ThemeTokens, GlobalGameSettings, GameDirectory, StorageOverview } from "../ipc/types";
+import { settings as settingsApi, userSettings, instances, gameDirectories, logs, external, mcp as mcpApi, ai as aiApi, plugins as pluginsApi, dashboard, storage, dataPaths } from "../ipc/api";
+import type { AppInfoView, JavaInfo, InstanceDetail, LocaleInfo, McpToolView, ThemeTokens, GlobalGameSettings, GameDirectory, StorageOverview, DataLocationView } from "../ipc/types";
 import { Icon } from "../components/icons";
 import { settingsStore } from "../stores/settings";
 import { aiStore } from "../stores/ai";
@@ -36,22 +36,24 @@ import type { TranslationKey } from "../i18n/locales/messages";
 import { elidePath } from "../lib/format";
 import { useHashTab } from "../lib/useHashTab";
 import { homeCardBlur, homeCardOpacity, panelOpacity, setHomeCardBlur, setHomeCardOpacity, setPanelOpacity } from "../lib/glass";
+import { backgroundVideoIssue } from "../lib/backgroundVideo";
+import { backgroundImageIssue } from "../lib/backgroundImage";
 import {
-  backgroundVideo,
-  backgroundVideoIssue,
-  clearBackgroundVideo,
-  pickBackgroundVideo,
-  setBackgroundVideoDim,
-  setBackgroundVideoEnabled,
-} from "../lib/backgroundVideo";
-import {
-  backgroundImage,
-  backgroundImageIssue,
-  clearBackgroundImage,
-  pickBackgroundImage,
-  setBackgroundImageDim,
-  setBackgroundImageEnabled,
-} from "../lib/backgroundImage";
+  backgroundCatalog,
+  backgroundLibrarySettings,
+  backgroundLibrarySaving,
+  openBackgroundFolder,
+  refreshBackgroundCatalog,
+  setCarouselInterval,
+  setChangeOnStartup,
+  setImageDim,
+  setImageEnabled,
+  setImageFile,
+  setImageMode,
+  setVideoDim,
+  setVideoEnabled,
+  setVideoFile,
+} from "../lib/backgroundLibrary";
 
 const SECTIONS: { id: string; icon: "list" | "settings" | "download" | "bot" | "extension" | "wrench" | "info" | "sparkles" | "hard-drive"; label: TranslationKey }[] = [
   { id: "game-defaults", icon: "list", label: "settings.nav.gameDefaults" },
@@ -414,6 +416,8 @@ function General(): JSX.Element {
 
   return (
     <div class="tab-stack">
+      <DataLocationCard />
+
       <RmCard title={t("settings.general.language")}>
         <RmSelect
           value={settingsStore.user()?.locale ?? ""}
@@ -497,6 +501,259 @@ function General(): JSX.Element {
       </RmCard>
     </div>
   );
+}
+
+/** Standard (per-user) vs portable (next to the executable) data root. */
+function DataLocationCard(): JSX.Element {
+  const [location, setLocation] = createSignal<DataLocationView | null>(null);
+  const [target, setTarget] = createSignal<"standard" | "portable">("standard");
+  const [migrate, setMigrate] = createSignal(true);
+  const [busy, setBusy] = createSignal(false);
+
+  onMount(async () => {
+    const res = await dataPaths.get();
+    if (!res.ok) {
+      toast({ message: res.error.message, tone: "error" });
+      return;
+    }
+    setLocation(res.data);
+    setTarget(res.data.mode === "portable" ? "portable" : "standard");
+  });
+
+  const apply = async () => {
+    const current = location();
+    if (!current || busy()) return;
+    const next = target();
+    if (next === current.mode) return;
+    const allowed = await confirmDanger({
+      title: t("settings.general.dataMode.confirmTitle"),
+      body: migrate()
+        ? t("settings.general.dataMode.confirmMigrate")
+        : t("settings.general.dataMode.confirmNoMigrate"),
+      confirmLabel: t("settings.general.dataMode.apply"),
+    });
+    if (!allowed) return;
+    setBusy(true);
+    const res = await dataPaths.switchMode(next, migrate());
+    setBusy(false);
+    if (!res.ok) {
+      toast({ message: res.error.message, tone: "error" });
+      return;
+    }
+    toast({ message: t("settings.general.dataMode.restarting"), tone: "success" });
+  };
+
+  return (
+    <RmCard title={t("settings.general.dataMode.title")}>
+      <p class="muted-line">{t("settings.general.dataMode.hint")}</p>
+      <Show when={location()}>
+        {(loc) => (
+          <div class="kv-grid" style={{ "margin-top": "10px" }}>
+            <span>{t("settings.general.dataMode.current")}</span>
+            <span>{loc().mode === "portable" ? t("settings.general.dataMode.portable") : t("settings.general.dataMode.standard")}</span>
+            <span>{t("settings.general.dataMode.dataDir")}</span>
+            <span class="rm-input-mono" style={{ "font-size": "11px" }}>{loc().data_dir}</span>
+            <span>{t("settings.general.dataMode.gameDir")}</span>
+            <span class="rm-input-mono" style={{ "font-size": "11px" }}>{loc().game_root}</span>
+            <span>{t("settings.general.dataMode.backgroundDir")}</span>
+            <span class="rm-input-mono" style={{ "font-size": "11px" }}>{loc().background_dir}</span>
+          </div>
+        )}
+      </Show>
+      <div class="btn-row" style={{ "margin-top": "12px" }}>
+        <RmSelect
+          value={target()}
+          onChange={(value) => setTarget(value === "portable" ? "portable" : "standard")}
+          options={[
+            { value: "standard", label: t("settings.general.dataMode.standard") },
+            { value: "portable", label: t("settings.general.dataMode.portable") },
+          ]}
+        />
+        <RmSwitch checked={migrate()} onChange={setMigrate} />
+        <span>{t("settings.general.dataMode.migrate")}</span>
+        <RmButton
+          size="sm"
+          disabled={busy() || !location() || target() === location()?.mode}
+          onClick={() => void apply()}
+        >
+          {busy() ? t("settings.general.dataMode.switching") : t("settings.general.dataMode.apply")}
+        </RmButton>
+      </div>
+      <p class="muted-line">{migrate() ? t("settings.general.dataMode.migrateHint") : t("settings.general.dataMode.noMigrateHint")}</p>
+    </RmCard>
+  );
+}
+
+/** Wallpapers are selected from `SNGL/Background/` instead of arbitrary paths. */
+function BackgroundLibraryCard(): JSX.Element {
+  const settings = () => backgroundLibrarySettings();
+  const catalog = () => backgroundCatalog();
+
+  const run = async (action: Promise<{ ok: boolean; message?: string }>) => {
+    const result = await action;
+    if (!result.ok) toast({ message: result.message ?? "", tone: "error" });
+  };
+
+  onMount(() => {
+    void refreshBackgroundCatalog();
+  });
+
+  const imageOptions = () => [
+    { value: "", label: t("settings.appearance.background.none") },
+    ...catalog().images.map((file) => ({ value: file.name, label: file.name })),
+  ];
+  const videoOptions = () => [
+    { value: "", label: t("settings.appearance.background.none") },
+    ...catalog().videos.map((file) => ({ value: file.name, label: file.name })),
+  ];
+
+  return (
+    <RmCard title={t("settings.appearance.background.title")}>
+      <p class="muted-line">{t("settings.appearance.background.desc")}</p>
+      <div class="btn-row" style={{ "margin-top": "10px" }}>
+        <RmButton
+          size="sm"
+          icon="folder"
+          onClick={async () => {
+            const result = await openBackgroundFolder();
+            if (!result.ok) {
+              toast({ message: result.message ?? "", tone: "error" });
+              return;
+            }
+            toast({ message: t("settings.appearance.background.opened"), tone: "success" });
+          }}
+        >
+          {t("settings.appearance.background.openFolder")}
+        </RmButton>
+        <RmButton size="sm" icon="refresh" onClick={() => void refreshBackgroundCatalog()}>
+          {t("common.refresh")}
+        </RmButton>
+        <span class="muted-line">{savingLabel()}</span>
+      </div>
+
+      <RmFieldRow
+        label={t("settings.appearance.image.toggle")}
+        hint={<span class="muted-line">{t("settings.appearance.background.imageHint")}</span>}
+      >
+        <RmSwitch
+          checked={settings().image.enabled}
+          disabled={!settings().image.file}
+          onChange={(value) => void run(setImageEnabled(value))}
+        />
+      </RmFieldRow>
+      <RmFieldRow label={t("settings.appearance.background.imageSource")}>
+        <RmSelect
+          value={settings().image.file}
+          onChange={(value) => void run(setImageFile(value))}
+          options={imageOptions()}
+        />
+      </RmFieldRow>
+      <Show when={settings().image.file}>
+        <RmFieldRow label={t("settings.appearance.background.imageMode")}>
+          <RmSelect
+            value={settings().image_mode}
+            onChange={(value) => void run(setImageMode(value as "single" | "carousel"))}
+            options={[
+              { value: "single", label: t("settings.appearance.background.modeSingle") },
+              { value: "carousel", label: t("settings.appearance.background.modeCarousel") },
+            ]}
+          />
+        </RmFieldRow>
+        <Show when={settings().image_mode === "carousel"}>
+          <RmFieldRow label={t("settings.appearance.background.interval")}>
+            <input
+              class="rm-input"
+              type="number"
+              min="1"
+              max="1440"
+              value={settings().carousel_interval_minutes}
+              onInput={(event) => void run(setCarouselInterval(Number(event.currentTarget.value) || 1))}
+            />
+          </RmFieldRow>
+          <RmFieldRow label={t("settings.appearance.background.changeOnStartup")}>
+            <RmSwitch
+              checked={settings().change_on_startup}
+              onChange={(value) => void run(setChangeOnStartup(value))}
+            />
+          </RmFieldRow>
+        </Show>
+        <RmFieldRow
+          label={t("settings.appearance.image.dim")}
+          hint={<span class="muted-line">{t("settings.appearance.image.dimHint")}</span>}
+        >
+          <div class="glass-opacity-control">
+            <input
+              type="range"
+              min="0"
+              max="80"
+              step="1"
+              value={settings().image.dim}
+              aria-label={t("settings.appearance.image.dim")}
+              onInput={(event) => void run(setImageDim(Number(event.currentTarget.value)))}
+            />
+            <output>{settings().image.dim}%</output>
+          </div>
+        </RmFieldRow>
+      </Show>
+
+      <RmFieldRow
+        label={t("settings.appearance.video.toggle")}
+        hint={<span class="muted-line">{t("settings.appearance.background.videoHint")}</span>}
+      >
+        <RmSwitch
+          checked={settings().video.enabled}
+          disabled={!settings().video.file}
+          onChange={(value) => void run(setVideoEnabled(value))}
+        />
+      </RmFieldRow>
+      <RmFieldRow label={t("settings.appearance.background.videoSource")}>
+        <RmSelect
+          value={settings().video.file}
+          onChange={(value) => void run(setVideoFile(value))}
+          options={videoOptions()}
+        />
+      </RmFieldRow>
+      <Show when={settings().video.file}>
+        <RmFieldRow
+          label={t("settings.appearance.video.dim")}
+          hint={<span class="muted-line">{t("settings.appearance.video.dimHint")}</span>}
+        >
+          <div class="glass-opacity-control">
+            <input
+              type="range"
+              min="0"
+              max="80"
+              step="1"
+              value={settings().video.dim}
+              aria-label={t("settings.appearance.video.dim")}
+              onInput={(event) => void run(setVideoDim(Number(event.currentTarget.value)))}
+            />
+            <output>{settings().video.dim}%</output>
+          </div>
+        </RmFieldRow>
+      </Show>
+
+      <Show when={backgroundImageIssue()}>
+        <p class="wallpaper-note is-error">{backgroundImageIssue()}</p>
+      </Show>
+      <Show when={backgroundVideoIssue()}>
+        <p class="wallpaper-note is-error">{backgroundVideoIssue()}</p>
+      </Show>
+      <p class="wallpaper-note">{t("settings.appearance.background.formats")}</p>
+      <p class="wallpaper-note">{t("settings.appearance.image.priority")}</p>
+      <Show when={settings().video.enabled && settingsStore.motionEnabled()}>
+        <p class="wallpaper-note">{t("settings.appearance.video.performanceNote")}</p>
+        <p class="wallpaper-note">{t("settings.appearance.video.nativeCacheNote")}</p>
+      </Show>
+      <Show when={!settingsStore.motionEnabled()}>
+        <p class="wallpaper-note">{t("settings.appearance.video.motionOff")}</p>
+      </Show>
+    </RmCard>
+  );
+}
+
+function savingLabel(): string {
+  return backgroundLibrarySaving() ? t("settings.appearance.background.saving") : "";
 }
 
 // ── Appearance（从通用拆出，2026-10-25）：配色 + 动效 ──
@@ -706,176 +963,7 @@ function Appearance(): JSX.Element {
         </RmFieldRow>
       </RmCard>
 
-      <RmCard title={t("settings.appearance.image.title")}>
-        <RmFieldRow
-          label={t("settings.appearance.image.toggle")}
-          hint={<span class="muted-line">{t("settings.appearance.image.hint")}</span>}
-        >
-          <RmSwitch
-            checked={backgroundImage().enabled}
-            disabled={!backgroundImage().path}
-            onChange={(value) => {
-              setBackgroundImageEnabled(value);
-              if (value) setBackgroundVideoEnabled(false);
-            }}
-          />
-        </RmFieldRow>
-        <RmFieldRow label={t("settings.appearance.image.file")}>
-          <div class="wallpaper-file-control">
-            <span
-              class={`wallpaper-file-path${backgroundImage().path ? "" : " is-empty"}`}
-              title={backgroundImage().path || undefined}
-            >
-              {backgroundImage().path
-                ? elidePath(backgroundImage().path, 44)
-                : t("settings.appearance.image.empty")}
-            </span>
-            <RmButton
-              size="sm"
-              icon="folder"
-              onClick={() => {
-                void pickBackgroundImage().then((res) => {
-                  if (!res.ok) {
-                    toast({ message: res.message ?? "", tone: "error" });
-                  } else if (res.selected) {
-                    setBackgroundVideoEnabled(false);
-                  }
-                });
-              }}
-            >
-              {backgroundImage().path
-                ? t("settings.appearance.image.replace")
-                : t("settings.appearance.image.pick")}
-            </RmButton>
-            <Show when={backgroundImage().path}>
-              <RmIconButton
-                icon="trash"
-                label={t("settings.appearance.image.clear")}
-                danger
-                onClick={() => clearBackgroundImage()}
-              />
-            </Show>
-          </div>
-        </RmFieldRow>
-        <Show when={backgroundImage().path}>
-          <RmFieldRow
-            label={t("settings.appearance.image.dim")}
-            hint={<span class="muted-line">{t("settings.appearance.image.dimHint")}</span>}
-          >
-            <div class="glass-opacity-control">
-              <input
-                type="range"
-                min="0"
-                max="80"
-                step="1"
-                value={backgroundImage().dim}
-                aria-label={t("settings.appearance.image.dim")}
-                onInput={(event) => setBackgroundImageDim(Number(event.currentTarget.value))}
-              />
-              <output>{backgroundImage().dim}%</output>
-            </div>
-          </RmFieldRow>
-        </Show>
-        <Show when={backgroundImageIssue()}>
-          <p class="wallpaper-note is-error">
-            {backgroundImageIssue() === "decode"
-              ? t("settings.appearance.image.issue")
-              : backgroundImageIssue()}
-          </p>
-        </Show>
-        <p class="wallpaper-note">{t("settings.appearance.image.formats")}</p>
-        <p class="wallpaper-note">{t("settings.appearance.image.priority")}</p>
-      </RmCard>
-
-      <RmCard title={t("settings.appearance.video.title")}>
-        <RmFieldRow
-          label={t("settings.appearance.video.toggle")}
-          hint={<span class="muted-line">{t("settings.appearance.video.hint")}</span>}
-        >
-          <RmSwitch
-            checked={backgroundVideo().enabled}
-            disabled={!backgroundVideo().path}
-            onChange={(value) => {
-              setBackgroundVideoEnabled(value);
-              if (value) setBackgroundImageEnabled(false);
-            }}
-          />
-        </RmFieldRow>
-        <RmFieldRow label={t("settings.appearance.video.file")}>
-          <div class="wallpaper-file-control">
-            <span
-              class={`wallpaper-file-path${backgroundVideo().path ? "" : " is-empty"}`}
-              title={backgroundVideo().path || undefined}
-            >
-              {backgroundVideo().path
-                ? elidePath(backgroundVideo().path, 44)
-                : t("settings.appearance.video.empty")}
-            </span>
-            <RmButton
-              size="sm"
-              icon="folder"
-              onClick={() => {
-                void pickBackgroundVideo().then((res) => {
-                  if (!res.ok) {
-                    toast({ message: res.message ?? "", tone: "error" });
-                  } else if (res.selected) {
-                    setBackgroundImageEnabled(false);
-                  }
-                });
-              }}
-            >
-              {backgroundVideo().path
-                ? t("settings.appearance.video.replace")
-                : t("settings.appearance.video.pick")}
-            </RmButton>
-            <Show when={backgroundVideo().path}>
-              <RmIconButton
-                icon="trash"
-                label={t("settings.appearance.video.clear")}
-                danger
-                onClick={() => clearBackgroundVideo()}
-              />
-            </Show>
-          </div>
-        </RmFieldRow>
-        <Show when={backgroundVideo().path}>
-          <RmFieldRow
-            label={t("settings.appearance.video.dim")}
-            hint={<span class="muted-line">{t("settings.appearance.video.dimHint")}</span>}
-          >
-            <div class="glass-opacity-control">
-              <input
-                type="range"
-                min="0"
-                max="80"
-                step="1"
-                value={backgroundVideo().dim}
-                aria-label={t("settings.appearance.video.dim")}
-                onInput={(event) => setBackgroundVideoDim(Number(event.currentTarget.value))}
-              />
-              <output>{backgroundVideo().dim}%</output>
-            </div>
-          </RmFieldRow>
-        </Show>
-        <Show when={backgroundVideoIssue()}>
-          <p class="wallpaper-note is-error">
-            {backgroundVideoIssue() === "decode"
-              ? t("settings.appearance.video.issue")
-              : backgroundVideoIssue()}
-          </p>
-        </Show>
-        <Show when={backgroundVideo().enabled && settingsStore.motionEnabled()}>
-          <p class="wallpaper-note">
-            {t("settings.appearance.video.performanceNote")}
-          </p>
-          <p class="wallpaper-note">
-            {t("settings.appearance.video.nativeCacheNote")}
-          </p>
-        </Show>
-        <Show when={!settingsStore.motionEnabled()}>
-          <p class="wallpaper-note">{t("settings.appearance.video.motionOff")}</p>
-        </Show>
-      </RmCard>
+      <BackgroundLibraryCard />
 
       <RmCard title={t("settings.general.motion")}>
         <RmFieldRow

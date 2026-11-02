@@ -4,10 +4,10 @@
 //!
 //! P3: settings are schema-versioned (`$schema` marker + compatibility state
 //! machine in [`schema`]), loaded through the generic [`setting_file::SettingFile`]
-//! accessor and split into three domains:
-//! - `config/launcher-settings.json` — launcher settings ([`AppConfig`]);
-//! - `state/launcher-state.json` — runtime state, loss-tolerant ([`LauncherState`]);
-//! - `user-settings.json` — user-level preferences ([`UserSettings`]).
+//! accessor and consolidated into one `settings.json` document:
+//! - top-level launcher settings ([`AppConfig`]);
+//! - embedded runtime state ([`LauncherState`]);
+//! - embedded user preferences ([`UserSettings`]).
 
 pub mod file_saver;
 pub mod file_utils;
@@ -145,7 +145,7 @@ fn default_priority() -> String {
 
 // ── Launcher settings (AppConfig) ──
 
-/// Global application configuration (persisted as `config/launcher-settings.json`).
+/// Global application configuration (persisted as `settings.json`).
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
 #[ts(export_to = "types.ts")]
 pub struct AppConfig {
@@ -232,6 +232,89 @@ pub struct AppConfig {
     #[serde(skip, default)]
     #[ts(skip)]
     pub backup_on_next_save: bool,
+    /// Runtime selection embedded in the single settings file.
+    #[serde(default)]
+    pub launcher_state: LauncherState,
+    /// User-level preferences embedded in the single settings file.
+    #[serde(default)]
+    pub user_settings: UserSettings,
+}
+
+/// One background file selected by name from `Background/`.
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export_to = "types.ts")]
+pub struct BackgroundSelection {
+    /// Bare file name (never an absolute path); resolved against `Background/`.
+    #[serde(default)]
+    pub file: String,
+    #[serde(default)]
+    pub enabled: bool,
+    /// Black scrim opacity, 0–80 %.
+    #[serde(default = "default_background_dim")]
+    pub dim: u8,
+}
+
+fn default_background_dim() -> u8 {
+    20
+}
+
+impl Default for BackgroundSelection {
+    fn default() -> Self {
+        Self {
+            file: String::new(),
+            enabled: false,
+            dim: default_background_dim(),
+        }
+    }
+}
+
+/// How the still-image wallpaper is chosen.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "lowercase")]
+#[ts(export_to = "types.ts")]
+pub enum BackgroundImageMode {
+    Single,
+    Carousel,
+}
+
+impl Default for BackgroundImageMode {
+    fn default() -> Self {
+        Self::Single
+    }
+}
+
+/// Persisted background policy. Files themselves live in `{data_dir}/Background`.
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export_to = "types.ts")]
+pub struct BackgroundSettings {
+    #[serde(default)]
+    pub image: BackgroundSelection,
+    #[serde(default)]
+    pub video: BackgroundSelection,
+    #[serde(default)]
+    pub image_mode: BackgroundImageMode,
+    /// Carousel interval in minutes (clamped to 1..=1440 when used).
+    #[serde(default = "default_carousel_interval")]
+    pub carousel_interval_minutes: u32,
+    /// Pick a different carousel image on each launcher start.
+    #[serde(default)]
+    pub change_on_startup: bool,
+}
+
+fn default_carousel_interval() -> u32 {
+    30
+}
+
+impl Default for BackgroundSettings {
+    fn default() -> Self {
+        Self {
+            image: BackgroundSelection::default(),
+            video: BackgroundSelection::default(),
+            image_mode: BackgroundImageMode::Single,
+            carousel_interval_minutes: default_carousel_interval(),
+            change_on_startup: false,
+        }
+    }
 }
 
 fn default_schema() -> ConfigSchema {
@@ -275,6 +358,8 @@ impl Default for AppConfig {
             extra: BTreeMap::new(),
             savable: true,
             backup_on_next_save: false,
+            launcher_state: LauncherState::default(),
+            user_settings: UserSettings::default(),
         }
     }
 }
@@ -306,7 +391,9 @@ impl AppConfig {
     /// `$schema` so existing settings are preserved. Idempotent.
     fn migrate_legacy(data_dir: &Path) -> Result<()> {
         let legacy = data_dir.join("config.json");
-        let target = paths::launcher_settings_path(data_dir);
+        // Keep this at the *legacy* section path so the consolidation pass
+        // below can also pick up the old launcher state and user settings.
+        let target = paths::legacy_launcher_settings_path(data_dir);
         if !legacy.exists() || target.exists() {
             return Ok(());
         }
@@ -327,16 +414,18 @@ impl AppConfig {
         Ok(())
     }
 
-    /// Loads launcher settings from `config/launcher-settings.json`, falling
-    /// back to defaults when the file is missing/malformed/incompatible and
-    /// migrating the legacy `config.json` when present.
+    /// Loads all launcher settings from the single `settings.json`.
+    ///
+    /// Legacy installations are migrated once: `config/launcher-settings.json`,
+    /// `state/launcher-state.json` and `user-settings.json` are folded into the
+    /// new file, then archived under `backup/pre-sngl/`. The operation is
+    /// idempotent and never deletes the only copy before the new file is
+    /// successfully written.
     pub fn load(data_dir: &Path) -> Result<Self> {
         Self::migrate_legacy(data_dir)?;
+        Self::migrate_to_single_file(data_dir)?;
         let file = Self::setting_file(data_dir);
         let result = file.load(None);
-        // 损坏文件：备份旧内容并落盘默认值；否则保持只读/原样。
-        // 保存的两种情形：损坏文件已标记需备份重建，或 `$schema` 被升级
-        // （旧版本号 / 旧命名空间）——后者让命名空间变更立即落盘。
         if result.access.can_save() && (result.value.backup_on_next_save || result.schema_upgraded)
         {
             let mut value = result.value;
@@ -346,7 +435,73 @@ impl AppConfig {
         Ok(result.value)
     }
 
-    /// Saves launcher settings atomically through the `$schema`-aware accessor.
+    fn migrate_to_single_file(data_dir: &Path) -> Result<()> {
+        let target = paths::launcher_settings_path(data_dir);
+        if target.exists() {
+            return Ok(());
+        }
+
+        let legacy_config = paths::legacy_launcher_settings_path(data_dir);
+        let legacy_state = paths::legacy_launcher_state_path(data_dir);
+        let legacy_user = paths::legacy_user_settings_path(data_dir);
+        let has_legacy = legacy_config.exists() || legacy_state.exists() || legacy_user.exists();
+        if !has_legacy {
+            return Ok(());
+        }
+
+        let mut config = std::fs::read_to_string(&legacy_config)
+            .ok()
+            .and_then(|content| serde_json::from_str::<Self>(&content).ok())
+            .unwrap_or_default();
+        config.launcher_state = std::fs::read_to_string(&legacy_state)
+            .ok()
+            .and_then(|content| serde_json::from_str::<LauncherState>(&content).ok())
+            .unwrap_or_default();
+        config.user_settings = std::fs::read_to_string(&legacy_user)
+            .ok()
+            .and_then(|content| serde_json::from_str::<UserSettings>(&content).ok())
+            .unwrap_or_default();
+        config.savable = true;
+        // The consolidated file should describe the *current* layout, not the
+        // absolute path an older install happened to live at.
+        if config.data_dir.as_deref() == Some(data_dir) {
+            config.data_dir = None;
+        }
+        if config.game_root_dir.as_deref() == Some(data_dir.join("instances").as_path()) {
+            config.game_root_dir = None;
+        }
+
+        if let Err(error) = config.save(data_dir) {
+            tracing::warn!(error = %error, "Could not write consolidated settings.json");
+            return Ok(());
+        }
+
+        for source in [legacy_config, legacy_state, legacy_user] {
+            if !source.exists() {
+                continue;
+            }
+            let relative = source
+                .strip_prefix(data_dir)
+                .unwrap_or(source.as_path())
+                .to_path_buf();
+            let destination = data_dir.join("backup").join("pre-sngl").join(relative);
+            if let Some(parent) = destination.parent() {
+                let _ = std::fs::create_dir_all(parent);
+            }
+            if let Err(error) = std::fs::rename(&source, &destination) {
+                tracing::debug!(
+                    from = %source.display(),
+                    to = %destination.display(),
+                    error = %error,
+                    "Could not archive legacy settings file"
+                );
+            }
+        }
+        tracing::info!(path = %target.display(), "Consolidated launcher settings into settings.json");
+        Ok(())
+    }
+
+    /// Saves all launcher settings atomically through the `$schema`-aware accessor.
     pub fn save(&self, data_dir: &Path) -> Result<()> {
         let file = Self::setting_file(data_dir);
         let mut value = self.clone();
@@ -376,7 +531,7 @@ impl AppConfig {
     pub fn resolved_game_root(&self) -> PathBuf {
         self.game_root_dir
             .clone()
-            .unwrap_or_else(|| self.resolved_data_dir().join("instances"))
+            .unwrap_or_else(|| paths::default_game_dir_for(&self.resolved_data_dir()))
     }
 
     /// Resolve the game directory for a specific profile.
@@ -395,9 +550,9 @@ impl AppConfig {
 
 // ── Launcher state (loss-tolerant runtime state) ──
 
-/// Runtime state that may be lost safely, persisted as
-/// `state/launcher-state.json`. Malformed files are backed up and rebuilt from
-/// defaults instead of blocking startup.
+/// Runtime state that may be lost safely, persisted inside `settings.json`.
+/// Malformed files are backed up and rebuilt from defaults instead of blocking
+/// startup.
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
 #[ts(export_to = "types.ts")]
 pub struct LauncherState {
@@ -487,7 +642,7 @@ impl LauncherState {
 
 // ── User settings (user-level preferences) ──
 
-/// User-level preferences, persisted as `user-settings.json`.
+/// User-level preferences, persisted inside `settings.json`.
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
 #[ts(export_to = "types.ts")]
 pub struct UserSettings {
@@ -508,6 +663,9 @@ pub struct UserSettings {
     /// Whether to check for launcher updates on startup.
     #[serde(default = "default_check_updates")]
     pub check_updates: bool,
+    /// Wallpaper choices and carousel policy.
+    #[serde(default)]
+    pub background: BackgroundSettings,
     #[serde(skip, default)]
     #[ts(skip)]
     pub savable: bool,
@@ -531,6 +689,7 @@ impl Default for UserSettings {
             locale: None,
             theme: None,
             check_updates: true,
+            background: BackgroundSettings::default(),
             savable: true,
             backup_on_next_save: false,
         }
@@ -654,7 +813,7 @@ mod tests {
         let config = AppConfig::load(&dir).unwrap();
         assert_eq!(config.default_max_memory_mb, 4096);
         // 损坏文件被备份并重建为默认值。
-        assert!(path.with_file_name("launcher-settings.json.1").exists());
+        assert!(path.with_file_name("settings.json.1").exists());
         assert!(paths::launcher_settings_path(&dir).exists());
         let _ = std::fs::remove_dir_all(&dir);
     }

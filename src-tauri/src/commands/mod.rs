@@ -4,6 +4,7 @@ pub mod ai;
 pub mod auth;
 pub mod cache;
 pub mod dashboard;
+pub mod data_paths;
 pub mod external;
 pub mod instance;
 pub mod launch;

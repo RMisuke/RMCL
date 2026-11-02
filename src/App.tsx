@@ -20,6 +20,7 @@ import { initStores } from "./stores/init";
 import { initI18n } from "./i18n";
 import { initTheme } from "./theme";
 import { initAdaptiveTheme } from "./lib/adaptiveTheme";
+import { initBackgroundLibrary } from "./lib/backgroundLibrary";
 import { reportFrontendMessage } from "./ipc/api";
 import { ThemeBackdrop } from "./components/ThemeSurface";
 import { BackgroundVideo } from "./components/BackgroundVideo";
@@ -100,6 +101,7 @@ const App: ParentComponent = (props) => {
       await Promise.all([initI18n(), initTheme()]);
       await initAdaptiveTheme();
       initStores();
+      void initBackgroundLibrary();
       await win.show();
       await win.setFocus();
       await ensureReachable(win);

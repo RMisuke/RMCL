@@ -456,6 +456,26 @@ export const backgroundMedia = {
     safeInvoke<string>("background_image_prepare", { path }),
 };
 
+// ── 集中式 Background/ 目录 ──
+
+export const backgroundLibrary = {
+  catalog: () =>
+    safeInvoke<import("./types").BackgroundCatalogView>("background_catalog"),
+  openFolder: () => safeInvoke<string>("background_open_folder"),
+  getSettings: () =>
+    safeInvoke<import("./types").BackgroundSettings>("background_settings_get"),
+  setSettings: (settings: import("./types").BackgroundSettings) =>
+    safeInvoke<import("./types").BackgroundSettings>("background_settings_set", { settings }),
+};
+
+// ── 数据根（标准 / 便携）──
+
+export const dataPaths = {
+  get: () => safeInvoke<import("./types").DataLocationView>("data_mode_get"),
+  switchMode: (mode: "standard" | "portable", migrate: boolean) =>
+    safeInvoke<import("./types").DataModeSwitchResult>("data_mode_switch", { mode, migrate }),
+};
+
 // ── Plugins（Phase 2 声明式插件）──
 
 export const plugins = {

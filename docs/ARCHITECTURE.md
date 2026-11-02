@@ -527,7 +527,6 @@ tauri = { version = "2", features = ["tray-icon"] }
 tauri-build = { version = "2", features = [] }
 tauri-plugin-updater = "2"          # Auto-update
 tauri-plugin-process = "2"          # Process utilities
-tauri-plugin-window-state = "2"     # Persist window size/position
 tauri-plugin-deep-link = "2"        # rmccc:// protocol handler
 ```
 
@@ -611,7 +610,7 @@ impl TokenVault {
 
 ### 4.2 API Key 管理
 
-敏感 API Key（如 CurseForge）不入 `config/launcher-settings.json`：
+敏感 API Key（如 CurseForge）不入 `settings.json`：
 
 ```rust
 // Priority order for API keys:
@@ -1666,7 +1665,7 @@ strategy:
 |---------|------------------|
 | Auto-update | `tauri-plugin-updater` — GitHub Releases as update source |
 | System tray | Game running → minimize to tray, show status |
-| Window state | `tauri-plugin-window-state` persists window size/position |
+| Window state | Deliberately not using a separate plugin: state must stay inside the portable `SNGL/settings.json` (window geometry persistence is deferred). |
 | Deep link | `rmccc://profile/{id}` — browser one-click import |
 | Linux min version | Ubuntu 22.04+ (WebKit2GTK 4.0+) |
 
@@ -1675,27 +1674,37 @@ strategy:
 ### 15.1 User Data Directory
 
 ```
-{data_dir}/                          # Platform data dir (CLI `-d` overrides)
+{data_dir}/                          # Standard: platform data dir / SNGL
+├── settings.json                    # Single launcher settings file:
+│                                    # AppConfig + launcher_state + user_settings.background
+├── .standard                        # Mode marker (or .portable next to the executable)
+├── Background/                      # User wallpapers: images + MP4 videos
 ├── config/
-│   ├── launcher-settings.json       # Launcher behavior (paths/download/UI)
 │   ├── game-settings.json           # Global game-settings preset
 │   └── game-directories.json        # Registered game roots + selected instance
 ├── state/
-│   ├── launcher-state.json          # Runtime state (loss-tolerant)
 │   └── instance-migration-v2.json   # One-shot legacy profile migration marker
-├── user-settings.json               # User-level preferences
 ├── .key                             # AES-256 encryption key (600 / icacls)
 ├── accounts.json                    # Plaintext account metadata + selected
 ├── private/                         # Encrypted account/agent credentials
 ├── .api_keys/                       # API keys (separate from settings)
 ├── cache/                           # Offline caches + SHA1 object cache
+│   └── webview2/                    # Windows WebView2 cache (WEBVIEW2_USER_DATA_FOLDER)
+├── plugins/  plugin-data/  plugin-state/
+├── dashboard/                       # Layout / theme data
 ├── profiles/                        # LEGACY read-only profiles (migration only)
-├── instances/                       # Default managed game root (.minecraft equivalent)
+├── instances/                       # Standard mode game root (.minecraft equivalent)
 │   ├── versions/                    # Instance source of truth
 │   ├── libraries/  assets/          # Shared across instances
 │   └── launcher_profiles.json       # Created on demand (Forge/LiteLoader need it)
 ├── agent/                           # Audit directory (ADR-010; ADR-013)
 └── logs/                            # Launcher logs
+
+# Portable mode (Windows default; opt-in elsewhere):
+<launcher dir>/SNGL/                 # Same layout as {data_dir} above
+<launcher dir>/.minecraft/           # Game root (versions/libraries/assets/...)
+```
+`SNGL` is resolved before `settings.json` is read, so the portable switch cannot live in the settings file it is trying to locate. Legacy `config/launcher-settings.json`, `state/launcher-state.json` and `user-settings.json` are merged into `settings.json` and archived under `backup/pre-sngl/` on first launch. macOS keeps WKWebView's own cache in the OS location; Windows WebView2 is redirected into `cache/webview2`.
 
 {game_dir}/                          # Any registered game root (managed or external)
 ├── versions/

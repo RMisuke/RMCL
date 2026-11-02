@@ -178,9 +178,10 @@ pub async fn dashboard_set_theme_preference(
     core.user_settings.theme = normalized;
 
     let data_dir = core.config.resolved_data_dir();
-    let path = rmccc_config::paths::user_settings_path(&data_dir);
-    let content = serde_json::to_string_pretty(&core.user_settings)?;
+    let path = rmccc_config::paths::launcher_settings_path(&data_dir);
+    let content = core.settings_json()?;
     core.file_saver.save(path, content);
+    core.file_saver.wait_for_all_saves();
     Ok(core.user_settings.clone())
 }
 

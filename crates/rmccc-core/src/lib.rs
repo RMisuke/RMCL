@@ -187,10 +187,10 @@ impl CoreContext {
         tracing::info!(environment = %environment, data_dir = %data_dir.display(), "CoreContext initializing");
 
         let mut config = rmccc_config::AppConfig::load(data_dir)?;
-        // P3：运行状态（可丢失）与设置分离。
-        let launcher_state = rmccc_config::LauncherState::load(data_dir)?;
-        // 用户级偏好（UI 语言等）；locale = None 表示跟随系统。
-        let user_settings = rmccc_config::UserSettings::load(data_dir)?;
+        // The single settings.json carries runtime state and user preferences
+        // as sections. Keep the in-memory split for existing call sites.
+        let launcher_state = config.launcher_state.clone();
+        let user_settings = config.user_settings.clone();
 
         // Ensure config.data_dir reflects the actual directory in use
         // so that resolved_data_dir() and resolved_game_root() respect
@@ -428,6 +428,35 @@ impl CoreContext {
     /// 刷新换号 / 网络错误会原样传播，调用方据此引导用户。
     pub async fn log_in_active_account(&self) -> rmccc_error::Result<Option<rmccc_auth::AuthInfo>> {
         log_in_active_account(self.account_repo.as_ref()).await
+    }
+
+    /// Copy the split in-memory state back into [`rmccc_config::AppConfig`]
+    /// before serialising the single `settings.json`.
+    pub fn sync_settings(&mut self) {
+        self.config.launcher_state = self.launcher_state.clone();
+        self.config.user_settings = self.user_settings.clone();
+    }
+
+    /// Serialise the consolidated settings document.
+    ///
+    /// The layout root is resolved before settings are read, so persisting the
+    /// resolved path would pin a portable install to the disk letter / folder
+    /// it happened to use on first launch. Only keep an explicit override that
+    /// differs from the current layout.
+    pub fn settings_json(&mut self) -> rmccc_error::Result<String> {
+        self.sync_settings();
+        let default_data = rmccc_config::paths::default_data_dir();
+        let default_game = rmccc_config::paths::default_game_dir();
+        self.config.data_dir = if self.data_dir == default_data {
+            None
+        } else {
+            Some(self.data_dir.clone())
+        };
+        if self.config.game_root_dir.as_deref() == Some(default_game.as_path()) {
+            self.config.game_root_dir = None;
+        }
+        serde_json::to_string_pretty(&self.config)
+            .map_err(|error| rmccc_error::RmcccError::Other(error.to_string()))
     }
 
     /// Flushes all pending debounced writes to disk (process exit hook).

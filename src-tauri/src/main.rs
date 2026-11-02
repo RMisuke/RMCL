@@ -14,7 +14,6 @@ use rmccc_config::logging::init_logging;
 use rmccc_config::paths;
 use state::AppState;
 use tauri::Manager;
-use tauri_plugin_window_state::StateFlags;
 
 /// WebView self-check used to diagnose "window opens but stays blank" reports.
 ///
@@ -144,9 +143,30 @@ fn apply_windows_window_chrome(window: &tauri::WebviewWindow) {
     }
 }
 
+#[cfg(target_os = "windows")]
+fn configure_webview2_cache() {
+    // WebView2 reads this before creating the first webview. Keeping it under
+    // the resolved data root makes portable installs self-contained and stops
+    // the browser cache from landing in %LOCALAPPDATA% next to the app.
+    if std::env::var_os("WEBVIEW2_USER_DATA_FOLDER").is_some() {
+        return;
+    }
+    let cache = paths::cache_dir().join("webview2");
+    if let Err(error) = std::fs::create_dir_all(&cache) {
+        tracing::warn!(%error, path = %cache.display(), "Failed to create WebView2 cache dir");
+        return;
+    }
+    std::env::set_var("WEBVIEW2_USER_DATA_FOLDER", &cache);
+    tracing::debug!(path = %cache.display(), "WebView2 cache folder configured");
+}
+
 fn main() {
     // Ensure data directories exist
     paths::ensure_dirs().expect("Failed to create data directories");
+
+    // Keep the WebView2 browser cache inside the SNGL data root on Windows.
+    #[cfg(target_os = "windows")]
+    configure_webview2_cache();
 
     // Initialize logging
     let log_dir = paths::log_dir();
@@ -246,11 +266,6 @@ fn main() {
         .plugin(tauri_plugin_dialog::init())
         // P2-25：启用自动更新（需 release CI 生成 latest.json + 签名密钥）
         .plugin(tauri_plugin_updater::Builder::new().build())
-        .plugin(
-            tauri_plugin_window_state::Builder::new()
-                .with_state_flags(StateFlags::all() & !StateFlags::VISIBLE)
-                .build(),
-        )
         .setup(|app| {
             let data_dir = paths::default_data_dir();
             let app_handle = app.handle().clone();
