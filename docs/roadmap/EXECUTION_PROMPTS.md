@@ -132,10 +132,10 @@ deferred 标记规则：
 ```text
 任务：执行 docs/roadmap/02_phase0.5_product_gaps.md 切片 0.5.1（审计 P2-11、P2-5）。
 
-- 让 src/routes/* 改用 src/ipc/api.ts 分域 wrapper，不再裸 safeInvoke("命令名")。
+- 让 src/pages/* 改用 src/ipc/api.ts 分域 wrapper，不再裸 safeInvoke("命令名")。
 - 删 Dashboard 残留未使用 import（auth/profiles/versions/launch，审计 §10.2）。
 - src/ipc/events.ts 补 INSTANCES_REFRESHED = "instances://refreshed"（后端 12 个常量对齐）。
-- 验收：grep -rn 'safeInvoke(' src/routes 为空（wrapper 内部除外）；pnpm typecheck+build 通过。
+- 验收：grep -rn 'safeInvoke(' src/pages 为空（wrapper 内部除外）；pnpm typecheck+build 通过。
 - 不改后端行为；不改命令签名。
 - 完成后报告，列出仍裸调用的残留点（若有）。
 ```

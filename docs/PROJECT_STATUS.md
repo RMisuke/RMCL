@@ -1,4 +1,4 @@
-# RMCCC 项目现状与继续开发交接（2026-11-02 更新）
+# RMCCC 项目现状与继续开发交接（2026-11-03 更新）
 
 > 本文档是**变更记录与交接入口**，按轮次记录"这轮改了什么"。
 > **完整架构说明 + 功能矩阵 + 技术债台账**见 [`audits/AUDIT_2026-10-20.md`](audits/AUDIT_2026-10-20.md)（横切全景，不按轮次组织）。
@@ -9,6 +9,66 @@
 ---
 
 ## 0. 更新记录
+
+**2026-11-03（docs 全量状态审计 + 索引重建 + 过期审计归档 + ADR-022 收口插件平台）**：
+
+> 本轮**只动文档**（外加 `crates/rmccc-modloader/src/lib.rs` 一条错误消息里的文档路径字符串），
+> 未改任何行为代码。所有数字来自本机命令实测。
+
+1. **实况复核（审计基线）**：`git status` 显示 main @ `97b7e5d` 上有 **7 个未提交前端文件**
+   （`AmbientStage.tsx`、`BackgroundVideo.tsx`、`SkinViewer.tsx`、`lib/glass.ts` +
+   `ambient-stage/home-stage/theme-core` 三个 CSS，119 insertions / 60 deletions）。
+   读 diff 判定为一次完整的**空闲帧 GPU 优化**（舞台去掉 3 组 keyframes、粒子密度 ×0.55、
+   背景视频常驻 `requestAnimationFrame` 改为按需 `startDrawing`/`stopDrawing`、皮肤查看器加
+   `IntersectionObserver` + `visibilitychange` 暂停 WebGL、卡片默认 blur 24px→16px）；
+   **改动不属于本轮、本轮未提交、也未跑其门禁**，实施者需自行补验收记录。
+2. **数字实测**：IPC **132 条**（`#[tauri::command]` 132 = `IPC_COMMANDS` 132 =
+   `generate_handler!` 132 = `src/ipc/api.ts` 的 132 处 `safeInvoke`；断言
+   `src-tauri/src/ipc_tests.rs:168`）；workspace **21 members**，`crates/` 无孤儿；
+   `#[test]`/`#[tokio::test]` 静态 **755** + `#[ignore]` **3**；
+   主可执行 `SNGL.app/Contents/MacOS/rmccc` = **10,734,704 B**（11-03 02:00 构建，
+   < 20 MiB 门禁通过；本页早期轮次记录的 10,684,960 B 是其当时的真值，不回改）。
+3. **新结论：ADR-022 accepted**——插件平台（主题 / 卡片 / 隔离 UI / 逻辑运行时 / SDK）
+   **全量保留**。10-28 两份收缩分析的建议被否证（收缩只能省 0.6%–3% `__TEXT,__text`，
+   启动与内存收益在测量噪声内；而 10-31 卡片系统 v3 已把插件卡契约做实）。
+   新增硬约束：再次收缩必须先出新 ADR 取代 ADR-022；`AGENTS.md` 核心约束加第 5 条。
+4. **归档**（`git mv`，逐个加历史快照横幅）：`audits/BACKEND_AUDIT_2026-10-25/`、
+   `audits/FRONTEND_AUDIT_2026-10-25/`、`audits/FRONTEND_AUDIT_2026-10-26/`、
+   `audits/PLUGIN_SYSTEM_REMOVAL_ANALYSIS_2026-10-28.md`、
+   `audits/TRIM_TO_THEMES_AND_CARDS_ANALYSIS_2026-10-28.md` → `docs/archive/`，
+   新建 [`archive/README.md`](archive/README.md)（逐份标注基线 commit 与冻结原因 + 归档规则）。
+   `docs/audits/` 只留在跟踪的 4 份台账。**全仓 grep 改指**旧路径，含
+   `crates/rmccc-modloader/src/lib.rs:347` 的注释路径与 `ARCHITECTURE.md` 两处。
+5. **索引重建**：`docs/README.md` 重写（补 ADR-016–022、`design/`、三个审计目录、
+   ui-design 实为 15 份 + 验收清单、`roadmap/EXECUTION_PROMPTS.md`；加「与仓库其它位置的关系」表
+   与两条新维护规则：数字必须由命令得出、过期结论不留双口径）；
+   `AGENTS.md` 目录树与 Session Startup 顺序修正（先读 PROJECT_STATUS，`DEVELOPMENT_PLAN.md`
+   的 Phase 回填停在 10-20 不作现状依据；示例插件实为 **4** 个；删除不存在的 `assets/` 条目）。
+6. **死链与过期数字**：`ARCHITECTURE.md` §11 125→**132**、`main.rs` 注释 42→132、
+   `IpcError` 定义位置由不存在的 `src-tauri/src/ipc_error.rs` 改为
+   `crates/rmccc-error/src/lib.rs:207`；`ui-design/11_IPC_COVERAGE.md` 文首补
+   **36 条未回填命令的分组清单**（Background 4 / 数据根模式 2 / 图标缓存 4 / 游戏目录 9 /
+   实例 v2 8 / 存储 2 / 整合包 3 / 单条 4），`00_OVERVIEW.md` 与子索引的 86 条改为
+   「设计基线 86，现 132」；`PROJECT_STATUS.md` 的 `schemas/theme.schema.json` 补 `../`；
+   `roadmap/README.md` 加路径口径（`src/routes/*`→`src/pages/*`、`HomeDashboard.tsx`→`Home.tsx`、
+   `rmccc-profile`→`rmccc-instance`、`stores/{downloads,profiles}`→`stores/{tasks,instances}`），
+   `EXECUTION_PROMPTS.md` 的验收 grep 命令改指 `src/pages`；
+   `ARCHITECTURE.md` CurseForge 条目补准确性说明（`ModSource` 仍只有 Modrinth 实现，
+   CurseForge 只在整合包侧接入，前端芯片为 disabled）。
+7. **ADR 台账**：补 **ADR-015 编号空缺说明**（全仓无引用，不回填）；
+   **ADR-012 仍 proposed 且记录 CI 冲突**——`release.yml:16-21` 的两个 macOS job 都跑在
+   `macos-latest`（arm64），x86_64 产物是交叉编译所得，正是该 ADR 决策 #1 与
+   「不把交叉编译误当 Intel 验收」所禁止的做法，也未用决策 #4 的 `macos-13`；
+   **Intel 一律 deferred / release-blocked，发布完成度表不得填 pass**。
+8. **本机验证**：docs 相对链接检查——**活文档 0 断链**（archive/ 正文的 271 条历史断链属
+   冻结范围，已在索引中声明；本轮新增的 archive 横幅与 README 链接全部可解析）。
+   `cargo fmt --all -- --check` ✅（exit 0）与 `cargo test -p rmccc-modloader` ✅
+   （**47 passed / 0 failed**，改动含一条错误消息字符串，故复测该 crate）。
+   其余五项门禁（clippy / `cargo test --workspace` / typecheck / pnpm test / build）本轮**未跑**。
+9. **未做（留给后续）**：`plans/`（3 份 2026-08 HMCL 对标计划，**全仓零引用**）与
+   `icon resource/`（17 个跟踪文件，被 `audits/AUDIT_2026-11-01_WINDOWS.md:72` 当作 app-icon
+   唯一再生成入口）两个顶层目录**未移动**——前者需决定归档还是删除，后者被脚本与文档双向引用；
+   Windows 原生编译与实机仍 deferred / release-blocked。
 
 **2026-11-02（SNGL 便携数据根 + 单配置文件 + Background 壁纸库）**：
 
@@ -464,7 +524,7 @@
 
 **2026-10-28（只留主题+卡片的收益评估）**：
 
-- 新增 [`audits/TRIM_TO_THEMES_AND_CARDS_ANALYSIS_2026-10-28.md`](audits/TRIM_TO_THEMES_AND_CARDS_ANALYSIS_2026-10-28.md)：
+- 新增 [`archive/TRIM_TO_THEMES_AND_CARDS_ANALYSIS_2026-10-28.md`](archive/TRIM_TO_THEMES_AND_CARDS_ANALYSIS_2026-10-28.md)：
   用不 strip 的 LTO 构建（14,187,896 B）做符号级归因——插件相关 `__text` 约 0.42–0.50 MiB
   （占 9.51 MiB 主程序的 4.4%），其中主题核心 96 KB。结论：保留 iframe 卡片只能删 WASM 逻辑
   （−0.06 MiB / −0.6%），改声明式卡片可删隔离 UI+权限+逻辑（−0.24~0.30 MiB / −2.4~3.0%）；
@@ -495,7 +555,7 @@
 
 **2026-10-28（插件系统去留分析报告）**：
 
-- 新增 [`audits/PLUGIN_SYSTEM_REMOVAL_ANALYSIS_2026-10-28.md`](audits/PLUGIN_SYSTEM_REMOVAL_ANALYSIS_2026-10-28.md)：
+- 新增 [`archive/PLUGIN_SYSTEM_REMOVAL_ANALYSIS_2026-10-28.md`](archive/PLUGIN_SYSTEM_REMOVAL_ANALYSIS_2026-10-28.md)：
   盘点插件系统 ~12k 行 Rust、18 条 IPC、~130 条测试、SDK/文档，量化移除收益（攻击面/维护/体积）
   与代价（主题 v2/生态/迁移），给出 A/B/C/D 四方案与推荐 B（去执行型插件、主题降级为本地外观包）。
 - 关键事实：logic helper 未打入 `.app`、Windows 隔离 UI 已关闭、无签名/目录/市场——当前插件系统
@@ -646,7 +706,7 @@
    - **F-12**：桥 origin 由"任意 `rmcccplugin://` 前缀"收紧为 `rmcccplugin://<自己的 id>`
      （WebKit 的 opaque `null` 分支保留）。
 5. **文档**：新增 [`guides/THEME_PLUGIN_AUTHORING.md`](guides/THEME_PLUGIN_AUTHORING.md)、
-   [`schemas/theme.schema.json`](schemas/theme.schema.json)；ADR-005/006 增补；
+   [`../schemas/theme.schema.json`](../schemas/theme.schema.json)；ADR-005/006 增补；
    指南 §9.5、`PLUGIN_AUTHORING.md`、`plugin-sdk/docs/security.md`、`PLATFORM_ADAPTATION.md` 同步；
    示例主题去掉宿主安全色并声明 `mode`。
 6. 验证：`cargo test --workspace` **681 passed / 0 failed**、clippy 零警告、`cargo fmt --check`、
@@ -704,7 +764,7 @@
 
 **2026-10-26（前端审计 2026-10-26 整改：B0–B5 六批次全量执行）**（提交 `79b7965`）：
 
-基线为 [`audits/FRONTEND_AUDIT_2026-10-26/`](audits/FRONTEND_AUDIT_2026-10-26/README.md)：上轮 51 项复核后
+基线为 [`archive/FRONTEND_AUDIT_2026-10-26/`](archive/FRONTEND_AUDIT_2026-10-26/README.md)：上轮 51 项复核后
 FIXED 2 / PARTIAL 9 / STILL 40，另新增 19 项（P1×3 + P2×4 + P3×12），合计 ≈59 项未解决 + 9 项部分残留。
 按 `03_FIX_PLAN.md` 的 B0→B5 执行，除两处显式决策外全部落地：
 
@@ -887,7 +947,7 @@ FIXED 2 / PARTIAL 9 / STILL 40，另新增 19 项（P1×3 + P2×4 + P3×12），
 
 **2026-10-25（审计整改批次 1 `fix/panic-guards`：输入校验止血 + 未完成加载器下架）**：
 
-- 后端五项修复（对应 [`audits/BACKEND_AUDIT_2026-10-25`](audits/BACKEND_AUDIT_2026-10-25/) 05 文档 A 批的止血子集）：
+- 后端五项修复（对应 [`archive/BACKEND_AUDIT_2026-10-25`](archive/BACKEND_AUDIT_2026-10-25/) 05 文档 A 批的止血子集）：
   - **A3** `file_layout::asset_object` 短/畸形哈希切片 panic → 返回 `Option<PathBuf>`（40 位 hex 门禁）；`check_completion` 对畸形哈希在计数两侧同时跳过（避免"缺失"永远追不上"修复"）；`GameRepository::get_asset_object` trait 签名跟进。
   - **A4** `CacheRepository::sha1_to_path` 缓存键零校验（路径注入/多字节 panic）→ 40 位 hex 校验：`check_by_sha1` 视为 miss、`store` 返回 InvalidInput。
   - **A10** `replace_templates` 字节级 `as char`（非 ASCII 模板文本乱码）→ 按 UTF-8 char 整字拷贝；中文模板/替换值回归测试钉死。
@@ -898,7 +958,7 @@ FIXED 2 / PARTIAL 9 / STILL 40，另新增 19 项（P1×3 + P2×4 + P3×12），
 **2026-10-25（全量审计轮：后端/前端/HMCL 比对，未改代码）**：
 
 - 完成五路并行审计（crates 16 crate / src-tauri 99 命令 / 前端 / HMCL-main 功能盘点 /
-  RMCL 功能矩阵），报告存档于 [`audits/BACKEND_AUDIT_2026-10-25/`](audits/BACKEND_AUDIT_2026-10-25/)
+  RMCL 功能矩阵），报告存档于 [`archive/BACKEND_AUDIT_2026-10-25/`](archive/BACKEND_AUDIT_2026-10-25/)
   （README 总览 + 01 crates + 02 src-tauri + 03 前端 + 04 HMCL 比对 + 05 审计意见）。
 - 门禁实测：`cargo check --workspace` 零错误、`pnpm typecheck` 零错误；静态测试数 ≈632（10-20 时 300）。
 - 问题总量：后端 0 P0 / 16 P1 / 50 P2 / 61 P3；前端 2 P0 / 14 P1 / 37 P2 / 33 P3。

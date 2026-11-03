@@ -2,7 +2,7 @@
 
 > ⚠️ **历史快照（2026-08-04）**：其记录的 5 个 P0 阻断点在当前工作树中**均已修复**，命令数（28）与
 > `cargo test` 规模（122 项）也已过期。引用本文档时请注明截止日期。
-> **当前状态请以 [`PROJECT_STATUS.md`](PROJECT_STATUS.md) 为准**。
+> **当前状态请以 [`PROJECT_STATUS.md`](../PROJECT_STATUS.md) 为准**。
 
 > **审计日期**：2026-08-04
 > **审计范围**：Rust 后端全量（10 个 crates + `src-tauri` 应用层 + `src-cli` 命令行层）＋前端 IPC 契约对照

@@ -2,7 +2,7 @@
 
 > ⚠️ **历史快照（2026-07-31）**：结论已被 [`ARCHITECTURE_AUDIT_REPORT_2026-08-04.md`](ARCHITECTURE_AUDIT_REPORT_2026-08-04.md)
 > 取代，且其中若干判断（如 response file 的清理时机）已被后者推翻。
-> **当前状态请以 [`PROJECT_STATUS.md`](PROJECT_STATUS.md) 为准**。
+> **当前状态请以 [`PROJECT_STATUS.md`](../PROJECT_STATUS.md) 为准**。
 
 > **审计日期**：2026-07-31  
 > **审计范围**：Rust 后端全量（10 个 crate + Tauri 应用层 + CLI 层）  

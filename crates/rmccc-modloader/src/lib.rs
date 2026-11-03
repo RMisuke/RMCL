@@ -344,7 +344,7 @@ impl DependencyManager {
         if !loader_type.is_installable() {
             return Err(RmcccError::Other(format!(
                 "{} installer is incomplete and disabled for new installs \
-                 (see docs/audits/BACKEND_AUDIT_2026-10-25, A6)",
+                 (see docs/archive/BACKEND_AUDIT_2026-10-25, A6)",
                 loader_type.display_name()
             )));
         }

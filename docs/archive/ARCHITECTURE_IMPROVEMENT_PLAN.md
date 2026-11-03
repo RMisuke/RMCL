@@ -1,5 +1,9 @@
 # RMCCC 架构改进计划
 
+> ⚠️ **历史快照（2026-07-29）**：基于 HMCL v3.0 的早期对照改进方案，其中多数条目已由
+> instance v2 / 主题 v2–v3 / 任务中心 / 整合包安装等后续轮次实现或推翻；Modloader 与版本管理
+> 的最终口径以 [`../ARCHITECTURE.md`](../ARCHITECTURE.md) 为准。本文仅作设计由来溯源。
+
 > 基于 HMCL v3.0 源码架构分析的对照改进方案  
 > 版本：1.0 | 日期：2026-07-29
 
@@ -1187,5 +1191,5 @@ pub enum ErrorCode {
 
 ---
 
-> **本文档应与 [`ARCHITECTURE.md`](ARCHITECTURE.md) 和 [`DEVELOPMENT_PLAN.md`](DEVELOPMENT_PLAN.md) 配合使用。**
-> 当本改进计划中的里程碑完成时，应及时更新 `ARCHITECTURE.md` 中的对应章节。
+> **本文档应与 [`ARCHITECTURE.md`](../ARCHITECTURE.md) 和 [`DEVELOPMENT_PLAN.md`](../DEVELOPMENT_PLAN.md) 配合使用。**
+> 本文档已冻结，里程碑完成情况请回看 [`PROJECT_STATUS.md`](../PROJECT_STATUS.md) 与 [`audits/`](../audits/) 台账。

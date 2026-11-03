@@ -139,7 +139,7 @@ RMCL/
 │   ├── tauri.conf.json
 │   ├── capabilities/default.json
 │   └── src/
-│       ├── main.rs               # Entry + generate_handler! (42 commands)
+│       ├── main.rs               # Entry + generate_handler! (132 commands)
 │       ├── bindings.rs           # ts-rs export of 19 types → src/ipc/types.ts
 │       ├── state.rs              # AppState (Tokio-backed)
 │       ├── events.rs             # Event constants + ThrottledEmitter
@@ -272,7 +272,9 @@ pub trait ModSource: Send + Sync {
 
 // Implementations:
 // - ModrinthSource     (Modrinth v2 API, open, no key needed) — 已实现
-// - CurseForgeSource   (CurseForge Core API, API key from env or key file) — planned（审计差距 T1，见 docs/audits/BACKEND_AUDIT_2026-10-25/04）
+// - CurseForgeSource   (CurseForge Core API, API key from env or key file) — planned（审计差距 T1，见 docs/archive/BACKEND_AUDIT_2026-10-25/04）
+//   注：`ModSource` 仍只有 Modrinth 一个实现；CurseForge 只在**整合包**侧接入（`crates/rmccc-modpack/src/curse_api.rs`）。
+//   前端下载页的 CurseForge 源芯片为 disabled + 「即将支持」（`src/pages/Download.tsx:917-925`）。
 ```
 
 #### DownloadManager
@@ -375,7 +377,7 @@ pub struct JavaRequirement {
 
 `inheritsFrom` 合并与 OS/features 规则求值各只有**一份权威实现**；历史上曾出现三套
 语义互斥的合并器与三套规则求值器（安装链/启动链/本地仓库对同一份 JSON 解析结果不同，
-见 `docs/audits/BACKEND_AUDIT_2026-10-25/01_CRATES_AUDIT.md` 跨 crate #1/#2），
+见 `docs/archive/BACKEND_AUDIT_2026-10-25/01_CRATES_AUDIT.md` 跨 crate #1/#2），
 现收敛如下，**禁止再新增第三套**：
 
 **合并（`rmccc_version::merge`，HMCL `GameInstanceManifest.merge` 语义）**
@@ -769,7 +771,7 @@ impl RmcccError {
 所有 IPC command 返回 `Result<T, IpcError>`，前端根据 `code` + `retryable` 决定 UI 行为：
 
 ```rust
-// src-tauri/src/ipc_error.rs
+// crates/rmccc-error/src/lib.rs（`IpcError` 的定义处；src-tauri 只消费与序列化）
 use serde::Serialize;
 use ts_rs::TS;
 
@@ -1410,10 +1412,13 @@ User clicks "Launch" on a profile
 
 ## 11. IPC Command Table
 
-125 commands, all defined in `src-tauri/src/commands/` and registered via
+132 commands, all defined in `src-tauri/src/commands/` and registered via
 `IPC_COMMANDS` + `generate_handler!` in `src-tauri/src/handlers.rs`
-（数量由 `ipc_tests.rs` 的计数断言守护；ADR-013 迁移后 agent_* 9 条已由
-ai_* 5 条 + mods 纯逻辑 2 条取代，S4/S5 再加 mcp_* 9 条）。
+（**2026-11-03 实测**：`#[tauri::command]` 132 = `IPC_COMMANDS` 132 = `generate_handler!` 132 =
+`src/ipc/api.ts` 的 132 处 `safeInvoke`；数量由 `src-tauri/src/ipc_tests.rs:168` 的计数断言守护。
+ADR-013 迁移后 agent_* 9 条已由 ai_* 5 条 + mods 纯逻辑 2 条取代，S4/S5 再加 mcp_* 9 条；
+其后的实例管理 v2、整合包安装、统一任务中心、Background 壁纸库与 SNGL 数据根又净增到 132。
+下表按 2026-10-23 基线列出，新增命令的分组清单见 [`ui-design/11_IPC_COVERAGE.md`](ui-design/11_IPC_COVERAGE.md)）。
 
 | Command | Handler | Description |
 |---------|---------|-------------|

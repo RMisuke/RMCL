@@ -73,3 +73,9 @@
 ## 状态变更记录
 
 - 2026-10-20：proposed（Phase 0 基线）。
+- 2026-11-03：**仍为 proposed，且发现 CI 与决策 #1 冲突**。`.github/workflows/release.yml` 的两个 macOS job
+  都跑在 `macos-latest`（Apple Silicon），x86_64 产物由 arm64 runner 以 `--target x86_64-apple-darwin`
+  **交叉编译**得到（`release.yml:16-21`），正是本 ADR「构建与实测只在 CI Intel runner 进行」
+  与「不把 Apple Silicon 上交叉编译成功误当 Intel 验收」所禁止的做法；也未使用决策 #4 指定的 `macos-13`。
+  在改为 Intel runner 原生构建并完成 `.app` 启动/DMG 安装烟测前，Intel 一律 deferred / release-blocked，
+  发布完成度表不得把该交叉产物填成 Intel pass。

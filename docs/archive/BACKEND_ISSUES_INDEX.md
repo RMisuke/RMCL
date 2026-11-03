@@ -2,7 +2,7 @@
 
 > ⚠️ **已被取代（2026-10-10）**：本文档是 2026-07-31 审计的问题索引，**不含任何状态列**，因此无法用它判断
 > 进度；其中多条已被后续工作修复（含被 2026-08-04 审计推翻的结论，例如 response file 清理）。
-> **当前状态请以 [`PROJECT_STATUS.md`](PROJECT_STATUS.md) 为准**；本文档仅保留为问题溯源。
+> **当前状态请以 [`PROJECT_STATUS.md`](../PROJECT_STATUS.md) 为准**；本文档仅保留为问题溯源。
 
 > **来源**：[`ARCHITECTURE_AUDIT_REPORT.md`](ARCHITECTURE_AUDIT_REPORT.md)（2026-07-31 审计）  
 > **交叉验证**：[`ARCHITECTURE_IMPROVEMENT_PLAN.md`](ARCHITECTURE_IMPROVEMENT_PLAN.md) 第 2.5–2.6 节  

@@ -1,8 +1,13 @@
 # 前端 GUI 复审报告（2026-10-26）
 
+> ⚠️ **历史快照（2026-11-03 归档）**：基线 main @ `3b863da`，其整改计划（03）已由 10-27 之后的主题 v2/v3、
+> 卡片系统 v3、任务中心与 Windows 适配多轮改动覆盖；行号与组件清单均已过期。
+> 文中 `docs/qa/JOURNEYS.md` 从未建立，旅程回归口径见 [`../../ui-design/ACCEPTANCE_CHECKLIST.md`](../../ui-design/ACCEPTANCE_CHECKLIST.md)。
+> **当前前端状态以 [`PROJECT_STATUS.md`](../../PROJECT_STATUS.md) 为准**。
+
 > 审计对象：main @ `3b863da`（工作区干净），前端 16,806 行（上次审计 15,175，+1,631）
 > 审计方法：① 上轮 51 项问题逐项复核（01）② 上轮基线 `fd95fee` 以来 +1973/-376 行增量深审（02）③ 主审对关键新旧结论二次实证（hash 断链、假数据、删除契约、星星定位、进度引用重建等均已人工验证）。
-> 上轮报告：`docs/audits/FRONTEND_AUDIT_2026-10-25/`
+> 上轮报告：`docs/archive/FRONTEND_AUDIT_2026-10-25/`
 
 ## 报告索引
 

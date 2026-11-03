@@ -1,5 +1,11 @@
 # 前端 GUI 全面审计报告（2026-10-25）
 
+> ⚠️ **历史快照（2026-11-03 归档）**：基线分支 `ui/home-hero-dock`，文中页面名（`HomeDashboard.tsx`、
+> `src/routes/`、`stores/{downloads,profiles,modloaders}`、`visual-system.css`）与行号已被后续重构取代。
+> 本轮 51 项问题的复核见 [`../FRONTEND_AUDIT_2026-10-26/`](../FRONTEND_AUDIT_2026-10-26/README.md)，
+> 整改落地见 [`../FRONTEND_AUDIT_2026-10-26/03_FIX_PLAN.md`](../FRONTEND_AUDIT_2026-10-26/03_FIX_PLAN.md)。
+> **当前前端状态以 [`PROJECT_STATUS.md`](../../PROJECT_STATUS.md) 为准**。
+
 > 审计对象：RMCL 前端（Tauri 2.x + SolidJS），分支 `ui/home-hero-dock`
 > 审计方法：四路并行深读（架构横切层 / 页面组件层 / HMCL 功能全景 / HMCL 设置项枚举）+ 主审对关键结论逐条抽查实证（假数据、hash 参数失效、分辨率缺陷、死代码、API_Key 状态等均经人工复核）。
 > 参照库：`/Volumes/APPLE 1TB/Code/HMCL-main`（HMCL 2026 重构版）。

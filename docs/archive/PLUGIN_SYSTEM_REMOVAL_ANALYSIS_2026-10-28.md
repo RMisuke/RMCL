@@ -1,5 +1,11 @@
 # 插件系统价值与移除收益分析（2026-10-28）
 
+> ⚠️ **决策已被否决（2026-11-03 归档）**：本文的方案 B（删除逻辑运行时 / 隔离 UI / SDK，只留主题）
+> **未被采纳**。2026-10-31 的卡片系统 v3 把插件卡契约（`maxSize` + Host Bridge `tasks.list` /
+> `launch.status` / `server.status`）做实，插件平台在代码中仍全量在线
+> （`crates/rmccc-plugin`、`src-logic-host`、`plugin-sdk/`、`examples/plugins/` 四个样例）。
+> 正式结论见 [`ADR-022`](../adr/ADR-022-plugin-platform-retention.md)。本文保留为**问题溯源与代价测算**。
+
 - **范围**：RMCCC 自研插件系统（`rmccc-plugin` / `rmccc-logic` / `src-logic-host` / 18 条插件 IPC /
   隔离 UI / 主题 v1–v2 / SDK / 示例 / 相关文档）。
 - **不包含**：Tauri 官方插件（`tauri-plugin-updater` / `window-state` / `dialog` / `process` / `opener`）
@@ -42,7 +48,7 @@
 
 依赖侧：主程序链入 `zip`（解压/压缩）、`sha2`、`uuid`；`wasmi` 只在 helper 二进制。
 包安装、权限审查、隔离 iframe、Host Bridge、WASM 执行、主题资产路由构成完整的安全敏感面
-（详见 [`PLUGIN_SECURITY_AUDIT_2026-10-27.md`](PLUGIN_SECURITY_AUDIT_2026-10-27.md)）。
+（详见 [`PLUGIN_SECURITY_AUDIT_2026-10-27.md`](../audits/PLUGIN_SECURITY_AUDIT_2026-10-27.md)）。
 
 ---
 

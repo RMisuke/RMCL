@@ -1,5 +1,11 @@
 # RMCCC 全量审计（2026-10-25）— 总览与执行摘要
 
+> ⚠️ **历史快照（2026-11-03 归档）**：基线 `92d8743` / 分支 `ui/home-hero-dock` 早于实例管理 v2、主题 v2/v3、
+> 统一任务中心、整合包安装、卡片系统 v3 与 SNGL 便携数据根等多轮改动；文中的命令计数、crate 清单与行号均已过期。
+> **当前状态以 [`PROJECT_STATUS.md`](../../PROJECT_STATUS.md) 为准**；仍开放的技术债以
+> [`audits/AUDIT_2026-10-20.md`](../../audits/AUDIT_2026-10-20.md) 与 [`audits/AUDIT_2026-11-01_WINDOWS.md`](../../audits/AUDIT_2026-11-01_WINDOWS.md) 为准。
+> 本目录中关于插件系统收缩的建议**未被采纳**，正式结论见 [`ADR-022`](../../adr/ADR-022-plugin-platform-retention.md)。
+
 > 审计基线：分支 `ui/home-hero-dock` 工作区（含未提交改动），commit `92d8743` 之后。
 > 审计范围：`crates/`（16 crate，约 3.9 万行）、`src-tauri/`（约 9.5 千行）、`src/` 前端（约 1.5 万行）、
 > 对照库 `/Volumes/APPLE 1TB/Code/HMCL-main`（HMCL 深度重构版 fork，HMCLCore 425 + HMCL 454 个 Java 文件，约 118 个后端功能点）。

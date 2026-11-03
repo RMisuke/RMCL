@@ -12,7 +12,7 @@
 > | `AUDIT_2026-10-20.md` | 横切全景 + 技术债台账（P0–P3） | 本目录每条任务都标注对应的审计条目（P1-x / P2-x / §x） |
 > | `PROJECT_STATUS.md` | 轮次变更记录 | 本目录的"当前状态"以审计快照为准；完成后回写 PROJECT_STATUS |
 > | `DEVELOPMENT_PLAN.md` | Phase 1–5 路线图 | 本目录是其向后延伸（插件平台 + Agent + 发布） |
-| [`docs/adr/`](../adr/) | 架构决策记录（ADR） | 本目录 Phase 0 产出 ADR-001/011/012；Phase 2 产出 ADR-003/004 |
+| [`docs/adr/`](../adr/) | 架构决策记录（ADR） | 本目录 Phase 0 产出 ADR-001/011/012；Phase 2 产出 ADR-003/004；后续 016–022（实例 v2、壁纸引擎、任务中心、整合包、Noctis v3、插件平台保留）见 [`../adr/README.md`](../adr/README.md) |
 
 ## 当前阶段
 
@@ -23,7 +23,17 @@
 （2026-10-23 完成：`ai_*` 5 条 + `mods_dependency_scan/apply_plan` 落地，`agent_*` 9 条移除）。
 Phase 7（插件目录/签名/分发）前置 ADR-008 已立草案（proposed），accepted 后开工。跨平台原生验证仍按 §1.4 记 deferred / release-blocked。
 
+> **插件平台口径（2026-11-03）**：Phase 2/4/5（插件协议、隔离 UI SDK、逻辑运行时）的 ✅ 结论**继续有效**。
+> 2026-10-28 曾有两份分析建议收缩为「只留主题 + 卡片」，该建议已由
+> [`ADR-022`](../adr/ADR-022-plugin-platform-retention.md) 否证，两份分析连同其执行清单一起移入
+> [`../archive/`](../archive/)；不得据旧文删 crate 或撤 `src-logic-host`。
+
 ## 阅读顺序
+
+> **路径口径**：`02`/`04`/`05` 等已完成切片里写的 `src/routes/*` 与 `src/routes/Dashboard.tsx` 是
+> 2026-10 之前的旧路径，现状为 `src/pages/*`（主页是 `src/pages/Home.tsx`，无 `Dashboard.tsx`）；
+> `crates/rmccc-profile` 已并入 `crates/rmccc-instance`（ADR-016），`stores/{downloads,profiles}` 现为
+> `stores/{tasks,instances}`。历史切片正文不回改，**新任务一律按现状路径写**。
 
 1. [`00_ROADMAP_OVERVIEW.md`](00_ROADMAP_OVERVIEW.md) — 总体分段、依赖、里程碑、当前状态锚点。
 2. 当前阶段的细化计划（按编号）。
@@ -50,6 +60,7 @@ Phase 7（插件目录/签名/分发）前置 ADR-008 已立草案（proposed）
 | [08_phase6_agent.md](08_phase6_agent.md) 📌 | Phase 6 | M7 已达成后方向调整为 ADR-013（AI/MCP，见 `../AI_AND_MCP_ARCHITECTURE.md`）；本文保留为历史记录 |
 | [09_phase7_distribution.md](09_phase7_distribution.md) | Phase 7 | ADR-008/011/012、签名/公证/发布 |
 | [PLATFORM_ADAPTATION.md](PLATFORM_ADAPTATION.md) | 跨阶段（指南 §5.7 细化） | 平台执行散落在领域 crate 的迁移 |
+| [EXECUTION_PROMPTS.md](EXECUTION_PROMPTS.md) | 跨阶段（批次执行入口） | 每批次交给 Agent 的提示词模板与门禁清单 |
 
 ## 计划文档统一结构
 
