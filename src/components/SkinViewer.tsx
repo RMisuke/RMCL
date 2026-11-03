@@ -143,9 +143,12 @@ export function SkinViewer(): JSX.Element {
   let fileInput: HTMLInputElement | undefined;
   let viewer: any = null;
   let resizeObserver: ResizeObserver | null = null;
+  let intersectionObserver: IntersectionObserver | null = null;
   let onWindowResize: (() => void) | null = null;
+  let onVisibilityChange: (() => void) | null = null;
   let alive = true;
   let attached = false;
+  let visible = true;
   let attaching: Promise<void> | null = null;
   /** 加载代际：快速连续换肤时，晚到的旧结果不得覆盖新结果。 */
   let loadGen = 0;
@@ -234,6 +237,14 @@ export function SkinViewer(): JSX.Element {
     }
   }
 
+  /** Pause WebGL whenever the account page is off-screen or hidden.
+   *  The canvas/viewer stay resident; only the render loop is gated. */
+  function syncRenderState(): void {
+    if (!stage) return;
+    const shouldRender = alive && attached && visible && document.visibilityState !== "hidden";
+    stage.viewer.renderPaused = !shouldRender;
+  }
+
   /** Init failure message (P2-13): replaces the eternal "loading" placeholder. */
   const [failed, setFailed] = createSignal<string | null>(null);
 
@@ -256,12 +267,12 @@ export function SkinViewer(): JSX.Element {
         viewer = st.viewer;
         syncRect();
         st.root.classList.add("is-live");
-        st.viewer.renderPaused = false;
         setReady(true);
         setPose("walk");
         applyPose("walk");
         diag(`stage attached at ${w}x${h}`);
         attached = true;
+        syncRenderState();
         void loadCurrentSkin();
       } catch (e) {
         setFailed(String(e));
@@ -280,8 +291,23 @@ export function SkinViewer(): JSX.Element {
       if (attached) syncRect();
     });
     resizeObserver.observe(slot);
+    if (typeof IntersectionObserver === "function") {
+      intersectionObserver = new IntersectionObserver(
+        (entries) => {
+          visible = entries.some((entry) => entry.isIntersecting);
+          syncRenderState();
+        },
+        { threshold: 0.01 },
+      );
+      intersectionObserver.observe(slot);
+    }
+    onVisibilityChange = () => syncRenderState();
+    document.addEventListener("visibilitychange", onVisibilityChange);
     onWindowResize = () => {
-      if (attached) syncRect();
+      if (attached) {
+        syncRect();
+        syncRenderState();
+      }
     };
     window.addEventListener("resize", onWindowResize);
   });
@@ -292,7 +318,10 @@ export function SkinViewer(): JSX.Element {
     alive = false;
     resizeObserver?.disconnect();
     resizeObserver = null;
+    intersectionObserver?.disconnect();
+    intersectionObserver = null;
     if (onWindowResize) window.removeEventListener("resize", onWindowResize);
+    if (onVisibilityChange) document.removeEventListener("visibilitychange", onVisibilityChange);
     hideStage();
     viewer = null;
   });

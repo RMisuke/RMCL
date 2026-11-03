@@ -163,8 +163,8 @@
     linear-gradient(145deg, rgba(255, 255, 255, .055), transparent 44%),
     var(--noctis-card);
   box-shadow: var(--rmccc-shadow-card);
-  backdrop-filter: blur(var(--rmccc-home-card-blur, var(--rmccc-card-blur, 24px))) saturate(120%);
-  -webkit-backdrop-filter: blur(var(--rmccc-home-card-blur, var(--rmccc-card-blur, 24px))) saturate(120%);
+  backdrop-filter: blur(var(--rmccc-home-card-blur, var(--rmccc-card-blur, 16px))) saturate(120%);
+  -webkit-backdrop-filter: blur(var(--rmccc-home-card-blur, var(--rmccc-card-blur, 16px))) saturate(120%);
 }
 .soft-card::after { content: none; }
 .soft-card-heading {
@@ -324,8 +324,8 @@
   box-shadow:
     0 24px 56px rgba(0, 0, 0, .3),
     inset 0 1px 0 rgba(255, 255, 255, .1);
-  backdrop-filter: blur(var(--rmccc-home-card-blur, var(--rmccc-card-blur, 24px))) saturate(126%);
-  -webkit-backdrop-filter: blur(var(--rmccc-home-card-blur, var(--rmccc-card-blur, 24px))) saturate(126%);
+  backdrop-filter: blur(var(--rmccc-home-card-blur, var(--rmccc-card-blur, 16px))) saturate(126%);
+  -webkit-backdrop-filter: blur(var(--rmccc-home-card-blur, var(--rmccc-card-blur, 16px))) saturate(126%);
 }
 .soft-launch-card::after {
   content: "";
@@ -1004,7 +1004,7 @@ html[data-image-wallpaper="on"] .app-body:not(:has(.soft-home)) {
    The Settings slider still scales the result, so manual control remains. */
 html[data-video-wallpaper="on"],
 html[data-image-wallpaper="on"] {
-  --rmccc-home-card-blur: calc(var(--rmccc-card-blur, 24px) * .55);
+  --rmccc-home-card-blur: calc(var(--rmccc-card-blur, 16px) * .55);
 }
 html[data-video-wallpaper="on"] .titlebar,
 html[data-video-wallpaper="on"] .account-dock-trigger,

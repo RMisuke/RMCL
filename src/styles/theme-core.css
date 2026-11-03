@@ -37,7 +37,7 @@
      values on <html>. */
   --rmccc-panel-alpha: 74%;
   --rmccc-card-alpha: 62%;
-  --rmccc-card-blur: 24px;
+  --rmccc-card-blur: 16px;
   --rmccc-home-card-blur: var(--rmccc-card-blur);
 
   --noctis-hairline: color-mix(in srgb, var(--rmccc-text) 8%, transparent);
@@ -594,8 +594,8 @@ html[data-motion="on"] .rm-progress-fill::after { content: none; }
   background: var(--noctis-card);
   box-shadow: var(--rmccc-shadow-card);
   color: var(--rmccc-text);
-  backdrop-filter: blur(var(--rmccc-card-blur, 24px)) saturate(118%);
-  -webkit-backdrop-filter: blur(var(--rmccc-card-blur, 24px)) saturate(118%);
+  backdrop-filter: blur(var(--rmccc-card-blur, 16px)) saturate(118%);
+  -webkit-backdrop-filter: blur(var(--rmccc-card-blur, 16px)) saturate(118%);
 }
 .rm-card { overflow: hidden; }
 .rm-card::before, .instance-card::before, .skin-panel::before { content: none; }
@@ -757,7 +757,7 @@ html[data-theme-mode="light"] .ai-window {
 
 html[data-motion="on"] .page,
 html[data-motion="on"] .accounts-page,
-html[data-motion="on"] .soft-home { animation: noctis-page-in 220ms var(--rmccc-ease-out) both; }
+html[data-motion="on"] .soft-home { animation: noctis-page-in 220ms var(--rmccc-ease-out); }
 html[data-motion="on"] .rm-dialog { animation: noctis-dialog-in 160ms var(--rmccc-ease-out); }
 html[data-motion="on"] .rm-menu { animation: noctis-menu-in 130ms var(--rmccc-ease-out); }
 html[data-motion="on"] .rm-card,

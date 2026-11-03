@@ -44,9 +44,12 @@ function stageVisible(): boolean {
 export function AmbientStage(): JSX.Element {
   const scene = createMemo(() => themeScene() ?? FALLBACK_SCENE);
   const count = createMemo(() => {
-    // Keep the DOM small on 720p and slightly richer on large displays.
+    // Keep the atmosphere readable without paying for a large animated layer
+    // tree. The motif is a texture, not a foreground element, so half the
+    // previous density is visually equivalent at normal viewing distance.
     const width = typeof window === "undefined" ? 1440 : window.innerWidth;
-    return Math.max(16, Math.round(scene().particleCount * Math.min(1.45, Math.max(0.72, width / 1440))));
+    const density = Math.min(1.35, Math.max(0.72, width / 1440));
+    return Math.max(10, Math.round(scene().particleCount * 0.55 * density));
   });
 
   return (

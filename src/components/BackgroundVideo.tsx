@@ -37,6 +37,7 @@ export function BackgroundVideo(): JSX.Element {
   let canvas: HTMLCanvasElement | undefined;
   let canvasCtx: CanvasRenderingContext2D | null = null;
   let drawRaf = 0;
+  let drawingActive = false;
   let lastDrawAt = 0;
   let frameCallback = 0;
   let lastPresentedAt = 0;
@@ -119,14 +120,45 @@ export function BackgroundVideo(): JSX.Element {
     }
   }
 
-  function drawLoop(): void {
-    if (wanted() && document.visibilityState !== "hidden") drawVideoFrame();
-    drawRaf = window.requestAnimationFrame(drawLoop);
+  /** Fallback for WebViews without requestVideoFrameCallback. This loop only
+   *  exists while a video is actually visible; idle pages schedule nothing. */
+  function drawFallback(): void {
+    drawRaf = window.requestAnimationFrame(() => {
+      if (!drawingActive) {
+        drawRaf = 0;
+        return;
+      }
+      if (document.visibilityState !== "hidden") drawVideoFrame();
+      drawFallback();
+    });
+  }
+
+  function stopDrawing(): void {
+    drawingActive = false;
+    if (drawRaf) window.cancelAnimationFrame(drawRaf);
+    drawRaf = 0;
+    const el = video;
+    if (frameCallback && el && typeof el.cancelVideoFrameCallback === "function") {
+      el.cancelVideoFrameCallback(frameCallback);
+    }
+    frameCallback = 0;
+  }
+
+  function startDrawing(): void {
+    if (drawingActive || !wanted() || !src()) return;
+    const el = video;
+    if (!el) return;
+    drawingActive = true;
+    if (typeof el.requestVideoFrameCallback === "function") {
+      watchFrames();
+    } else {
+      drawFallback();
+    }
   }
 
   function onResize(): void {
     sizeCanvas();
-    drawVideoFrame(true);
+    if (drawingActive) drawVideoFrame(true);
   }
 
   /**
@@ -137,14 +169,16 @@ export function BackgroundVideo(): JSX.Element {
    */
   function watchFrames(): void {
     const el = video;
-    if (!el || !wanted()) return;
+    if (!el || !wanted() || !drawingActive) return;
     if (typeof el.requestVideoFrameCallback !== "function") return;
     if (frameCallback && typeof el.cancelVideoFrameCallback === "function") {
       el.cancelVideoFrameCallback(frameCallback);
       frameCallback = 0;
     }
     frameCallback = el.requestVideoFrameCallback(() => {
+      if (!drawingActive) return;
       lastPresentedAt = performance.now();
+      drawVideoFrame(true);
       stableFrames += 1;
       if (stableFrames > 30) recoveryCount = 0;
       watchFrames();
@@ -312,13 +346,33 @@ export function BackgroundVideo(): JSX.Element {
     else video?.pause();
   });
 
+  // Idle cost guard: the video pipeline (watchdog + frame callbacks) only
+  // exists while a video is actually wanted and attached. When the wallpaper is
+  // disabled there are no timers or animation frames left running.
+  createEffect(() => {
+    const active = wanted() && Boolean(src());
+    if (!active) {
+      stopDrawing();
+      if (watchdogTimer !== undefined) {
+        window.clearInterval(watchdogTimer);
+        watchdogTimer = undefined;
+      }
+      return;
+    }
+    if (watchdogTimer === undefined) {
+      watchdogTimer = window.setInterval(checkPlayback, 1000);
+    }
+    // A source change creates a new <video>: drop callbacks bound to the old
+    // element before attaching the frame loop to the current one.
+    stopDrawing();
+    startDrawing();
+  });
+
   onMount(() => {
     document.addEventListener("visibilitychange", onVisibilityChange);
     window.addEventListener("focus", onWindowFocus);
     window.addEventListener("pageshow", onWindowFocus);
     window.addEventListener("resize", onResize);
-    watchdogTimer = window.setInterval(checkPlayback, 1000);
-    drawRaf = window.requestAnimationFrame(drawLoop);
     playVideo();
   });
 
@@ -326,13 +380,7 @@ export function BackgroundVideo(): JSX.Element {
     generation++;
     if (watchdogTimer !== undefined) window.clearInterval(watchdogTimer);
     watchdogTimer = undefined;
-    if (drawRaf) window.cancelAnimationFrame(drawRaf);
-    drawRaf = 0;
-    const el = video;
-    if (frameCallback && el && typeof el.cancelVideoFrameCallback === "function") {
-      el.cancelVideoFrameCallback(frameCallback);
-    }
-    frameCallback = 0;
+    stopDrawing();
     document.removeEventListener("visibilitychange", onVisibilityChange);
     window.removeEventListener("focus", onWindowFocus);
     window.removeEventListener("pageshow", onWindowFocus);
@@ -374,7 +422,7 @@ export function BackgroundVideo(): JSX.Element {
                 setBackgroundVideoIssue("");
                 lastPresentedAt = performance.now();
                 stableFrames = 0;
-                watchFrames();
+                startDrawing();
                 drawVideoFrame(true);
                 if (!playingLogged) {
                   playingLogged = true;
@@ -386,6 +434,7 @@ export function BackgroundVideo(): JSX.Element {
                 if (performance.now() >= suppressSampleUntil) {
                   scheduleAdaptiveSample(250);
                 }
+                startDrawing();
                 drawVideoFrame(true);
                 playVideo();
               }}

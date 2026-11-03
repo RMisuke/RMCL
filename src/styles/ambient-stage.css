@@ -56,7 +56,8 @@
   aspect-ratio: 1;
   border-radius: 50%;
   mix-blend-mode: screen;
-  animation: ambient-veil-drift var(--veil-duration, 34s) ease-in-out infinite alternate;
+  /* Static wash. Animating a full-screen 58 px blur forced the compositor to
+     rebuild the entire backdrop each frame; the particles still carry motion. */
 }
 .ambient-veil i.is-a {
   left: 12%;
@@ -67,15 +68,11 @@
   right: 6%;
   top: 20%;
   background: radial-gradient(circle, color-mix(in srgb, var(--scene-secondary) 23%, transparent), transparent 70%);
-  animation-delay: -11s;
-  animation-duration: 41s;
 }
 .ambient-veil i.is-c {
   left: 30%;
   bottom: -10%;
   background: radial-gradient(circle, color-mix(in srgb, var(--scene-tertiary) 18%, transparent), transparent 70%);
-  animation-delay: -21s;
-  animation-duration: 47s;
 }
 
 /* A large offset circle reads as a horizon/planet, not as a card. */
@@ -115,7 +112,9 @@
   background-size: 44px 44px;
   mask-image: linear-gradient(to top, black 0%, color-mix(in srgb, black 60%, transparent) 44%, transparent 86%);
   -webkit-mask-image: linear-gradient(to top, black 0%, color-mix(in srgb, black 60%, transparent) 44%, transparent 86%);
-  animation: ambient-grid-drift 18s linear infinite;
+  /* The perspective grid reads as a fixed horizon. Animating
+     background-position forced a full-layer repaint every frame; the veil and
+     particles already provide the ambient motion. */
 }
 
 .ambient-particles {
@@ -134,9 +133,8 @@
   background: var(--particle-color, var(--scene-primary));
   box-shadow: 0 0 10px color-mix(in srgb, var(--particle-color, var(--scene-primary)) 70%, transparent);
   opacity: var(--particle-alpha, .5);
-  will-change: transform, opacity;
-  animation: ambient-particle-rise var(--particle-duration, 28s) linear infinite;
-  animation-delay: var(--particle-delay, 0s);
+  /* Dots are a texture, not a moving foreground. Keeping them static avoids
+     re-blending the full-screen veil/particle layer at display refresh rate. */
 }
 
 .ambient-particle.is-leaf {
@@ -247,26 +245,4 @@ html[data-motion="off"] .ambient-particle:nth-child(n + 9) { display: none; }
   .ambient-veil i { animation: none !important; }
   .ambient-particles { opacity: .16; }
   .ambient-particle:nth-child(n + 9) { display: none; }
-}
-
-@keyframes ambient-veil-drift {
-  from { transform: translate3d(-4%, -2%, 0) scale(1); }
-  to { transform: translate3d(6%, 5%, 0) scale(1.14); }
-}
-@keyframes ambient-grid-drift {
-  from { background-position: 0 0, 0 0; }
-  to { background-position: 44px 44px, 44px 44px; }
-}
-@keyframes ambient-particle-rise {
-  0% {
-    opacity: 0;
-    transform: translate3d(0, 24px, 0) rotate(0deg) scale(.7);
-  }
-  12% { opacity: var(--particle-alpha, .5); }
-  72% { opacity: calc(var(--particle-alpha, .5) * .8); }
-  100% {
-    opacity: 0;
-    transform: translate3d(var(--particle-drift-x, 0px), calc(var(--particle-drift-y, 160px) * -1), 0)
-      rotate(var(--particle-spin, 40deg)) scale(1.05);
-  }
 }

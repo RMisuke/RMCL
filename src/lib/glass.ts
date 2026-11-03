@@ -23,7 +23,9 @@ const CARD_KEY = "rmccc.cardOpacity.v1";
 const CARD_BLUR_KEY = "rmccc.cardBlur.v1";
 const DEFAULT_PANEL = 74;
 const DEFAULT_CARD = 62;
-const DEFAULT_CARD_BLUR = 24;
+// Enough to keep the frosted edge readable without forcing every card to
+// recompute a 24 px backdrop over the animated ambient stage.
+const DEFAULT_CARD_BLUR = 16;
 const MAX_CARD_BLUR = 40;
 
 function readPercent(key: string, fallback: number): number {
