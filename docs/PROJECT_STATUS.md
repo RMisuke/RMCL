@@ -10,6 +10,28 @@
 
 ## 0. 更新记录
 
+**2026-11-03（前端空闲帧 GPU 优化收口：提交 + 前端三门禁实测）**：
+
+1. **提交**：`9f624f6 perf(ui)` 收口上一轮记录的那 **7 个未提交前端文件**（119 insertions /
+   60 deletions），与 docs 轮次分开成独立逻辑变更。改动内容：`ambient-stage.css` 删
+   `ambient-veil-drift` / `ambient-grid-drift` / `ambient-particle-rise` 三组 keyframes
+   （粒子与 veil 改为静态纹理，同时移除 `.ambient-particle` 的 `will-change`）、
+   `AmbientStage.tsx` 粒子密度 ×0.55（下限 16→10）、`BackgroundVideo.tsx` 常驻
+   `requestAnimationFrame` 循环改为 `startDrawing`/`stopDrawing` 按需（无
+   `requestVideoFrameCallback` 时才用 rAF 回退，watchdog 只在 wanted+src 时存在）、
+   `SkinViewer.tsx` 加 `IntersectionObserver` + `visibilitychange` 驱动
+   `stage.viewer.renderPaused`、卡片默认 blur 24px→16px（`glass.ts` + 两个 CSS 的
+   `var()` fallback 同步）、`.soft-home` 入场动画去掉 `both` fill-mode（与相邻
+   `.rm-dialog` / `.rm-menu` 的写法一致）。
+2. **门禁实测（本机 Apple Silicon）**：`pnpm typecheck` ✅、`pnpm test` ✅
+   （**10 files / 67 tests passed**）、`pnpm build` ✅（2.63s；`skinview3d` chunk
+   515 kB 超阈值属既有告警，非本批引入）。grep 确认无残留 `drawLoop` 引用，
+   `checkPlayback`/`recoverPlayback` 里的 `watchFrames()` 由新 `drawingActive` 门控。
+3. **未做**：Rust 三门禁未跑（本批零 Rust 改动）；**视觉验收未做**——动画移除与 blur
+   降级改变了用户可见效果，需 `pnpm tauri build --bundles app` 后在 `.app` 里确认氛围层
+   观感与壁纸首帧/恢复不黑屏；`.app` 未重建，故已构建产物仍是旧前端（见
+   `AI_EDITING_RULES.md` §3.5：产物编译期内嵌，`pnpm build` 不影响已构建的 `.app`）。
+
 **2026-11-03（docs 全量状态审计 + 索引重建 + 过期审计归档 + ADR-022 收口插件平台）**：
 
 > 本轮**只动文档**（外加 `crates/rmccc-modloader/src/lib.rs` 一条错误消息里的文档路径字符串），
@@ -21,7 +43,8 @@
    读 diff 判定为一次完整的**空闲帧 GPU 优化**（舞台去掉 3 组 keyframes、粒子密度 ×0.55、
    背景视频常驻 `requestAnimationFrame` 改为按需 `startDrawing`/`stopDrawing`、皮肤查看器加
    `IntersectionObserver` + `visibilitychange` 暂停 WebGL、卡片默认 blur 24px→16px）；
-   **改动不属于本轮、本轮未提交、也未跑其门禁**，实施者需自行补验收记录。
+   **改动不属于本轮、本轮未提交、也未跑其门禁**，实施者需自行补验收记录
+   （→ 同日已提交并完成三门禁，见上方「2026-11-03（前端空闲帧 GPU 优化收口）」轮次）。
 2. **数字实测**：IPC **132 条**（`#[tauri::command]` 132 = `IPC_COMMANDS` 132 =
    `generate_handler!` 132 = `src/ipc/api.ts` 的 132 处 `safeInvoke`；断言
    `src-tauri/src/ipc_tests.rs:168`）；workspace **21 members**，`crates/` 无孤儿；
