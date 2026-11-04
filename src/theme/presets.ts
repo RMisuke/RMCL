@@ -149,9 +149,6 @@ const SCENES: Record<string, ThemeScene> = {
   },
 };
 
-/** Re-exported for the theme preview cards and tests. */
-export const THEME_SCENES = SCENES;
-
 export function isDarkHex(hex: string): boolean {
   const rgb = parseHex(hex);
   if (!rgb) return true;

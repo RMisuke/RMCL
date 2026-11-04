@@ -228,28 +228,7 @@ export function ThemeEffects(props: { area: "app" | "hero" }) {
 
 /**
  * App-scope wallpaper is owned by `src/backdrop/BackdropLayer.tsx` (one backdrop
- * for the whole shell). This module now only renders theme-scoped extras: the
- * hero layer below and the effect presets exported above.
+ * for the whole shell). This module only renders theme-scoped effects; the
+ * hero-scoped layer was removed together with the card-based home page.
  */
 
-/** Hero-scope wallpaper + effects (rendered inside Home's `.hero`). */
-export function ThemeHeroLayer() {
-  const background = () => {
-    const skin = themeSkin();
-    if (!skin?.background) return null;
-    // `both` is served by the single app-level layer; the hero becomes
-    // transparent (see theme-skin.css) so the video is decoded only once.
-    const scope = skin.background.scope;
-    return scope === "hero" ? skin.background : null;
-  };
-  return (
-    <Show when={background() || themeSkin()?.effects?.length}>
-      <div class="theme-hero-layer" aria-hidden="true">
-        <Show when={background()} keyed>
-          {(bg) => <BackgroundMedia background={bg} />}
-        </Show>
-        <ThemeEffects area="hero" />
-      </div>
-    </Show>
-  );
-}
