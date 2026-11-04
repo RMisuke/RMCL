@@ -1,0 +1,598 @@
+/* ==========================================================================
+   Home redesign: left floating dock, account popover, launch capsule and
+   flat window controls. Colours come from the theme tokens so the upcoming
+   theme rework only has to change variables, not structure.
+   ========================================================================== */
+
+/* ── Left dock ─────────────────────────────────────────────────────────── */
+
+.left-dock {
+  position: absolute;
+  z-index: 30;
+  left: 16px;
+  top: 16px;
+  bottom: 16px;
+  width: 64px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 0;
+  border: 1px solid color-mix(in srgb, var(--rmccc-text) 12%, transparent);
+  border-radius: 18px;
+  /* Shares the main-panel opacity slider (Settings → Appearance) instead of a
+     fixed fill, so the dock and the page shell fade together. */
+  background: color-mix(in srgb, var(--rmccc-surface) var(--rmccc-panel-alpha, 74%), transparent);
+  box-shadow: 0 18px 44px color-mix(in srgb, var(--rmccc-background) 34%, transparent);
+  -webkit-user-select: none;
+  user-select: none;
+}
+/* 0 % from the shared slider must clear the dock frame too (mirrors .app-body). */
+html[data-panel-transparent="on"] .left-dock {
+  border-color: transparent;
+  box-shadow: none;
+}
+
+.left-dock-nav,
+.left-dock-foot {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+}
+/* Avatar pinned top, task centre pinned bottom, navigation optically centred. */
+.left-dock-nav {
+  flex: 1;
+  justify-content: center;
+}
+
+.left-dock-item {
+  position: relative;
+  width: 44px;
+  height: 44px;
+  display: grid;
+  place-items: center;
+  border-radius: 12px;
+  color: var(--rmccc-text-muted);
+  transition: color 120ms ease, background 120ms ease;
+}
+.left-dock-item:hover { color: var(--rmccc-text); background: color-mix(in srgb, var(--rmccc-text) 8%, transparent); }
+.left-dock-item.is-active {
+  color: var(--rmccc-accent);
+  background: color-mix(in srgb, var(--rmccc-accent) 16%, transparent);
+}
+.left-dock-item.is-download { color: var(--rmccc-accent); }
+.left-dock-item.is-download.is-active { background: color-mix(in srgb, var(--rmccc-accent) 20%, transparent); }
+.left-dock-icon { width: 24px; height: 24px; object-fit: contain; }
+
+.left-dock-tip {
+  position: absolute;
+  left: calc(100% + 10px);
+  top: 50%;
+  transform: translateY(-50%);
+  padding: 4px 8px;
+  border-radius: 8px;
+  color: var(--rmccc-text);
+  background: color-mix(in srgb, var(--rmccc-surface-elevated) 96%, transparent);
+  border: 1px solid color-mix(in srgb, var(--rmccc-text) 12%, transparent);
+  box-shadow: 0 10px 26px rgba(0, 0, 0, .28);
+  font-size: 10.5px;
+  white-space: nowrap;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 120ms ease;
+}
+.left-dock-item:hover .left-dock-tip { opacity: 1; }
+
+/* Task indicator lives in the dock foot now. */
+.left-dock-foot .rail-task-indicator {
+  width: 44px;
+  height: 44px;
+  justify-content: center;
+  border-radius: 12px;
+  color: var(--rmccc-text-muted);
+}
+.left-dock-foot .rail-task-indicator:hover {
+  color: var(--rmccc-text);
+  background: color-mix(in srgb, var(--rmccc-text) 8%, transparent);
+}
+
+/* ── Account avatar + popover ──────────────────────────────────────────── */
+
+.left-dock-account { position: relative; }
+
+.account-avatar-trigger {
+  position: relative;
+  width: 48px;
+  height: 48px;
+  display: grid;
+  place-items: center;
+  border: 1px solid color-mix(in srgb, var(--rmccc-text) 14%, transparent);
+  border-radius: 12px;
+  color: var(--rmccc-text);
+  background: color-mix(in srgb, var(--rmccc-surface) 26%, transparent);
+  transition: border-color 120ms ease, background 120ms ease;
+}
+.account-avatar-trigger:hover,
+.account-avatar-trigger.is-open {
+  border-color: color-mix(in srgb, var(--rmccc-accent) 42%, transparent);
+  background: color-mix(in srgb, var(--rmccc-accent) 12%, transparent);
+}
+.account-avatar-trigger .account-avatar,
+.account-avatar-trigger .account-avatar-face {
+  width: 44px;
+  height: 44px;
+  border-radius: 11px;
+}
+.account-trigger-dot {
+  position: absolute;
+  right: -2px;
+  bottom: -2px;
+  width: 11px;
+  height: 11px;
+  border-radius: 50%;
+  border: 2px solid var(--rmccc-background);
+  background: color-mix(in srgb, var(--rmccc-text-muted) 60%, transparent);
+}
+.account-trigger-dot.is-online { background: #39c26d; }
+.account-trigger-dot.is-expired { background: #e0574f; }
+
+.account-popover {
+  position: absolute;
+  z-index: 50;
+  left: calc(100% + 12px);
+  top: -6px;
+  width: 322px;
+  padding: 8px;
+  border: 1px solid color-mix(in srgb, var(--rmccc-text) 12%, transparent);
+  border-radius: 16px;
+  background: color-mix(in srgb, var(--rmccc-surface-elevated) 97%, transparent);
+  box-shadow: 0 24px 60px rgba(0, 0, 0, .36);
+}
+.account-popover-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 6px 10px 9px;
+  color: var(--rmccc-text-muted);
+  font-size: 9px;
+  font-weight: 760;
+  letter-spacing: .16em;
+  text-transform: uppercase;
+}
+
+.account-row {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  width: 100%;
+  padding: 7px 8px;
+  border-radius: 11px;
+  cursor: pointer;
+}
+.account-row:hover { background: color-mix(in srgb, var(--rmccc-text) 6%, transparent); }
+.account-row.is-active { background: color-mix(in srgb, var(--rmccc-accent) 14%, transparent); }
+.account-row-avatar .account-avatar { width: 30px; height: 30px; border-radius: 8px; }
+.account-row-copy { display: flex; flex-direction: column; min-width: 0; flex: 1; }
+.account-row-copy strong {
+  overflow: hidden;
+  color: var(--rmccc-text);
+  font-size: 12.5px;
+  font-weight: 650;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.account-row-copy small {
+  overflow: hidden;
+  color: var(--rmccc-text-muted);
+  font-size: 9.5px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.account-row-actions { display: flex; align-items: center; gap: 2px; flex: 0 0 auto; }
+.account-action {
+  width: 24px;
+  height: 24px;
+  display: grid;
+  place-items: center;
+  border-radius: 7px;
+  color: var(--rmccc-text-muted);
+  transition: color 120ms ease, background 120ms ease;
+}
+.account-action:hover { color: var(--rmccc-text); background: color-mix(in srgb, var(--rmccc-text) 10%, transparent); }
+.account-action.is-danger:hover { color: #e8877f; background: color-mix(in srgb, #e0574f 16%, transparent); }
+.account-action:disabled { opacity: .25; cursor: default; background: none; }
+.account-status {
+  width: 7px;
+  height: 7px;
+  margin-left: 6px;
+  border-radius: 50%;
+  background: color-mix(in srgb, var(--rmccc-text-muted) 55%, transparent);
+}
+.account-status.is-online { background: #39c26d; box-shadow: 0 0 0 3px rgba(57, 194, 109, .16); }
+.account-status.is-expired { background: #e0574f; box-shadow: 0 0 0 3px rgba(224, 87, 79, .16); }
+
+.account-popover-sep {
+  height: 1px;
+  margin: 6px;
+  background: color-mix(in srgb, var(--rmccc-text) 10%, transparent);
+}
+.account-add-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 8px;
+  border-radius: 10px;
+  color: var(--rmccc-text-muted);
+  font-size: 11.5px;
+  text-align: left;
+}
+.account-add-row:hover { color: var(--rmccc-text); background: color-mix(in srgb, var(--rmccc-text) 6%, transparent); }
+.account-popover-empty { padding: 16px 10px; color: var(--rmccc-text-muted); font-size: 11px; text-align: center; }
+.account-uuid-hint { margin-top: 8px; }
+
+.add-account-choices { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+.add-account-choice {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  padding: 20px 12px;
+  border: 1px solid color-mix(in srgb, var(--rmccc-text) 12%, transparent);
+  border-radius: 14px;
+  color: var(--rmccc-text);
+  background: color-mix(in srgb, var(--rmccc-text) 4%, transparent);
+  text-align: center;
+  transition: border-color 120ms ease, background 120ms ease;
+}
+.add-account-choice:hover {
+  border-color: color-mix(in srgb, var(--rmccc-accent) 46%, transparent);
+  background: color-mix(in srgb, var(--rmccc-accent) 10%, transparent);
+}
+.add-account-choice strong { font-size: 12.5px; font-weight: 650; }
+.add-account-choice small { color: var(--rmccc-text-muted); font-size: 9.5px; line-height: 1.5; }
+
+/* ── Launch capsule (bottom-right) ─────────────────────────────────────── */
+
+.launch-dock {
+  position: absolute;
+  z-index: 30;
+  right: 16px;
+  bottom: 16px;
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 10px;
+}
+
+/* Run card: only while a game is running; same width as the capsule below. */
+.launch-run-card {
+  display: flex;
+  gap: 4px;
+  padding: 4px;
+  border: 1px solid color-mix(in srgb, var(--rmccc-text) 12%, transparent);
+  border-radius: 18px;
+  background: color-mix(in srgb, var(--rmccc-surface) 46%, transparent);
+  box-shadow: 0 16px 40px color-mix(in srgb, var(--rmccc-background) 34%, transparent);
+}
+.launch-run-action {
+  flex: 1;
+  height: 44px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  border-radius: 14px;
+  color: var(--rmccc-text);
+  background: color-mix(in srgb, var(--rmccc-text) 4%, transparent);
+  font-size: 12.5px;
+  font-weight: 600;
+  white-space: nowrap;
+  transition: background 120ms ease;
+}
+.launch-run-action:hover { background: color-mix(in srgb, var(--rmccc-text) 9%, transparent); }
+.launch-run-action.is-danger {
+  color: #fff;
+  background: var(--rmccc-danger);
+}
+.launch-run-action.is-danger:hover { background: color-mix(in srgb, var(--rmccc-danger) 86%, #000); }
+
+.launch-capsule {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  height: 68px;
+  padding: 4px;
+  overflow: hidden;
+  border: 1px solid color-mix(in srgb, var(--rmccc-text) 12%, transparent);
+  border-radius: 20px;
+  background: color-mix(in srgb, var(--rmccc-surface) 46%, transparent);
+  box-shadow: 0 20px 48px color-mix(in srgb, var(--rmccc-background) 38%, transparent);
+}
+/* The whole left half opens the version list — no separate arrow hot zone. */
+.launch-capsule-info {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  height: 60px;
+  min-width: 0;
+  flex: 1;
+  padding: 0 12px 0 18px;
+  border-radius: 16px;
+  color: var(--rmccc-text);
+  text-align: left;
+  transition: background 120ms ease;
+}
+.launch-capsule-info:hover { background: color-mix(in srgb, var(--rmccc-text) 6%, transparent); }
+.launch-capsule-copy {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 2px;
+  min-width: 0;
+  max-width: 210px;
+}
+.launch-capsule-copy strong {
+  overflow: hidden;
+  color: var(--rmccc-text);
+  font-size: 14px;
+  font-weight: 650;
+  letter-spacing: -.01em;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.launch-capsule-copy small {
+  overflow: hidden;
+  color: var(--rmccc-text-muted);
+  font-size: 10px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.launch-capsule-arrow {
+  flex: 0 0 auto;
+  color: var(--rmccc-text-muted);
+  transition: transform 160ms ease, color 120ms ease;
+}
+.launch-capsule-info:hover .launch-capsule-arrow { color: var(--rmccc-text); }
+.launch-capsule-info.is-open .launch-capsule-arrow { transform: rotate(180deg); }
+
+.launch-capsule-start {
+  width: 116px;
+  height: 60px;
+  flex: 0 0 116px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 0;
+  border-radius: 16px;
+  color: var(--rmccc-accent-contrast);
+  background: linear-gradient(
+    135deg,
+    var(--rmccc-accent),
+    var(--rmccc-accent-secondary, var(--rmccc-accent))
+  );
+  box-shadow: 0 10px 24px color-mix(in srgb, var(--rmccc-accent) 30%, transparent);
+  font-size: 14px;
+  font-weight: 700;
+  white-space: nowrap;
+  transition: filter 120ms ease, transform 120ms ease;
+}
+.launch-capsule-start:hover:not(:disabled) { filter: brightness(1.06); }
+.launch-capsule-start:active:not(:disabled) { transform: scale(.985); }
+.launch-capsule-start:disabled { opacity: .72; cursor: default; }
+.launch-capsule-spinner {
+  width: 15px;
+  height: 15px;
+  border: 2px solid color-mix(in srgb, var(--rmccc-accent-contrast) 34%, transparent);
+  border-top-color: var(--rmccc-accent-contrast);
+  border-radius: 50%;
+  animation: launch-capsule-spin .8s linear infinite;
+}
+@keyframes launch-capsule-spin { to { transform: rotate(360deg); } }
+
+.launch-popover {
+  position: absolute;
+  z-index: 50;
+  right: 0;
+  bottom: calc(100% + 10px);
+  display: flex;
+  flex-direction: column;
+  width: 340px;
+  max-height: min(430px, calc(100vh - 150px));
+  overflow-y: auto;
+  padding: 8px;
+  border: 1px solid color-mix(in srgb, var(--rmccc-text) 12%, transparent);
+  border-radius: 16px;
+  background: color-mix(in srgb, var(--rmccc-surface-elevated) 97%, transparent);
+  box-shadow: 0 24px 60px rgba(0, 0, 0, .36);
+}
+.launch-popover-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 6px 10px 9px;
+  color: var(--rmccc-text-muted);
+  font-size: 9px;
+  font-weight: 760;
+  letter-spacing: .16em;
+  text-transform: uppercase;
+}
+.launch-version-row {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  width: 100%;
+  padding: 7px 8px;
+  border-radius: 11px;
+  color: var(--rmccc-text);
+  text-align: left;
+}
+.launch-version-row:hover { background: color-mix(in srgb, var(--rmccc-text) 6%, transparent); }
+.launch-version-row.is-active { background: color-mix(in srgb, var(--rmccc-accent) 14%, transparent); }
+.launch-version-glyph {
+  display: grid;
+  place-items: center;
+  flex: 0 0 auto;
+  width: 30px;
+  height: 30px;
+  overflow: hidden;
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--rmccc-text) 8%, transparent);
+}
+.launch-version-glyph img { width: 100%; height: 100%; object-fit: cover; }
+.launch-version-copy { display: flex; flex-direction: column; min-width: 0; flex: 1; }
+.launch-version-copy strong {
+  overflow: hidden;
+  font-size: 12.5px;
+  font-weight: 650;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.launch-version-copy small {
+  overflow: hidden;
+  color: var(--rmccc-text-muted);
+  font-size: 9.5px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.launch-popover-sep { height: 1px; margin: 6px; background: color-mix(in srgb, var(--rmccc-text) 10%, transparent); }
+.launch-popover-action {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 8px;
+  border-radius: 10px;
+  color: var(--rmccc-text-muted);
+  font-size: 11.5px;
+  text-align: left;
+}
+.launch-popover-action:hover { color: var(--rmccc-text); background: color-mix(in srgb, var(--rmccc-text) 6%, transparent); }
+.launch-popover-empty { padding: 18px 10px; color: var(--rmccc-text-muted); font-size: 11px; text-align: center; }
+
+/* ── Window controls (top-right, flat) ─────────────────────────────────── */
+
+.window-controls {
+  position: fixed;
+  z-index: 120;
+  top: 16px;
+  right: 16px;
+  display: flex;
+  gap: 6px;
+}
+.window-control-btn {
+  width: 30px;
+  height: 30px;
+  display: grid;
+  place-items: center;
+  border: 1px solid color-mix(in srgb, var(--rmccc-text) 10%, transparent);
+  border-radius: 9px;
+  color: color-mix(in srgb, var(--rmccc-text) 72%, transparent);
+  background: color-mix(in srgb, var(--rmccc-surface) 30%, transparent);
+  transition: color 120ms ease, background 120ms ease;
+}
+.window-control-btn:hover {
+  color: var(--rmccc-text);
+  background: color-mix(in srgb, var(--rmccc-text) 12%, transparent);
+}
+.window-control-btn.is-close {
+  color: #fbe9e7;
+  background: color-mix(in srgb, #e0574f 24%, transparent);
+  border-color: color-mix(in srgb, #e0574f 30%, transparent);
+}
+.window-control-btn.is-close:hover { color: #fff; background: #d25047; }
+
+/* ── Theme V4 settings ─────────────────────────────────────────────────── */
+
+.theme-v4-swatch {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 0;
+  width: 100%;
+  height: 40px;
+  margin-bottom: 8px;
+  overflow: hidden;
+  border-radius: 10px;
+}
+.theme-v4-swatch i { display: block; }
+.theme-card small { color: var(--rmccc-text-muted); font-size: 9.5px; }
+
+.color-field {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--rmccc-text-muted);
+  font-size: 11px;
+}
+.color-field input[type="color"] {
+  width: 44px;
+  height: 28px;
+  padding: 2px;
+  border: 1px solid color-mix(in srgb, var(--rmccc-text) 16%, transparent);
+  border-radius: 8px;
+  background: transparent;
+}
+.btn-row input[type="time"] {
+  padding: 4px 8px;
+  border: 1px solid color-mix(in srgb, var(--rmccc-text) 16%, transparent);
+  border-radius: 8px;
+  color: var(--rmccc-text);
+  background: color-mix(in srgb, var(--rmccc-text) 4%, transparent);
+  font-size: 12px;
+}
+
+/* ── Log drawer: flat inset panel matching the new shell ───────────────── */
+
+.log-drawer {
+  top: 16px;
+  right: 16px;
+  bottom: 16px;
+  width: 580px;
+  max-width: calc(100vw - 32px);
+  border: 1px solid color-mix(in srgb, var(--rmccc-text) 12%, transparent);
+  border-radius: 18px;
+  background: color-mix(in srgb, var(--rmccc-surface) 94%, transparent);
+  box-shadow: 0 24px 60px color-mix(in srgb, var(--rmccc-background) 40%, transparent);
+  overflow: hidden;
+}
+.log-drawer-head {
+  padding: 10px 112px 10px 16px;
+  gap: 12px;
+  border-bottom-color: color-mix(in srgb, var(--rmccc-text) 8%, transparent);
+}
+.log-drawer-title {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+.log-drawer-title h3 { font-size: 13px; font-weight: 650; }
+.log-drawer .log-filter-bar {
+  padding: 8px 16px;
+  border-bottom-color: color-mix(in srgb, var(--rmccc-text) 8%, transparent);
+}
+.log-drawer .log-lines {
+  margin: 0 12px 12px;
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--rmccc-text) 4%, transparent);
+}
+.log-drawer .ai-panel {
+  margin: 0 12px 12px;
+  border: 1px solid color-mix(in srgb, var(--rmccc-text) 10%, transparent);
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--rmccc-text) 3%, transparent);
+}
+
+/* ── Blank home ────────────────────────────────────────────────────────── */
+
+.home-blank { height: 100%; }
+
+/* Task centre slides in from the bottom-left, right of the dock. */
+.task-center {
+  right: auto;
+  left: 96px;
+  bottom: 16px;
+}
