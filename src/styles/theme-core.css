@@ -36,6 +36,8 @@
      be fed straight into color-mix(); the TypeScript store writes the live
      values on <html>. */
   --rmccc-panel-alpha: 74%;
+  /* Bottom docks follow the panel-opacity slider; 74 % maps to .148 white. */
+  --rmccc-dock-alpha: .148;
   --rmccc-card-alpha: 62%;
   --rmccc-card-blur: 16px;
   --rmccc-home-card-blur: var(--rmccc-card-blur);
@@ -123,7 +125,8 @@ body {
   display: flex;
   flex-direction: column;
   height: 100vh;
-  padding: 0 0 88px;
+  /* Left dock lane; the launch capsule is Home-only and overlays the wallpaper. */
+  padding: 0 0 0 96px;
   overflow: hidden;
   border-radius: 18px;
   background: var(--rmccc-background);
@@ -159,7 +162,7 @@ html[data-window-maximized="true"] .app-root { border-radius: 0; }
   z-index: 1;
   flex: 1;
   min-height: 0;
-  margin: 10px 12px 0;
+  margin: 16px 16px 16px 0;
   overflow: hidden;
   border: 1px solid var(--noctis-line);
   border-radius: 22px;
@@ -170,7 +173,7 @@ html[data-window-maximized="true"] .app-root { border-radius: 0; }
   backdrop-filter: blur(30px) saturate(120%);
   -webkit-backdrop-filter: blur(30px) saturate(120%);
 }
-.app-body:has(.soft-home) {
+.app-body:has(.home-blank) {
   margin: 0;
   border: 0;
   /* Keep the window frame rounded on Home too. The wallpaper fills the body,
@@ -185,7 +188,7 @@ html[data-window-maximized="true"] .app-root { border-radius: 0; }
    radius bulges outside the outer curve and reads as a white crescent; 18-12=6
    makes the two corners concentric. Home's body is transparent and already
    matches app-root. */
-html[data-platform="windows"] .app-body:not(:has(.soft-home)) { border-radius: 6px; }
+html[data-platform="windows"] .app-body:not(:has(.home-blank)) { border-radius: 6px; }
 
 .app-content { height: 100%; min-height: 0; overflow: auto; background: transparent; }
 

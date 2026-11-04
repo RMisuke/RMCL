@@ -28,6 +28,18 @@
   pointer-events: none;
 }
 
+/* App-scope decor layer (L1): own stacking context so effect z-index stays
+   below `.app-body` (z-index 1). */
+.decor-layer {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  overflow: hidden;
+  border-radius: inherit;
+  pointer-events: none;
+  isolation: isolate;
+}
+
 .app-root > .app-body {
   position: relative;
   z-index: 1;
@@ -97,7 +109,8 @@ html[data-skin-background="both"] .hero {
   position: absolute;
   inset: -22%;
   opacity: calc(0.25 + var(--aurora-intensity, 0.5) * 0.55);
-  filter: blur(46px) saturate(125%);
+  /* No filter: blur() — the radial gradients already read as a soft glow, and a
+     full-screen blur cannot be cached by the compositor. */
 }
 
 .theme-aurora i {
@@ -106,7 +119,6 @@ html[data-skin-background="both"] .hero {
   width: 58%;
   aspect-ratio: 1;
   border-radius: 50%;
-  mix-blend-mode: screen;
   background: radial-gradient(
     circle,
     color-mix(in srgb, var(--rmccc-accent) 62%, transparent),
@@ -271,31 +283,24 @@ html[data-skin-background="both"] .hero {
   }
 }
 
-/* ── Motion gates ─────────────────────────────────────────────────────── */
+/* ── Static (non-full tier) effect fallbacks ──────────────────────────── */
 
-html[data-motion="off"] .theme-block,
-html[data-motion="off"] .theme-block-spin,
-html[data-motion="off"] .theme-aurora i,
-html[data-motion="off"] .theme-particle {
+.theme-aurora.is-static i { animation: none; opacity: .8; }
+.theme-aurora.is-static i:nth-child(n + 2) { display: none; }
+
+.theme-block.is-static { animation: none; }
+.theme-block.is-static .face.front {
+  transform: none;
+  filter: none;
+}
+
+.theme-particle.is-static {
   animation: none;
+  opacity: .4;
 }
 
-html[data-motion="off"] .theme-media-video {
-  display: none;
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .theme-block,
-  .theme-block-spin,
-  .theme-aurora i,
-  .theme-particle {
-    animation: none;
-  }
-
-  .theme-media-video {
-    display: none;
-  }
-}
+/* ── Motion gates ─────────────────────────────────────────────────────── */
+/* Centralized in `primitives.css` (`.ambient-stage *` / `.theme-effects *`). */
 
 /* ── Navigation icons / ornaments ─────────────────────────────────────── */
 
