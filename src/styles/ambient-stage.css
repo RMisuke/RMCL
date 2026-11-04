@@ -47,7 +47,9 @@
   position: absolute;
   inset: -24%;
   opacity: .85;
-  filter: blur(58px) saturate(118%);
+  /* Static wash: the glow is expressed by the radial gradients themselves.
+     No `filter: blur()` — a full-screen blur on a live backdrop forces the
+     compositor to rebuild every frame and cannot be cached. */
 }
 .ambient-veil i {
   position: absolute;
@@ -55,9 +57,8 @@
   width: 44%;
   aspect-ratio: 1;
   border-radius: 50%;
-  mix-blend-mode: screen;
-  /* Static wash. Animating a full-screen 58 px blur forced the compositor to
-     rebuild the entire backdrop each frame; the particles still carry motion. */
+  /* No mix-blend-mode: blending a full-screen layer forces a read-back and
+     defeats layer caching. The radial falloff already reads as a soft glow. */
 }
 .ambient-veil i.is-a {
   left: 12%;
@@ -122,7 +123,6 @@
   inset: 0;
   overflow: hidden;
   opacity: calc(var(--scene-particle-opacity, .55) * 1.15);
-  mix-blend-mode: screen;
 }
 .ambient-particle {
   position: absolute;
@@ -183,7 +183,6 @@
   pointer-events: none;
   background-image: radial-gradient(color-mix(in srgb, var(--rmccc-text) 80%, transparent) .5px, transparent .7px);
   background-size: 4px 4px;
-  mix-blend-mode: overlay;
 }
 
 /* Theme atmosphere variations. Hue comes from --scene-*; these only change
@@ -206,13 +205,12 @@
   box-shadow: 0 -18px 100px color-mix(in srgb, var(--scene-primary) 20%, transparent);
 }
 .ambient-stage[data-atmosphere="ember"] .ambient-grid { opacity: .26; }
-.ambient-stage[data-atmosphere="rose"] .ambient-veil { filter: blur(66px) saturate(108%); }
+.ambient-stage[data-atmosphere="rose"] .ambient-veil { opacity: .88; }
 .ambient-stage[data-atmosphere="rose"] .ambient-horizon { bottom: -82%; opacity: .72; }
-.ambient-stage[data-atmosphere="parchment"] .ambient-veil { opacity: .5; filter: blur(70px) saturate(82%); }
-.ambient-stage[data-atmosphere="parchment"] .ambient-particles { mix-blend-mode: multiply; }
+.ambient-stage[data-atmosphere="parchment"] .ambient-veil { opacity: .5; }
 .ambient-stage[data-atmosphere="parchment"] .ambient-grid { opacity: .22; }
 .ambient-stage[data-atmosphere="daybreak"] .ambient-veil { opacity: .62; }
-.ambient-stage[data-atmosphere="daybreak"] .ambient-particles { mix-blend-mode: multiply; opacity: calc(var(--scene-particle-opacity, .42) * .8); }
+.ambient-stage[data-atmosphere="daybreak"] .ambient-particles { opacity: calc(var(--scene-particle-opacity, .42) * .8); }
 .ambient-stage[data-atmosphere="daybreak"] .ambient-grid { opacity: .22; }
 .ambient-stage[data-atmosphere="custom"] .ambient-horizon { opacity: .55; }
 
@@ -230,19 +228,13 @@ html[data-theme-mode="light"] .ambient-vignette {
     radial-gradient(ellipse at 50% 42%, transparent 48%, color-mix(in srgb, var(--rmccc-text) 7%, transparent) 118%),
     linear-gradient(to bottom, color-mix(in srgb, #fff 12%, transparent), transparent 30%, transparent 74%, color-mix(in srgb, var(--rmccc-text) 5%, transparent));
 }
-html[data-theme-mode="light"] .ambient-grain { opacity: .022; mix-blend-mode: multiply; }
+html[data-theme-mode="light"] .ambient-grain { opacity: .022; }
 
-/* Motion gates. The stage remains as a static gradient when motion is off. */
-html[data-motion="off"] .ambient-particle,
-html[data-motion="off"] .ambient-grid,
-html[data-motion="off"] .ambient-veil i { animation: none !important; }
+/* Motion/opacity reductions. Animation gating lives in primitives.css. */
 html[data-motion="off"] .ambient-particles { opacity: .18; }
 html[data-motion="off"] .ambient-particle:nth-child(n + 9) { display: none; }
 
 @media (prefers-reduced-motion: reduce) {
-  .ambient-particle,
-  .ambient-grid,
-  .ambient-veil i { animation: none !important; }
   .ambient-particles { opacity: .16; }
   .ambient-particle:nth-child(n + 9) { display: none; }
 }

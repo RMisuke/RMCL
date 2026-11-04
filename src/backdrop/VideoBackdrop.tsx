@@ -1,0 +1,448 @@
+/**
+ * Video wallpaper backdrop (ui-render-refactor S3 / `03_BACKGROUND_SUBSYSTEM.md` §3).
+ *
+ * Capability split instead of one expensive path for both platforms:
+ *  - Windows (WebView2/Chromium): the native `<video>` compositor is cheap and
+ *    reliable, so this renders the element directly — no canvas, no rAF loop.
+ *  - macOS (WKWebView): the native video surface can go transparent over a
+ *    transparent window, so decoded frames are painted into a DOM canvas. That
+ *    path is budgeted: reduced internal resolution, `alpha:false`, ~25 fps and
+ *    drawing paused whenever the window is hidden or unfocused.
+ *
+ * There is no resident watchdog in the native path; the composite path keeps a
+ * lightweight, visibility-gated liveness check.
+ */
+import type { JSX } from "solid-js";
+import { Show, createEffect, createMemo, createSignal, onCleanup, onMount } from "solid-js";
+import {
+  backgroundVideo,
+  backgroundVideoPreparing,
+  primeBackgroundVideo,
+  setBackgroundVideoIssue,
+} from "../lib/backgroundVideo";
+import { settingsStore } from "../stores/settings";
+import { backgroundImage } from "../lib/backgroundImage";
+import { scheduleAdaptiveSample } from "../lib/adaptiveTheme";
+import { reportFrontendMessage } from "../ipc/api";
+import { platformKind } from "../render/tier";
+import { t } from "../i18n";
+
+/** Composite frame budget: ~25 fps is plenty for a wallpaper and saves power. */
+const FRAME_INTERVAL_MS = 40;
+/** Cap the internal canvas long edge; upscaling by CSS is visually free. */
+const MAX_CANVAS_EDGE = 1600;
+
+export function VideoBackdrop(): JSX.Element {
+  const composite = createMemo(() => platformKind() !== "windows");
+
+  const [src, setSrc] = createSignal<string | null>(null);
+  let video: HTMLVideoElement | undefined;
+  let generation = 0;
+  let renderedPath: string | null = null;
+  let hiddenAt = 0;
+  let playingLogged = false;
+  let canvas: HTMLCanvasElement | undefined;
+  let canvasCtx: CanvasRenderingContext2D | null = null;
+  let drawRaf = 0;
+  let drawingActive = false;
+  let lastDrawAt = 0;
+  let frameCallback = 0;
+  let lastPresentedAt = 0;
+  let lastRecoveryAt = 0;
+  let recoveryCount = 0;
+  let stableFrames = 0;
+  let suppressSampleUntil = 0;
+  let watchdogTimer: number | undefined;
+
+  const wanted = () =>
+    backgroundVideo().enabled &&
+    Boolean(backgroundVideo().path) &&
+    !backgroundImage().enabled &&
+    settingsStore.motionEnabled();
+
+  const canDraw = () =>
+    document.visibilityState !== "hidden" && document.hasFocus();
+
+  function logVideo(event: string, level: "info" | "warn" | "error" = "info"): void {
+    const el = video;
+    void reportFrontendMessage(
+      `background video: ${event} wanted=${wanted()} enabled=${backgroundVideo().enabled} ` +
+        `motion=${settingsStore.motionEnabled()} image=${backgroundImage().enabled} ` +
+        `src=${Boolean(src())} ready=${el?.readyState ?? -1} paused=${el?.paused ?? true} ` +
+        `error=${el?.error?.code ?? 0} t=${el?.currentTime?.toFixed(2) ?? "-"}`,
+      level
+    );
+  }
+
+  function playVideo(): void {
+    const el = video;
+    if (!el || !wanted()) return;
+    if (el.ended) el.currentTime = 0;
+    void el.play().catch((error: unknown) => {
+      if (error instanceof DOMException && error.name === "AbortError") return;
+      logVideo(`play failed ${String(error)}`, "warn");
+    });
+  }
+
+  function sizeCanvas(): void {
+    if (!canvas) return;
+    const dpr = Math.min(Math.max(window.devicePixelRatio || 1, 1), 1.25);
+    let width = Math.max(1, Math.round(window.innerWidth * dpr));
+    let height = Math.max(1, Math.round(window.innerHeight * dpr));
+    const longEdge = Math.max(width, height);
+    if (longEdge > MAX_CANVAS_EDGE) {
+      const scale = MAX_CANVAS_EDGE / longEdge;
+      width = Math.max(1, Math.round(width * scale));
+      height = Math.max(1, Math.round(height * scale));
+    }
+    if (canvas.width !== width || canvas.height !== height) {
+      canvas.width = width;
+      canvas.height = height;
+    }
+    // Opaque context: the wallpaper covers the whole layer, so skipping alpha
+    // blending is cheaper on the compositor.
+    canvasCtx = canvas.getContext("2d", { alpha: false });
+    if (canvasCtx) {
+      canvasCtx.fillStyle = "#000";
+      canvasCtx.fillRect(0, 0, width, height);
+    }
+  }
+
+  function drawVideoFrame(force = false): void {
+    if (!composite()) return;
+    const now = performance.now();
+    if (!force && now - lastDrawAt < FRAME_INTERVAL_MS) return;
+    lastDrawAt = now;
+    const ctx = canvasCtx;
+    const el = video;
+    const target = canvas;
+    if (!ctx || !el || !target || el.readyState < 2 || !el.videoWidth) return;
+    const vw = el.videoWidth;
+    const vh = el.videoHeight;
+    const cw = target.width;
+    const ch = target.height;
+    const scale = Math.max(cw / vw, ch / vh);
+    const sw = cw / scale;
+    const sh = ch / scale;
+    const sx = (vw - sw) / 2;
+    const sy = (vh - sh) / 2;
+    try {
+      ctx.drawImage(el, sx, sy, sw, sh, 0, 0, cw, ch);
+    } catch {
+      // A frame can be unavailable for one tick; the next callback retries.
+    }
+  }
+
+  function drawFallback(): void {
+    drawRaf = window.requestAnimationFrame(() => {
+      if (!drawingActive) {
+        drawRaf = 0;
+        return;
+      }
+      if (canDraw()) drawVideoFrame();
+      drawFallback();
+    });
+  }
+
+  function stopDrawing(): void {
+    drawingActive = false;
+    if (drawRaf) window.cancelAnimationFrame(drawRaf);
+    drawRaf = 0;
+    const el = video;
+    if (frameCallback && el && typeof el.cancelVideoFrameCallback === "function") {
+      el.cancelVideoFrameCallback(frameCallback);
+    }
+    frameCallback = 0;
+  }
+
+  function startDrawing(): void {
+    if (!composite() || drawingActive || !wanted() || !src()) return;
+    const el = video;
+    if (!el) return;
+    drawingActive = true;
+    if (typeof el.requestVideoFrameCallback === "function") {
+      watchFrames();
+    } else {
+      drawFallback();
+    }
+  }
+
+  function onResize(): void {
+    if (!composite()) return;
+    sizeCanvas();
+    if (drawingActive) drawVideoFrame(true);
+  }
+
+  /** Frames that reached the compositor are the only reliable liveness signal. */
+  function watchFrames(): void {
+    const el = video;
+    if (!el || !wanted() || !drawingActive) return;
+    if (typeof el.requestVideoFrameCallback !== "function") return;
+    if (frameCallback && typeof el.cancelVideoFrameCallback === "function") {
+      el.cancelVideoFrameCallback(frameCallback);
+      frameCallback = 0;
+    }
+    frameCallback = el.requestVideoFrameCallback(() => {
+      if (!drawingActive) return;
+      lastPresentedAt = performance.now();
+      // Skip painting while hidden/unfocused; the video keeps playing so the
+      // compositor surface survives, but no GPU work is spent compositing.
+      if (canDraw()) drawVideoFrame(true);
+      stableFrames += 1;
+      if (stableFrames > 30) recoveryCount = 0;
+      watchFrames();
+    });
+  }
+
+  function recoverSurface(reason: string): void {
+    const el = video;
+    if (!composite() || !el || !wanted()) return;
+    const now = performance.now();
+    if (now - lastRecoveryAt < 5000) return;
+    lastRecoveryAt = now;
+    recoveryCount += 1;
+    stableFrames = 0;
+    logVideo(`surface recovery (${reason}) attempt=${recoveryCount}`, "warn");
+
+    if (recoveryCount >= 3) {
+      const current = src();
+      recoveryCount = 0;
+      suppressSampleUntil = performance.now() + 4000;
+      if (frameCallback && typeof el.cancelVideoFrameCallback === "function") {
+        el.cancelVideoFrameCallback(frameCallback);
+      }
+      frameCallback = 0;
+      video = undefined;
+      lastPresentedAt = 0;
+      setSrc(null);
+      window.setTimeout(() => {
+        if (wanted()) setSrc(current);
+      }, 120);
+      return;
+    }
+
+    suppressSampleUntil = performance.now() + 4000;
+    try {
+      el.pause();
+      el.load();
+    } catch {
+      // Keep the play() retry below as the fallback.
+    }
+    lastPresentedAt = performance.now();
+    window.setTimeout(() => playVideo(), 180);
+  }
+
+  function checkPlayback(): void {
+    if (!composite() || !wanted() || !canDraw()) return;
+    const el = video;
+    if (!el) return;
+    if (el.paused) {
+      playVideo();
+      return;
+    }
+    if (el.readyState < HTMLMediaElement.HAVE_CURRENT_DATA) {
+      recoverSurface("not-ready");
+      return;
+    }
+    if (typeof el.requestVideoFrameCallback !== "function") return;
+    if (lastPresentedAt === 0) {
+      lastPresentedAt = performance.now();
+      watchFrames();
+      return;
+    }
+    if (performance.now() - lastPresentedAt > 2600) {
+      recoverSurface("no presented frame");
+    }
+  }
+
+  function restartPlayback(): void {
+    if (!video) return;
+    video.currentTime = 0;
+    lastPresentedAt = performance.now();
+    playVideo();
+  }
+
+  function recoverPlayback(): void {
+    const el = video;
+    if (!el || !wanted()) return;
+    const wasHiddenFor = hiddenAt > 0 ? performance.now() - hiddenAt : 0;
+    hiddenAt = 0;
+    if (el.error || el.readyState < HTMLMediaElement.HAVE_CURRENT_DATA) {
+      try {
+        el.load();
+      } catch {
+        // The element is still attached; play() below remains the fallback.
+      }
+    } else if (wasHiddenFor > 800 && el.currentTime >= el.duration - 0.2) {
+      el.currentTime = 0;
+    }
+    lastPresentedAt = performance.now();
+    playVideo();
+    if (composite()) {
+      startDrawing();
+      drawVideoFrame(true);
+    }
+  }
+
+  function onVisibilityChange(): void {
+    if (document.visibilityState === "hidden") {
+      // Do not pause: WKWebView can blank the surface when the pipeline is
+      // stopped. Just record the time so recovery can tell a focus switch from
+      // a long occlusion.
+      hiddenAt = performance.now();
+    } else {
+      lastPresentedAt = performance.now();
+      window.requestAnimationFrame(recoverPlayback);
+    }
+  }
+
+  function onWindowFocus(): void {
+    lastPresentedAt = performance.now();
+    window.requestAnimationFrame(recoverPlayback);
+  }
+
+  createEffect(() => {
+    const current = backgroundVideo();
+    const active = wanted();
+    const path = current.path;
+    if (!active || !path) {
+      if (renderedPath !== null) {
+        generation++;
+        renderedPath = null;
+        setSrc(null);
+      }
+      return;
+    }
+    // Dim updates replace the whole prefs object; only a real source change
+    // should tear down and reload the video element.
+    if (renderedPath === path) return;
+    renderedPath = path;
+    const ticket = ++generation;
+    setSrc(null);
+    void primeBackgroundVideo().then((asset) => {
+      if (ticket !== generation) return;
+      if (asset) setSrc(asset.url);
+      else renderedPath = null;
+    });
+  });
+
+  createEffect(() => {
+    if (wanted()) playVideo();
+    else video?.pause();
+  });
+
+  // Idle cost guard: drawing + watchdog only exist while a composite video is
+  // actually wanted and attached. The native path runs nothing at rest.
+  createEffect(() => {
+    const active = composite() && wanted() && Boolean(src());
+    if (!active) {
+      stopDrawing();
+      if (watchdogTimer !== undefined) {
+        window.clearInterval(watchdogTimer);
+        watchdogTimer = undefined;
+      }
+      return;
+    }
+    if (watchdogTimer === undefined) {
+      watchdogTimer = window.setInterval(checkPlayback, 2000);
+    }
+    stopDrawing();
+    startDrawing();
+  });
+
+  onMount(() => {
+    document.addEventListener("visibilitychange", onVisibilityChange);
+    window.addEventListener("focus", onWindowFocus);
+    window.addEventListener("pageshow", onWindowFocus);
+    window.addEventListener("resize", onResize);
+    playVideo();
+  });
+
+  onCleanup(() => {
+    generation++;
+    if (watchdogTimer !== undefined) window.clearInterval(watchdogTimer);
+    watchdogTimer = undefined;
+    stopDrawing();
+    document.removeEventListener("visibilitychange", onVisibilityChange);
+    window.removeEventListener("focus", onWindowFocus);
+    window.removeEventListener("pageshow", onWindowFocus);
+    window.removeEventListener("resize", onResize);
+    video?.pause();
+    video = undefined;
+  });
+
+  return (
+    <>
+      <Show when={backgroundVideoPreparing() && wanted()}>
+        <div class="app-video-preparing" role="status">
+          {t("settings.appearance.video.preparing")}
+        </div>
+      </Show>
+      <Show when={src()}>
+        {(url) => (
+          <div
+            class={`app-video-layer ${composite() ? "is-composite" : "is-native"}`}
+            aria-hidden="true"
+            style={{ "--video-dim": String(backgroundVideo().dim / 100) }}
+          >
+            <video
+              ref={(el) => {
+                video = el;
+                el.loop = true;
+              }}
+              src={url()}
+              loop
+              muted
+              autoplay
+              playsinline
+              preload="auto"
+              controls={false}
+              tabIndex={-1}
+              onCanPlay={playVideo}
+              onPlaying={() => {
+                setBackgroundVideoIssue("");
+                lastPresentedAt = performance.now();
+                stableFrames = 0;
+                if (composite()) {
+                  startDrawing();
+                  drawVideoFrame(true);
+                }
+                if (!playingLogged) {
+                  playingLogged = true;
+                  logVideo("playing");
+                }
+              }}
+              onLoadedData={() => {
+                setBackgroundVideoIssue("");
+                if (performance.now() >= suppressSampleUntil) {
+                  scheduleAdaptiveSample(250);
+                }
+                if (composite()) {
+                  startDrawing();
+                  drawVideoFrame(true);
+                }
+                playVideo();
+              }}
+              onEnded={restartPlayback}
+              onError={() => {
+                setBackgroundVideoIssue("decode");
+                logVideo("element error", "error");
+              }}
+            />
+            <Show when={composite()}>
+              <canvas
+                class="app-video-canvas"
+                aria-hidden="true"
+                ref={(el) => {
+                  canvas = el;
+                  sizeCanvas();
+                  drawVideoFrame(true);
+                }}
+              />
+            </Show>
+          </div>
+        )}
+      </Show>
+    </>
+  );
+}
