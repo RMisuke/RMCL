@@ -22,9 +22,20 @@
 3. **修复**：新增 `is_folded_standalone` 判定；折叠版本的 patch 只保留在 `standalone` 视图
    （供 loader 检测/回写），不参与 `launch` 合并。MCBBS 额外库补丁改为同时折叠进顶层
    `libraries`，避免跳过后丢失 classpath 条目。
-4. **验证**：本机 14 个实例 dry-run 均无孤立 flag；对每个实例用其 Java 执行
-   `java @args -version` 全部退出 0；新增 `test_folded_standalone_does_not_reapply_patches`；
-   `cargo test --workspace` 通过。
+4. **同轮补充（MultiMC 形态整合包）**：HMCL 的 MultiMC 战斗层版本 JSON 会把同一个库写成
+   两条（纯 artifact + 带 `classifiers` natives）；`collect_classpath` 现在按解析后的
+   jar 路径去重，否则重复条目会让 Forge 的 BootstrapLauncher 在 `UnionFileSystem`
+   因 "Duplicate key …" 崩溃。
+5. **同轮补充（natives）**：这类版本只声明 `natives-macos`（x64 二进制），arm64 JVM 下
+   LWJGL 报 `Failed to locate library: liblwjgl.dylib`。现在 `collect_classpath` 把当前
+   平台的 natives JAR 一并放进 classpath（LWJGL 3 只从 classpath 解压，不读
+   `java.library.path`），并优先选用共享 libraries 里已存在的 arch 变体
+   （`natives-macos-arm64`）；`decompress_natives` 复用同一选择逻辑。
+6. **验证**：本机 14 个实例 dry-run 均无孤立 flag、classpath / module path 无重复项；
+   对每个实例用其 Java 执行 `java @args -version` 全部退出 0；`OakHouse_ModPack`
+   真实启动到 LWJGL/GL 初始化（Apple M1 Metal 4.1）且无 link 错误；新增
+   `test_folded_standalone_does_not_reapply_patches`、classpath 去重与 natives arch
+   选择回归测试；`cargo test --workspace` 通过。
 
 **2026-11-04（产物命名对齐 SNGL）**：
 

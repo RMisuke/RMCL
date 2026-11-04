@@ -13,7 +13,7 @@
 
 use rmccc_error::Result;
 use std::io::Read;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 /// Determine if a library is a native (platform-specific) library.
 ///
@@ -21,15 +21,16 @@ use std::path::{Path, PathBuf};
 /// `natives-windows`, `natives-macos`, `natives-linux`, or just contain
 /// the OS name as a classifier.
 pub fn is_native(lib: &rmccc_version::Library) -> bool {
-    let name = &lib.name;
-    let classifiers = [
-        "natives-windows",
-        "natives-macos",
-        "natives-osx",
-        "natives-linux",
-        "natives-unix",
-    ];
-    classifiers.iter().any(|c| name.contains(c))
+    if native_classifier_of(&lib.name).is_some() {
+        return true;
+    }
+    if lib.natives.as_ref().is_some_and(|map| !map.is_empty()) {
+        return true;
+    }
+    lib.downloads
+        .as_ref()
+        .and_then(|d| d.classifiers.as_ref())
+        .is_some_and(|map| map.keys().any(|k| k.starts_with("native")))
 }
 
 /// 从 Maven 坐标里取出 native classifier（`group:artifact:version:classifier`）。
@@ -141,21 +142,27 @@ pub fn decompress_natives(
 
     let mut count = 0u32;
 
-    for lib in libraries.iter().filter(|l| is_native(l)) {
+    let mut seen_jars = std::collections::HashSet::new();
+
+    for lib in libraries
+        .iter()
+        .filter(|l| rmccc_version::libraries::library_applies(l, platform))
+    {
         // 只解压属于当前平台的 native 库：Mojang manifest 会列出所有平台的
         // natives（`natives-windows*` / `natives-linux` …），它们既不该下载也
         // 不该解压。以前会对缺失的异平台 jar 逐条 warn，安装日志因此满是噪音。
-        if let Some(classifier) = native_classifier_of(&lib.name) {
-            if !platform.accepts_native_classifier(classifier) {
-                tracing::trace!(
-                    library = %lib.name,
-                    "Skipping native library for another platform"
-                );
-                continue;
-            }
-        }
+        let Some(classifier) =
+            rmccc_version::libraries::native_classifier_for(lib, platform, libs_dir)
+        else {
+            continue;
+        };
 
-        let jar_path = resolve_library_path(&lib.name, libs_dir);
+        let jar_path = rmccc_version::libraries::native_jar_path(lib, &classifier, libs_dir);
+        // MultiMC 形态 JSON 会把同一个库写成纯 artifact + classifiers 两条；
+        // 同一个 jar 只解压一次。
+        if !seen_jars.insert(jar_path.clone()) {
+            continue;
+        }
         if !jar_path.exists() {
             tracing::warn!("Native library JAR not found: {}", jar_path.display());
             continue;
@@ -265,7 +272,8 @@ pub fn decompress_natives(
 ///
 /// Delegates to [`rmccc_version::libraries::make_library_path`] so the path
 /// logic is shared with the download/classpath code (L14).
-fn resolve_library_path(name: &str, libs_dir: &Path) -> PathBuf {
+#[cfg(test)]
+fn resolve_library_path(name: &str, libs_dir: &Path) -> std::path::PathBuf {
     rmccc_version::libraries::make_library_path(name, libs_dir)
 }
 
@@ -287,6 +295,57 @@ mod tests {
             ..Default::default()
         };
         assert!(!is_native(&normal_lib));
+    }
+
+    fn mac() -> rmccc_platform::PlatformDescriptor {
+        rmccc_platform::PlatformDescriptor::macos_arm64()
+    }
+
+    #[test]
+    fn multimc_natives_map_selects_the_platform_classifier() {
+        // HMCL MultiMC 层：库名不带 classifier，natives map + downloads.classifiers。
+        let mut classifiers = std::collections::HashMap::new();
+        classifiers.insert(
+            "natives-macos".to_string(),
+            rmccc_version::DownloadEntry {
+                url: "https://example.com/lwjgl-natives-macos.jar".to_string(),
+                sha1: String::new(),
+                size: 1,
+                path: Some("org/lwjgl/lwjgl/3.3.1/lwjgl-3.3.1-natives-macos.jar".to_string()),
+            },
+        );
+        let lib = Library {
+            name: "org.lwjgl:lwjgl:3.3.1".to_string(),
+            natives: Some(std::collections::HashMap::from([(
+                "osx".to_string(),
+                "natives-macos".to_string(),
+            )])),
+            downloads: Some(rmccc_version::LibraryDownloads {
+                artifact: None,
+                classifiers: Some(classifiers),
+            }),
+            ..Default::default()
+        };
+        assert_eq!(
+            rmccc_version::libraries::native_classifier_for(&lib, &mac(), Path::new("/libs")),
+            Some("natives-macos".to_string())
+        );
+        assert_eq!(
+            rmccc_version::libraries::native_jar_path(&lib, "natives-macos", Path::new("/libs")),
+            Path::new("/libs/org/lwjgl/lwjgl/3.3.1/lwjgl-3.3.1-natives-macos.jar")
+        );
+    }
+
+    #[test]
+    fn plain_library_has_no_native_classifier() {
+        let lib = Library {
+            name: "com.google.guava:guava:31.1-jre".to_string(),
+            ..Default::default()
+        };
+        assert_eq!(
+            rmccc_version::libraries::native_classifier_for(&lib, &mac(), Path::new("/libs")),
+            None
+        );
     }
 
     #[test]

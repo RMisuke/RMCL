@@ -188,37 +188,220 @@ pub fn make_library_path(name: &str, libs_dir: &Path) -> PathBuf {
         .join(&jar_name)
 }
 
+/// Native classifiers this library declares for the current platform,
+/// ordered by the platform's priority list (arch-specific first).
+///
+/// Two manifest shapes exist:
+/// - 1.19+ vanilla: the classifier is part of the Maven coordinate
+///   (`org.lwjgl:lwjgl:3.3.1:natives-macos-arm64`);
+/// - Mojang legacy / HMCL MultiMC: `natives: {osx: "natives-macos"}` plus
+///   `downloads.classifiers`.
+pub fn declared_native_classifiers(lib: &Library, platform: &PlatformDescriptor) -> Vec<String> {
+    let mut declared: Vec<String> = Vec::new();
+    if let Some(last) = lib.name.split(':').nth(3) {
+        if last.starts_with("natives-") {
+            declared.push(last.to_string());
+        }
+    }
+    if let Some(natives) = &lib.natives {
+        for value in natives.values() {
+            for arch in ["64", "32", ""] {
+                let candidate = value.replace("${arch}", arch);
+                if !declared.contains(&candidate) {
+                    declared.push(candidate);
+                }
+            }
+        }
+    }
+    if let Some(classifiers) = lib.downloads.as_ref().and_then(|d| d.classifiers.as_ref()) {
+        for key in classifiers.keys() {
+            if !declared.contains(key) {
+                declared.push(key.clone());
+            }
+        }
+    }
+    platform
+        .native_classifier_candidates()
+        .iter()
+        .filter(|want| declared.iter().any(|have| have == *want))
+        .map(|want| (*want).to_string())
+        .collect()
+}
+
+/// Path of the native JAR for `classifier`.
+pub fn native_jar_path(lib: &Library, classifier: &str, libs_dir: &Path) -> PathBuf {
+    if let Some(path) = lib
+        .downloads
+        .as_ref()
+        .and_then(|d| d.classifiers.as_ref())
+        .and_then(|c| c.get(classifier))
+        .and_then(|entry| entry.path.as_ref())
+    {
+        return libs_dir.join(path);
+    }
+    let parts: Vec<&str> = lib.name.split(':').collect();
+    let coordinate = if parts.len() >= 4 && parts[3].starts_with("natives-") {
+        // Replace the declared classifier with the requested one.
+        format!("{}:{}:{}:{}", parts[0], parts[1], parts[2], classifier)
+    } else {
+        format!("{}:{}", lib.name, classifier)
+    };
+    make_library_path(&coordinate, libs_dir)
+}
+
+/// Native classifier to use for this library on `platform`.
+///
+/// Prefers an arch-matching JAR that already exists in the shared libraries
+/// directory (MultiMC packs often only declare the generic `natives-macos`,
+/// which ships x86_64 binaries — unusable from an arm64 JVM). Falls back to
+/// the first declared classifier so a genuinely missing JAR still fails loudly.
+pub fn native_classifier_for(
+    lib: &Library,
+    platform: &PlatformDescriptor,
+    libs_dir: &Path,
+) -> Option<String> {
+    let declared = declared_native_classifiers(lib, platform);
+    if declared.is_empty() {
+        return None;
+    }
+    for want in platform.native_classifier_candidates() {
+        if native_jar_path(lib, want, libs_dir).is_file() {
+            return Some((*want).to_string());
+        }
+    }
+    declared.into_iter().next()
+}
+
 /// Collect all library paths for the classpath.
+///
+/// Duplicate paths are dropped (first occurrence wins). HMCL/PCL 的 MultiMC
+/// 形态版本 JSON 会把同一个库写成两条（纯 artifact 一条、带 `classifiers`
+/// natives 一条）；两条都会解析到同一个 jar，重复进 `-cp` 会让 Forge 的
+/// BootstrapLauncher 在 `UnionFileSystem` 里因 "Duplicate key" 直接崩溃。
 pub fn collect_classpath(
     libraries: &[Library],
     libs_dir: &Path,
     platform: &PlatformDescriptor,
 ) -> Vec<PathBuf> {
-    libraries
+    let mut seen = std::collections::HashSet::new();
+    let mut classpath = Vec::new();
+    for lib in libraries
         .iter()
         .filter(|lib| library_applies(lib, platform))
-        .map(|lib| {
-            // If library has explicit download info, use artifact path if provided
-            if let Some(artifact_path) = lib
-                .downloads
-                .as_ref()
-                .and_then(|d| d.artifact.as_ref())
-                .and_then(|a| a.path.as_ref())
-            {
-                return libs_dir.join(artifact_path);
-            }
+    {
+        // If library has explicit download info, use artifact path if provided
+        let path = if let Some(artifact_path) = lib
+            .downloads
+            .as_ref()
+            .and_then(|d| d.artifact.as_ref())
+            .and_then(|a| a.path.as_ref())
+        {
+            libs_dir.join(artifact_path)
+        } else {
             // Fall back to Maven-style path from the library name.
             // Still include the path — Java will fail fast with a clear ClassNotFoundException
             // if the JAR is missing, which is better than a silent skip.
             make_library_path(&lib.name, libs_dir)
-        })
-        .collect()
+        };
+        if seen.insert(path.clone()) {
+            classpath.push(path);
+        }
+
+        // LWJGL 3 只从 classpath 里的 natives JAR 解压 .dylib/.so/.dll，
+        // 不读 java.library.path（除非 java.library.path 下存在
+        // `macos/<arch>/org/lwjgl/...` 这种 bundled 路径）。Mojang 旧版
+        // 与 MultiMC 形态把 natives 写在 `natives` + `downloads.classifiers`
+        // 里，仅靠解压目录会让 LWJGL 报 `liblwjgl.dylib` 找不到。
+        if let Some(classifier) = native_classifier_for(lib, platform, libs_dir) {
+            let jar = native_jar_path(lib, &classifier, libs_dir);
+            if seen.insert(jar.clone()) {
+                classpath.push(jar);
+            }
+        }
+    }
+    classpath
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::types::{LibraryRule, OsRule};
+
+    #[test]
+    fn multimc_natives_jar_enters_the_classpath_with_the_arch_variant() {
+        // MultiMC 形态：名字不带 classifier，natives map + downloads.classifiers。
+        // 共享 libraries 里已有 arm64 变体时必须优先，否则 arm64 JVM 会拿到
+        // x64 的 .dylib 并报 UnsatisfiedLinkError。
+        let dir = std::env::temp_dir().join(format!(
+            "rmccc-natives-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let jar_dir = dir.join("org/lwjgl/lwjgl/3.3.1");
+        std::fs::create_dir_all(&jar_dir).unwrap();
+        std::fs::write(jar_dir.join("lwjgl-3.3.1-natives-macos-arm64.jar"), b"jar").unwrap();
+        std::fs::write(jar_dir.join("lwjgl-3.3.1-natives-macos.jar"), b"jar").unwrap();
+
+        let mut classifiers = std::collections::HashMap::new();
+        for classifier in ["natives-macos", "natives-macos-arm64"] {
+            classifiers.insert(
+                classifier.to_string(),
+                crate::types::DownloadEntry {
+                    url: String::new(),
+                    sha1: String::new(),
+                    size: 1,
+                    path: Some(format!(
+                        "org/lwjgl/lwjgl/3.3.1/lwjgl-3.3.1-{classifier}.jar"
+                    )),
+                },
+            );
+        }
+        let lib = Library {
+            name: "org.lwjgl:lwjgl:3.3.1".to_string(),
+            natives: Some(std::collections::HashMap::from([(
+                "osx".to_string(),
+                "natives-macos".to_string(),
+            )])),
+            downloads: Some(crate::types::LibraryDownloads {
+                artifact: None,
+                classifiers: Some(classifiers),
+            }),
+            ..Default::default()
+        };
+
+        let classpath = collect_classpath(&[lib], &dir, &mac());
+        assert!(
+            classpath
+                .iter()
+                .any(|p| p.ends_with("lwjgl-3.3.1-natives-macos-arm64.jar")),
+            "arm64 natives jar missing from classpath: {classpath:?}"
+        );
+        assert!(
+            !classpath
+                .iter()
+                .any(|p| p.ends_with("lwjgl-3.3.1-natives-macos.jar")),
+            "x64 natives jar should not be used on arm64: {classpath:?}"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn duplicate_library_entries_yield_one_classpath_entry() {
+        // MultiMC 形态 JSON 会把同一库写成纯 artifact + nudged classifiers 两条。
+        let lib = Library {
+            name: "org.lwjgl:lwjgl-glfw:3.3.1".to_string(),
+            ..Default::default()
+        };
+        let classpath = collect_classpath(&[lib.clone(), lib], Path::new("/libs"), &mac());
+        assert_eq!(
+            classpath.len(),
+            1,
+            "duplicate jars must be dropped: {classpath:?}"
+        );
+    }
 
     #[test]
     fn test_make_library_path() {
