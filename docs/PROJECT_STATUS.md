@@ -10,6 +10,72 @@
 
 ## 0. 更新记录
 
+**2026-11-04（初次启动引导 + git 更新日志 + 设置收口）**：
+
+1. **初次启动引导**：新增 `onboarding_probe` / `onboarding_complete`（IPC 135 条）。
+   启动时在 core 写盘前取样（`AppState.onboarding`），标准/便携根都没有配置且没有
+   `.onboarded` 标记时弹出多页向导：模式选择 → 便携 `.minecraft` 说明 →
+   HMCL/PCL 配置导入 → 账户登录 → 欢迎页。选择便携会写入模式标记并自动重启，
+   前端用 localStorage 记住进度并从第 2 页续接。
+2. **HMCL/PCL 逆向导入**：HMCL 按 3.16+ `config/game-directories.json` /
+   `user-game-directories.json` + `launcher-settings.json`，旧版 `.hmcl.json` / `hmcl.json`
+   的 `configurations` + `last` 兜底；PCL 读取 Windows 注册表 `HKCU\Software\PCL[Debug]`
+   的 `LaunchFolders` 与 `PCL/Setup.ini` 的 `LaunchFolderSelect`（`$` 展开），
+   `.minecraft/PCL.ini` 仅作顶层标记。导入不再递归 `versions/*/.hmcl|PCL`。
+   卡片显示自定义名称与「当前选中」，导入仍只登记目录（`game_directory_add`）。
+3. **调试入口**：设置 → 高级 → 「初次启动引导」按钮，安排下一次启动显示向导
+   （localStorage 开关，完成向导后清除；切换模式仍会真实生效）。
+4. **更新日志改为 git 生成**：删除手写 `src/lib/changelog.json`，Vite 虚拟模块
+   `virtual:changelog` 在 dev/build 时读取最近 10 条提交；`bump-version.mjs` 只改版本号。
+5. **设置页**：调试模式与启动器日志卡片从「通用」移到「高级」；压缩了一批过长的中英文说明。
+6. **版本**：SNGL 0.3.3 Alpha，RMCCC 0.3 Alpha（`CORE_VERSION` 显示 0.3.0；
+   crate semver 仍为 0.1.0，避免插件 `compatibility.core` 范围失效）。
+7. **门禁**：`cargo fmt` ✅、`cargo clippy -D warnings` ✅、`cargo test --workspace` ✅、
+   `pnpm typecheck` ✅、`pnpm test` ✅（86）、`pnpm build` ✅、
+   `pnpm tauri build --bundles app` ✅（Bundle 0.3.3，主程序 11,348,544 B）。
+
+**2026-11-04（版本管理 + 关于页更新日志 + AI 设置间距）**：
+
+1. **双版本号**：SNGL 0.3.0 Alpha（`package.json` / `src-tauri/Cargo.toml` / `src-tauri/tauri.conf.json`
+   三处同步），RMCCC 0.1 Alpha（`crates/rmccc-core` 0.1.0，关于页按 major.minor 显示）。
+   规则：前端变动 bump SNGL patch，后端变动 bump RMCCC minor；新增
+   [`scripts/bump-version.mjs`](../scripts/bump-version.mjs)（`pnpm release:bump sngl|rmccc`）只改版本号。
+2. **关于页**：新增「更新日志」按钮，弹窗展示最近 10 次更新（构建期从 git 读取，
+   Vite 虚拟模块 `virtual:changelog`）；删除「体积承诺」行。
+3. **AI 设置间距**：`.settings-ai` 改为纵向 flex + `--rmccc-space-4`，两张卡片与 `.tab-stack` 同间距。
+4. **门禁**：`pnpm typecheck` ✅、`pnpm test` ✅（86）、`pnpm tauri build --bundles app` ✅
+   （Bundle version 0.3.0，主程序 11,315,440 B）。
+
+**2026-11-04（外观：Dock 透明度同步 + 滑块即时响应 + 自适应卡片实时取色）**：
+
+1. **左侧 Dock 接入主面板不透明度滑块**：`.left-dock` 由固定 `surface 34%` 改为
+   `color-mix(surface var(--rmccc-panel-alpha))`，与 `.app-body` 共用同一滑块；0% 时同步去掉
+   边框/阴影（`html[data-panel-transparent="on"]`）。
+2. **滑块"逐格追赶"修复**：原实现每个 `input` 事件都同步写 CSS 变量（整窗玻璃重绘）并写
+   `localStorage`，拖动时中间值排队逐帧补齐。现改为滑块/数值**同步更新**、CSS 应用**每帧合并
+   一次（永远取最新值）**、持久化 200ms 防抖（[`lib/glass.ts`](../src/lib/glass.ts)），拖到哪里立即到位。
+3. **自适应/自定义主题卡片四色实时化**：此前卡片四色读 `THEME_REGISTRY` 的静态占位值；现自适应
+   读 `adaptivePalette().vars`（canvas/accent/panel/accent-secondary），自定义读
+   `themeV4.custom()` + `deriveTokens`，采样结果变化即刷新。
+4. **门禁**：`pnpm typecheck` ✅、`pnpm test` ✅（86）、`pnpm tauri build --bundles app` ✅；
+   视觉/拖动手感待实机确认。
+
+**2026-11-04（AI 日志分析 S2 重构：运行绑定 + 终止保证 + 提交模式/提示词）**：
+
+1. **根因修复**：取消分支此前不产终止事件（`llm.rs` 的 `Ok(Err(Cancelled)) => None`），前端永久停在
+   "分析中"；日志解析优先进磁盘 `latest.log`，启动早期会读到上一轮日志；分析结果是全局单槽、不按运行隔离。
+   详见 [`AI_ANALYSIS_REFACTOR.md`](AI_ANALYSIS_REFACTOR.md)。
+2. **后端**：`LlmEvent::Cancelled` + 首字节 30s 看门狗；`ai.rs` 三分支 emit 终止事件
+   （`ai://done{reason}` / `ai://error`）；新增 `RunRecord`/`AppState::runs`，`LAUNCH_STARTED/EXITED`
+   带 `run_id`，新运行取消旧分析；新增 `game_log::resolve_fresh_log`（captured 优先、磁盘 mtime 校验），
+   AI 与 MCP `logs.game` 共用；`ai_analyze_log` 增 `run_id/detail/log_mode/language/exit_code/exit_type`，
+   按档位设置提示词与 `max_tokens`。
+3. **前端**：`aiStore` 增 `runId/source/omittedLines/cancelled` 与三项偏好（详细程度 / 提交模式 /
+   崩溃自动分析），取消乐观置态；`launchStore.currentRunId` 按 run 过滤；LogDrawer 只显示当前 run、
+   关闭即取消；Settings · AI 新增「分析行为」卡。**IPC 仍 133 条**（仅 additive payload/类型）。
+4. **门禁**：fmt ✅ / clippy ✅ / cargo test ✅（46 个 test target）/ typecheck ✅ / vitest ✅（86）/
+   `pnpm build` ✅；顺带修复 3 处既有工具链漂移 lint。**未做**：`.app` 视觉/实机验收待启动游戏确认。
+
 **2026-11-03（前端空闲帧 GPU 优化收口：提交 + 前端三门禁实测）**：
 
 1. **提交**：`9f624f6 perf(ui)` 收口上一轮记录的那 **7 个未提交前端文件**（119 insertions /

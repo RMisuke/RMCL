@@ -45,7 +45,9 @@
 | 13 | [12_SUMMARY.md](12_SUMMARY.md) | 总结与实施路线（阶段划分、迁移策略、验收标准、风险） | 所有人 |
 | 14 | [13_NOTES.md](13_NOTES.md) | 注意事项：红线、类型陷阱、性能、平台、可访问性、QA 清单 | 实施者必读 |
 | 15 | [14_CARD_SYSTEM.md](14_CARD_SYSTEM.md) | **主页卡片系统 v3**：尺寸档位、布局 v3、默认卡片功能、插件卡片/Host Bridge 契约、验收 | 实施者必读 |
-| 16 | [ACCEPTANCE_CHECKLIST.md](ACCEPTANCE_CHECKLIST.md) | 手动走查清单（启动 / 主页 / 实例 / 下载 / 账号 / 插件 / 设置 逐项可勾选），CI 之外的验收口径 | 验收执行者 |
+| 16 | [15_THEME_SYSTEM_V4.md](15_THEME_SYSTEM_V4.md) | **主题系统 V4**：8 配色收敛（6 预设动效+自适应+自定义）、日夜三档、base3 派生、配置重构 | 实施者必读 |
+| 17 | [16_FIRST_RUN_ONBOARDING.md](16_FIRST_RUN_ONBOARDING.md) | **初次启动引导**：标准/便携选择、`.minecraft` 检测、HMCL/PCL 配置导入、登录与欢迎页 | 实施者必读 |
+| 18 | [ACCEPTANCE_CHECKLIST.md](ACCEPTANCE_CHECKLIST.md) | 手动走查清单（启动 / 主页 / 实例 / 下载 / 账号 / 插件 / 设置 逐项可勾选），CI 之外的验收口径 | 验收执行者 |
 
 ## 使用规则（与项目「设计文档优先」原则一致）
 
