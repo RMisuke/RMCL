@@ -4,6 +4,7 @@ mod bindings;
 mod bundle;
 mod commands;
 mod events;
+mod game_log;
 mod handlers;
 #[cfg(test)]
 mod ipc_tests;
@@ -161,19 +162,28 @@ fn configure_webview2_cache() {
 }
 
 fn main() {
-    // Ensure data directories exist
-    paths::ensure_dirs().expect("Failed to create data directories");
+    // A genuine first run must not create the data roots before the user
+    // chooses standard/portable in the wizard. The snapshot on `AppState`
+    // remembers what existed at this point.
+    let first_run = !paths::has_any_launcher_config();
+    if !first_run {
+        paths::ensure_dirs().expect("Failed to create data directories");
+    }
 
     // Keep the WebView2 browser cache inside the SNGL data root on Windows.
     #[cfg(target_os = "windows")]
-    configure_webview2_cache();
+    if !first_run {
+        configure_webview2_cache();
+    }
 
     // Initialize logging
-    let log_dir = paths::log_dir();
-    // Logging must not take the whole app down: an unavailable log directory
-    // (sandbox / read-only mount / permission issue) degrades to stderr only.
-    if let Err(e) = init_logging(&log_dir) {
-        eprintln!("Warning: failed to initialize logging: {e}");
+    if !first_run {
+        let log_dir = paths::log_dir();
+        // Logging must not take the whole app down: an unavailable log directory
+        // (sandbox / read-only mount / permission issue) degrades to stderr only.
+        if let Err(e) = init_logging(&log_dir) {
+            eprintln!("Warning: failed to initialize logging: {e}");
+        }
     }
 
     // P3-13：崩溃上报（本地）——panic hook 将崩溃信息写入日志文件，便于排障。
