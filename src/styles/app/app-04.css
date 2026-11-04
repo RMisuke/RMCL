@@ -24,8 +24,6 @@
 }
 .theme-card:hover { border-color: var(--rmccc-accent); }
 .theme-card.is-active { border-color: var(--rmccc-accent); box-shadow: 0 0 0 1px var(--rmccc-accent); }
-.theme-swatch { display: flex; height: 36px; border-radius: var(--rmccc-radius-tag); overflow: hidden; border: 1px solid var(--rmccc-border); }
-.theme-swatch span { flex: 1; }
 
 .perm-group { display: flex; flex-direction: column; gap: var(--rmccc-space-1); }
 .perm-group-title { font-size: 12px; font-weight: 600; color: var(--rmccc-text-muted); padding: var(--rmccc-space-2) 0; }
@@ -57,25 +55,6 @@
   background: var(--hero-image, none) center / cover no-repeat;
   pointer-events: none;
 }
-
-/* 流动光斑：主题色的柔光大圆缓慢漂移（GPU transform，无 filter blur） */
-.hero-flow {
-  position: absolute;
-  inset: -25%;
-  overflow: hidden;
-  pointer-events: none;
-}
-.hero-flow-blob {
-  position: absolute;
-  display: block;
-  border-radius: 50%;
-  will-change: transform;
-}
-/* 动效闸门：宿主在 <html> 发布 data-motion="on|off"；
-   主题类插件的自定义动画也必须以同一状态为条件（--rmccc-motion-enabled）。 */
-.hero-flow-blob { animation-play-state: paused; }
-html[data-motion="on"] .hero-flow-blob { animation-play-state: running; }
-html[data-motion="off"] .hero-flow-blob { display: none; }
 
 .hero-flow-blob.is-a {
   width: 62%;
@@ -126,27 +105,6 @@ html[data-motion="off"] .hero-flow-blob { display: none; }
   50%  { transform: translate3d(26%, -16%, 0) scale(1.2); }
   100% { transform: translate3d(-18%, 10%, 0) scale(0.86); }
 }
-/* ── 主题化环境粒子（2026-10-25）：每套内置主题一组意象动效 ──────
-   林间=叶落 / 樱吹雪=花瓣 / 深海=气泡 / 熔岩=火星 / 靛夜=星辰 /
-   晴空=流云 / 纸墨=淡尘。纯 CSS transform/opacity；受 data-motion 闸门。
-   通用位移关键帧：下落 / 上升 / 闪烁 / 漂移 / 横移，粒子经 CSS 变量
-   （--sway 摆幅、--spin 转角、--drift 漂移距）参数化，单条关键帧全局复用。 */
-.hero-particles {
-  position: absolute;
-  inset: 0;
-  overflow: hidden;
-  pointer-events: none;
-}
-.hero-particles i {
-  position: absolute;
-  display: block;
-  will-change: transform, opacity;
-  animation-play-state: paused;
-  animation-iteration-count: infinite;
-  animation-timing-function: linear;
-}
-html[data-motion="on"] .hero-particles i { animation-play-state: running; }
-html[data-motion="off"] .hero-particles { display: none; }
 
 /* 下落（叶 / 花瓣）：左右摇摆 + 旋转 */
 @keyframes p-fall-kf {
@@ -252,31 +210,7 @@ html[data-motion="off"] .hero-particles { display: none; }
   animation-timing-function: ease-in-out;
 }
 
-@media (prefers-reduced-motion: reduce) {
-  .hero-particles { display: none; }
-}
-
-/* ── 主题专属光斑构图（2026-10-25）：每套主题自己的背景流动设计 ──
-   不再共用三团光斑版式：林间=树隙光柱+雾 / 深海=水面光+上升光柱 /
-   熔岩=底部岩浆辉光 / 樱吹雪=粉霞白雾 / 晴空=太阳辉光+云带 /
-   纸墨=纸面晕染 / 靛夜与晨白=令牌驱动的三团光斑（它们各自的招牌）。
-   .hero-glow 与 .hero-flow 同几何（inset 0，overflow hidden）。 */
-.hero-glow {
-  position: absolute;
-  inset: 0;
-  overflow: hidden;
-  pointer-events: none;
-}
-.hero-glow > i {
-  position: absolute;
-  display: block;
-  will-change: transform, opacity;
-  animation-play-state: paused;
-  animation-iteration-count: infinite;
-  animation-timing-function: ease-in-out;
-}
-html[data-motion="on"] .hero-glow > i { animation-play-state: running; }
-html[data-motion="off"] .hero-glow { display: none; }
+@media (prefers-reduced-motion: reduce) 
 
 /* 共享关键帧：呼吸 / 摆动光柱 / 横移 / 上升光柱 */
 @keyframes g-breathe-kf {
@@ -296,113 +230,10 @@ html[data-motion="off"] .hero-glow { display: none; }
   55%  { opacity: 0.5; transform: translateY(-3vh); }
   100% { opacity: 0.05; transform: translateY(-16vh); }
 }
-
-/* ── 林间：树隙光柱（细长斜向柔光条）+ 苔绿雾 ── */
-.g-beam {
-  top: -30%;
-  width: 13vw;
-  height: 170%;
-  background: linear-gradient(to bottom,
-    rgba(163, 226, 187, 0) 0%,
-    rgba(163, 226, 187, 0.2) 30%,
-    rgba(163, 226, 187, 0.08) 68%,
-    rgba(163, 226, 187, 0) 100%);
-  filter: blur(10px);
-  animation-name: g-beam-kf;
-  animation-duration: 13s;
-}
 .g-forest .g-beam.is-a { left: 14%; --tilt: 22deg; }
 .g-forest .g-beam.is-b { left: 52%; --tilt: -16deg; animation-duration: 17s; animation-delay: -6s; }
-.g-fog {
-  left: -12%;
-  bottom: -34%;
-  width: 92%;
-  height: 62%;
-  background: radial-gradient(ellipse at 50% 62%,
-    rgba(67, 199, 131, 0.24) 0%,
-    rgba(67, 199, 131, 0.1) 48%,
-    transparent 74%);
-  filter: blur(14px);
-  animation: g-breathe-kf 11s ease-in-out infinite;
-}
-
-/* ── 樱吹雪：右上粉霞 + 左下白雾（大而软，长周期） ── */
-.g-haze {
-  right: -18%;
-  top: -26%;
-  width: 78%;
-  height: 74%;
-  background: radial-gradient(ellipse at 62% 36%,
-    rgba(246, 174, 198, 0.34) 0%,
-    rgba(246, 174, 198, 0.14) 52%,
-    transparent 76%);
-  filter: blur(16px);
-  animation: g-breathe-kf 14s ease-in-out infinite;
-}
-.g-mist {
-  left: -14%;
-  bottom: -30%;
-  width: 68%;
-  height: 62%;
-  background: radial-gradient(ellipse at 40% 60%,
-    rgba(255, 255, 255, 0.55) 0%,
-    rgba(255, 240, 246, 0.24) 50%,
-    transparent 76%);
-  filter: blur(18px);
-  animation: g-breathe-kf 19s ease-in-out infinite;
-  animation-delay: -8s;
-}
-
-/* ── 深海：水面光（顶部大椭圆晃动）+ 两条上升光柱 + 深渊压边 ── */
-.g-surface {
-  left: 8%;
-  top: -34%;
-  width: 84%;
-  height: 62%;
-  background: radial-gradient(ellipse at 50% 78%,
-    rgba(114, 190, 232, 0.3) 0%,
-    rgba(114, 190, 232, 0.12) 52%,
-    transparent 76%);
-  filter: blur(14px);
-  animation: g-breathe-kf 12s ease-in-out infinite;
-}
-.g-shaft {
-  bottom: -22%;
-  width: 9vw;
-  height: 130%;
-  background: linear-gradient(to top,
-    rgba(114, 190, 232, 0.16) 0%,
-    rgba(114, 190, 232, 0.05) 55%,
-    transparent 100%);
-  filter: blur(9px);
-  animation-name: g-shaft-kf;
-  animation-duration: 14s;
-  animation-timing-function: ease-in-out;
-}
 .g-ocean .g-shaft.is-a { left: 22%; }
 .g-ocean .g-shaft.is-b { left: 63%; animation-duration: 18s; animation-delay: -8s; }
-.g-abyss {
-  left: -10%;
-  bottom: -42%;
-  width: 120%;
-  height: 55%;
-  background: radial-gradient(ellipse at 50% 90%,
-    rgba(4, 16, 28, 0.55) 0%,
-    rgba(4, 16, 28, 0.2) 55%,
-    transparent 80%);
-  animation: g-breathe-kf 21s ease-in-out infinite;
-}
-
-/* ── 熔岩：底部双团岩浆辉光（异相呼吸）+ 热浪层横移 ── */
-.g-magma {
-  bottom: -38%;
-  width: 58%;
-  height: 66%;
-  border-radius: 50%;
-  filter: blur(18px);
-  animation-name: g-breathe-kf;
-  animation-duration: 9s;
-}
 .g-ember .g-magma.is-a {
   left: 2%;
   background: radial-gradient(ellipse at 50% 74%,
@@ -419,92 +250,11 @@ html[data-motion="off"] .hero-glow { display: none; }
   animation-duration: 13s;
   animation-delay: -6s;
 }
-.g-heat {
-  left: 0;
-  top: 30%;
-  width: 130%;
-  height: 26%;
-  background: linear-gradient(to bottom,
-    transparent 0%,
-    rgba(239, 125, 58, 0.07) 45%,
-    transparent 100%);
-  filter: blur(8px);
-  animation: g-drift-x-kf 22s ease-in-out infinite;
-}
-
-/* ── 晴空：左上太阳辉光 + 两条淡云带横移（与粒子流云错峰） ── */
-.g-sun {
-  left: -8%;
-  top: -22%;
-  width: 52%;
-  height: 64%;
-  background: radial-gradient(circle at 38% 34%,
-    rgba(255, 255, 255, 0.7) 0%,
-    rgba(214, 238, 255, 0.3) 46%,
-    transparent 74%);
-  filter: blur(10px);
-  animation: g-breathe-kf 12s ease-in-out infinite;
-}
-.g-band {
-  left: -20%;
-  width: 90%;
-  height: 7vh;
-  border-radius: 50%;
-  background: radial-gradient(ellipse at 50% 50%,
-    rgba(255, 255, 255, 0.5) 0%,
-    rgba(255, 255, 255, 0) 72%);
-  filter: blur(7px);
-  animation: g-drift-x-kf 60s linear infinite;
-}
 .g-sky .g-band.is-a { top: 24%; }
 .g-sky .g-band.is-b { top: 58%; animation-duration: 85s; animation-delay: -30s; }
 
-/* ── 纸墨：暖纸晕染（26s 极慢呼吸）+ 淡金漂移（40s） ── */
-.g-wash {
-  right: -10%;
-  top: 4%;
-  width: 82%;
-  height: 84%;
-  background: radial-gradient(ellipse at 56% 44%,
-    rgba(224, 199, 150, 0.26) 0%,
-    rgba(224, 199, 150, 0.11) 52%,
-    transparent 78%);
-  filter: blur(16px);
-  animation: g-breathe-kf 26s ease-in-out infinite;
-}
-.g-gold {
-  left: -6%;
-  bottom: -14%;
-  width: 52%;
-  height: 56%;
-  background: radial-gradient(ellipse at 44% 58%,
-    rgba(165, 114, 31, 0.14) 0%,
-    rgba(165, 114, 31, 0.05) 52%,
-    transparent 76%);
-  filter: blur(12px);
-  animation: g-drift-x-kf 40s ease-in-out infinite;
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .hero-glow { display: none; }
-}
-@media (prefers-reduced-motion: reduce) {
-  .hero-flow-blob { animation: none; }
-}
-
-/* 玻璃卡片基座：统一 surface + border + blur，不引入额外色相 */
-.hero-card,
-.hero-module {
-  background: color-mix(in srgb, var(--rmccc-surface) 78%, transparent);
-  border: 1px solid color-mix(in srgb, var(--rmccc-border) 85%, transparent);
-  backdrop-filter: blur(18px);
-  -webkit-backdrop-filter: blur(18px);
-  /* 柔和分层阴影（ambient + contact），统一引用卡片阴影 token */
-  box-shadow: var(--rmccc-shadow-card);
-  color: var(--rmccc-text);
-  border-radius: 14px;
-  overflow: hidden;
-}
+@media (prefers-reduced-motion: reduce) 
+@media (prefers-reduced-motion: reduce) 
 /* 含下拉菜单的 hero 卡必须放开裁切：WKWebView 把 .rm-menu 渲染在页面层，
    overflow:hidden 会把向上弹出的菜单裁掉（主页快速启动的版本选择器被切，
    2026-10-25）。含菜单的卡片子元素均有内边距/圆角，不会出现直角溢出。 */
@@ -512,219 +262,22 @@ html[data-motion="off"] .hero-glow { display: none; }
 .hero-module:has(.rm-menu-root) {
   overflow: visible;
 }
-.hero-card:hover { border-color: var(--rmccc-border); }
-
-/* 编辑模式工具条（右上角悬浮） */
-.hero-toolbar {
-  position: absolute;
-  top: 16px;
-  right: 20px;
-  z-index: 2;
-  display: flex;
-  gap: var(--rmccc-space-2);
-}
-
-/* 左侧：可编辑卡片栈 */
-.hero-stack {
-  position: relative;
-  z-index: 1;
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-  /* margin+padding 合计与原 20px 一致；padding 给 hover 上浮和四周阴影留出
-     裁剪余量（overflow 滚动容器会把贴边卡片的阴影/上浮切掉，显得生硬） */
-  margin: 16px 10px 0 10px;
-  padding: 4px 12px 24px 10px;
-  width: min(460px, 42%);
-  min-width: 300px;
-  overflow-y: auto;
-}
-.hero-module { display: flex; flex-direction: column; padding: var(--rmccc-space-3); }
-.hero-module-bar {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: var(--rmccc-space-2);
-  padding: 0 2px var(--rmccc-space-2) 2px;
-  margin-bottom: var(--rmccc-space-2);
-  border-bottom: 1px dashed color-mix(in srgb, var(--rmccc-accent) 45%, transparent);
-}
-.hero-module-name { font-size: 12px; font-weight: 600; color: var(--rmccc-accent); }
-.hero-module-body { min-height: 0; display: flex; flex-direction: column; }
-.hero-plugin-frame { display: flex; height: 200px; }
-.hero-plugin-frame > * { flex: 1; min-height: 0; }
-
-.hero-list { display: flex; flex-direction: column; gap: 2px; max-height: 300px; overflow-y: auto; }
 .hero-empty { padding: var(--rmccc-space-4); color: var(--rmccc-text-muted); font-size: 13px; text-align: center; }
-.hero-row {
-  display: flex;
-  align-items: center;
-  gap: var(--rmccc-space-2);
-  width: 100%;
-  padding: 8px 10px;
-  border-radius: 10px;
-  color: var(--rmccc-text);
-  text-align: left;
-  transition: background 120ms ease;
-}
-.hero-row:hover { background: color-mix(in srgb, var(--rmccc-accent) 10%, transparent); }
 .hero-row.is-selected {
   background: color-mix(in srgb, var(--rmccc-accent) 16%, transparent);
   outline: 1px solid color-mix(in srgb, var(--rmccc-accent) 55%, transparent);
 }
 .hero-row.is-static { cursor: default; }
-.hero-row-icon { display: inline-flex; flex-shrink: 0; color: var(--rmccc-text-muted); }
 .hero-row.is-selected .hero-row-icon { color: var(--rmccc-accent); }
-.hero-row-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
-.hero-row-title { font-size: 13px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.hero-row-subtitle { font-size: 11px; color: var(--rmccc-text-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.hero-row-meta { font-size: 11px; color: var(--rmccc-text-muted); flex-shrink: 0; }
 .hero-row .rm-progress { min-width: 90px; flex-basis: 90px; }
-
-/* 右下：账号卡 + 启动卡 */
-.hero-corner {
-  position: absolute;
-  right: 24px;
-  bottom: 20px;
-  z-index: 1;
-  display: flex;
-  flex-direction: column;
-  align-items: flex-end;
-  gap: 12px;
-  width: 340px;
-  max-width: calc(100% - 48px);
-}
-.hero-card-icon {
-  width: 40px;
-  height: 40px;
-  border-radius: 10px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  background: color-mix(in srgb, var(--rmccc-accent) 16%, transparent);
-  color: var(--rmccc-accent);
-  flex-shrink: 0;
-}
-.hero-card-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
-.hero-card-title { font-size: 14px; font-weight: 700; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.hero-card-subtitle { font-size: 11px; color: var(--rmccc-text-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.hero-card-plus {
-  width: 22px;
-  height: 22px;
-  border-radius: 50%;
-  border: 1px solid color-mix(in srgb, var(--rmccc-border) 90%, transparent);
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  color: var(--rmccc-text-muted);
-  flex-shrink: 0;
-}
-
-.hero-launch { gap: var(--rmccc-space-3); border-color: color-mix(in srgb, var(--rmccc-accent) 45%, transparent); }
-.hero-launch-main { display: flex; align-items: center; gap: var(--rmccc-space-2); }
 .hero-launch-main .rm-btn-lg { flex-shrink: 0; }
-.hero-launch-picker {
-  flex: 1;
-  min-width: 0;
-  display: flex;
-  align-items: center;
-  gap: var(--rmccc-space-2);
-  padding: 8px 12px;
-  border-radius: 10px;
-  background: color-mix(in srgb, var(--rmccc-accent) 12%, transparent);
-  border: 1px solid color-mix(in srgb, var(--rmccc-border) 90%, transparent);
-  color: var(--rmccc-text);
-  text-align: left;
-}
-.hero-launch-picker:hover { background: color-mix(in srgb, var(--rmccc-accent) 20%, transparent); }
-.hero-launch-picker-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
-.hero-launch-picker-main > span:first-child {
-  font-size: 13px;
-  font-weight: 600;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.hero-launch-picker-sub { font-size: 11px; color: var(--rmccc-text-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.hero-launch-running { display: flex; align-items: center; gap: var(--rmccc-space-2); font-size: 12px; color: var(--rmccc-text-muted); }
 
 /* ── Hero：左侧三块服务器卡片 + 账号卡加宽（演示版）────────── */
 
 /* 账号卡与启动卡同宽：RmMenu 容器撑满 hero-corner */
 .hero-corner .rm-menu-root { width: 100%; display: flex; }
 .hero-corner .rm-menu-root > * { flex: 1; }
-
-/* 三块高度比例：上/中较矮，公告最高（flex:1） */
-.hero-module[data-card="server"],
-.hero-module[data-card="compare"] { flex: 0 0 auto; }
-.hero-module[data-card="announcements"] { flex: 1; min-height: 240px; }
-
-/* 服务器信息卡 */
-.hero-server { display: flex; flex-direction: column; gap: var(--rmccc-space-2); }
 .hero-server .rm-input { height: 32px; font-size: 13px; }
-.hero-server-info { display: flex; flex-direction: column; gap: var(--rmccc-space-2); }
-.hero-server-motd {
-  font-size: 13px;
-  font-weight: 600;
-  color: var(--rmccc-text);
-  padding: 8px 10px;
-  border-radius: 10px;
-  background: color-mix(in srgb, var(--rmccc-accent) 10%, transparent);
-}
-.hero-server-stats { display: flex; flex-wrap: wrap; gap: var(--rmccc-space-2) var(--rmccc-space-3); }
-.hero-server-stat {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  font-size: 12px;
-  color: var(--rmccc-text-muted);
-  font-variant-numeric: tabular-nums;
-}
 .hero-empty.is-error { color: var(--color-red); }
-
-/* 版本比对卡 */
-.hero-compare { display: flex; flex-direction: column; gap: 6px; }
-.hero-compare-row { display: flex; align-items: center; justify-content: space-between; gap: var(--rmccc-space-2); }
-.hero-compare-label { font-size: 12px; color: var(--rmccc-text-muted); }
-.hero-compare-value { font-size: 13px; font-weight: 600; font-variant-numeric: tabular-nums; }
-.hero-compare-actions { margin-top: var(--rmccc-space-1); }
-
-/* 公告卡 */
-.hero-ann-list {
-  display: flex;
-  flex-direction: column;
-  gap: var(--rmccc-space-2);
-  overflow-y: auto;
-  min-height: 0;
-  flex: 1;
-}
-.hero-ann-item {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  padding: 8px 10px;
-  border-radius: 10px;
-  background: color-mix(in srgb, var(--rmccc-surface-elevated) 70%, transparent);
-  border: 1px solid color-mix(in srgb, var(--rmccc-border) 60%, transparent);
-}
-.hero-ann-head { display: flex; align-items: center; justify-content: space-between; gap: var(--rmccc-space-2); }
-.hero-ann-date { font-size: 11px; color: var(--rmccc-text-muted); font-variant-numeric: tabular-nums; }
-.hero-ann-text { font-size: 12.5px; line-height: 1.55; color: var(--rmccc-text); }
-
-/* 账号卡：横向布局（avatar 左 + 信息右），覆盖 hero-module 的纵向排列 */
-.hero-account {
-  flex-direction: row;
-  align-items: center;
-  text-align: left;
-  gap: 16px;
-}
 .hero-account .account-avatar, .hero-account .account-avatar-face { width: 52px; height: 52px; }
 .hero-account .account-card-body .account-avatar { width: 52px; height: 52px; }
-.hero-account-meta {
-  display: flex;
-  align-items: center;
-  gap: var(--rmccc-space-2);
-  flex-wrap: wrap;
-}
-.hero-account-meta-item { font-size: 11px; color: var(--rmccc-text-muted); font-variant-numeric: tabular-nums; }
-.hero-account .hero-card-plus { margin-left: auto; }

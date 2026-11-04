@@ -243,19 +243,6 @@
 .mod-version-actions { display: flex; align-items: center; gap: 1px; flex: 0 0 auto; }
 .mod-version-actions .rm-btn { height: 26px; padding: 0 9px; font-size: 11px; }
 .mod-version-actions .rm-icon-btn { width: 26px !important; height: 26px !important; }
-
-/* The dashboard context flow keeps the old class names working for plugins. */
-.context-bar {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 5px 9px;
-  border: 1px solid color-mix(in srgb, var(--rmccc-accent) 26%, var(--rmccc-border));
-  border-radius: 9px;
-  color: var(--rmccc-accent);
-  background: color-mix(in srgb, var(--rmccc-accent) 8%, var(--rmccc-surface));
-  font-size: 11.5px;
-}
 .mod-icon {
   width: 36px;
   height: 36px;
@@ -270,25 +257,6 @@
 }
 .mod-icon.is-large { width: 52px; height: 52px; font-size: 20px; }
 .mod-icon img { width: 100%; height: 100%; object-fit: cover; }
-
-.instance-icon-preview {
-  width: 48px;
-  height: 48px;
-  border-radius: var(--rmccc-radius-control);
-  object-fit: cover;
-  border: 1px solid var(--rmccc-border);
-  background: var(--rmccc-surface-sunken);
-}
-.instance-icon-slot {
-  width: 48px;
-  height: 48px;
-  border-radius: var(--rmccc-radius-control);
-  border: 1px dashed var(--rmccc-border);
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  color: var(--store-muted);
-}
 
 /* Install-wizard version rows: type label + date + installed count. */
 .version-row-meta { gap: 6px; }
@@ -370,18 +338,6 @@
 }
 @keyframes launch-spin { to { transform: rotate(360deg); } }
 .launch-bubble-detail { font-size: 11px; color: var(--rmccc-text-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.context-bar {
-  display: flex;
-  align-items: center;
-  gap: var(--rmccc-space-3);
-  padding: var(--rmccc-space-2) var(--rmccc-space-3);
-  background: var(--rmccc-accent-soft);
-  border: 1px solid var(--rmccc-accent);
-  border-radius: var(--rmccc-radius-control);
-  color: var(--rmccc-accent);
-  font-size: 13px;
-}
-.mod-results { display: flex; flex-direction: column; }
 .mod-icon {
   width: 36px;
   height: 36px;
@@ -397,8 +353,6 @@
 .mod-icon.is-large { width: 52px; height: 52px; font-size: 20px; }
 .mod-icon img { width: 100%; height: 100%; object-fit: cover; }
 .mod-detail { display: flex; flex-direction: column; gap: var(--rmccc-space-4); }
-.mod-detail-head { display: flex; gap: var(--rmccc-space-4); }
-.mod-detail-head h3 { font-size: 18px; }
 .mod-description { color: var(--rmccc-text-muted); font-size: 13px; max-width: 560px; }
 .recommended-block {
   border: 1px solid var(--rmccc-accent);
@@ -409,7 +363,6 @@
   gap: var(--rmccc-space-2);
 }
 .recommended-title { color: var(--rmccc-accent); font-weight: 600; font-size: 13px; }
-.pagination { display: flex; align-items: center; gap: var(--rmccc-space-3); justify-content: center; color: var(--rmccc-text-muted); font-size: 13px; }
 
 /* ── Accounts ──────────────────────────────────────────────── */
 
@@ -511,52 +464,10 @@
 .task-row-main { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
 .task-row-title { font-size: 13px; font-weight: 500; display: flex; align-items: center; }
 .task-row-subtitle { font-size: 12px; color: var(--rmccc-text-muted); }
-.task-row-file { font-size: 11px; color: var(--rmccc-text-muted); font-family: var(--font-mono); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .task-row-actions { display: flex; gap: var(--rmccc-space-2); justify-content: flex-end; }
 .task-row.is-download { gap: var(--rmccc-space-2); }
-.task-row-head { display: flex; align-items: center; justify-content: space-between; gap: var(--rmccc-space-2); min-width: 0; }
 .task-row-head .task-row-title { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.task-row-meta {
-  display: flex;
-  align-items: center;
-  gap: var(--rmccc-space-3);
-  font-size: 12px;
-  color: var(--rmccc-text-muted);
-  font-variant-numeric: tabular-nums;
-}
-.task-row-speed { color: var(--rmccc-accent); font-weight: 500; }
 .task-row-file.is-error { color: var(--rmccc-danger, var(--color-red)); }
-/* Loader 安装细节（Task Center，2026-10-25）：折叠切换 + 单色日志框 */
-.task-row-detail-toggle {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  font-size: 11.5px;
-  color: var(--rmccc-text-muted);
-  background: none;
-  border: none;
-  padding: 0;
-  cursor: pointer;
-  align-self: flex-start;
-}
-.task-row-detail-toggle:hover { color: var(--rmccc-text); }
-.task-row-detail-log {
-  display: flex;
-  flex-direction: column;
-  gap: 1px;
-  max-height: 132px;
-  overflow-y: auto;
-  padding: 6px 8px;
-  border-radius: 8px;
-  background: var(--rmccc-surface-sunken);
-  border: 1px solid var(--rmccc-border);
-  font-family: var(--font-mono);
-  font-size: 11px;
-  line-height: 1.5;
-  color: var(--rmccc-text-muted);
-  word-break: break-all;
-}
-.task-row-detail-line { white-space: pre-wrap; }
 .task-recent { border-top: 1px solid var(--rmccc-border); padding-top: var(--rmccc-space-2); }
 .task-recent-row { display: flex; align-items: center; gap: var(--rmccc-space-2); font-size: 12px; padding: 2px 0; }
 .task-recent-row.is-ok { color: var(--rmccc-success); }

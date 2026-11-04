@@ -77,60 +77,10 @@ code, pre { font-family: var(--font-mono); }
   border-bottom: 1px solid var(--rmccc-border);
   user-select: none;
 }
-.titlebar-brand {
-  padding: 0 var(--rmccc-space-4);
-  font-size: 13px;
-  font-weight: 600;
-  color: var(--rmccc-text-muted);
-  letter-spacing: 0.3px;
-  height: 100%;
-  display: flex;
-  align-items: center;
-}
-.titlebar-controls { display: flex; height: 100%; }
-.titlebar-right { margin-left: auto; display: flex; align-items: center; height: 100%; gap: var(--rmccc-space-2); padding-right: var(--rmccc-space-2); }
 .titlebar-right .rail-task-indicator { padding: 0 8px; }
-.titlebar-btn {
-  width: 46px;
-  height: 100%;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  color: var(--rmccc-text-muted);
-  transition: background 120ms ease, color 120ms ease;
-}
-.titlebar-btn:hover { background: var(--rmccc-hover); color: var(--rmccc-text); }
-.titlebar-btn-close:hover { background: var(--rmccc-danger); color: #fff; }
 
 /* 顶部 Dock 导航（图标 + 文字），绝对居中于标题栏（ui/home-hero-dock） */
 .titlebar { position: relative; }
-.titlebar-dock {
-  position: absolute;
-  left: 50%;
-  top: 50%;
-  transform: translate(-50%, -50%);
-  display: flex;
-  align-items: center;
-  gap: 2px;
-  height: 38px;
-  padding: 3px;
-  border-radius: 10px;
-  background: color-mix(in srgb, var(--rmccc-surface-elevated) 85%, transparent);
-  border: 1px solid color-mix(in srgb, var(--rmccc-border) 70%, transparent);
-}
-.dock-item {
-  position: relative;
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  height: 32px;
-  padding: 0 12px;
-  border-radius: 8px;
-  color: var(--rmccc-text-muted);
-  font-size: 13px;
-  transition: background 120ms ease, color 120ms ease;
-}
-.dock-item:hover { background: var(--rmccc-hover); color: var(--rmccc-text); }
 .dock-item.is-active {
   background: var(--rmccc-accent-soft);
   color: var(--rmccc-accent);
@@ -162,10 +112,6 @@ html[data-motion="on"] .theme-card:hover,
 html[data-motion="on"] .rm-row.is-clickable:hover,
 html[data-motion="on"] .source-chip:hover {
   transform: translateY(-1px);
-}
-html[data-motion="on"] .hero-card:hover {
-  transform: translateY(-2px);
-  box-shadow: var(--rmccc-shadow-card-hover);
 }
 html[data-motion="on"] .rm-btn:active,
 html[data-motion="on"] .rm-icon-btn:active,
@@ -232,19 +178,6 @@ html[data-motion="on"] .rm-dialog {
 @keyframes rm-dialog-pop {
   from { opacity: 0; transform: scale(0.96); }
   to { opacity: 1; transform: none; }
-}
-.dock-badge {
-  min-width: 15px;
-  height: 15px;
-  padding: 0 4px;
-  border-radius: 8px;
-  background: var(--rmccc-accent);
-  color: var(--rmccc-accent-contrast);
-  font-size: 10px;
-  font-weight: 700;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
 }
 
 /* ── App shell ─────────────────────────────────────────────── */
@@ -654,7 +587,6 @@ html[data-motion="on"] .rm-dialog {
 .kv-grid { display: grid; grid-template-columns: 120px 1fr; gap: var(--rmccc-space-2) var(--rmccc-space-4); font-size: 13px; }
 .kv-grid > span:nth-child(odd) { color: var(--rmccc-text-muted); }
 .path-row { display: flex; align-items: center; gap: var(--rmccc-space-3); font-size: 13px; }
-.path-row-label { width: 80px; color: var(--rmccc-text-muted); flex-shrink: 0; }
 .path-row-value { flex: 1; font-family: var(--font-mono); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .chip-row { display: flex; gap: var(--rmccc-space-2); flex-wrap: wrap; }
 

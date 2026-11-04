@@ -249,9 +249,6 @@ html[data-motion="on"] .toast {
 .toast-message { flex: 1; color: var(--rmccc-text); }
 .toast-action { color: var(--rmccc-accent); font-weight: 600; }
 .toast-close { color: var(--rmccc-text-muted); display: inline-flex; }
-
-
-.account-card { display: flex; height: 100%; }
 .account-card-body { display: flex; align-items: flex-start; gap: var(--rmccc-space-3); width: 100%; }
 /* 皮肤脸部裁剪：64×64 皮肤图，脸部在 (8,8)-(16,16)；800% 缩放 + 14.2857% 偏移 */
 .account-avatar-face {
@@ -270,9 +267,6 @@ html[data-motion="on"] .toast {
 .account-avatar-face.is-builtin { background-size: 100% 100%; background-position: center; }
 /* 头像卡内的首字母回退与脸部裁剪同尺寸，避免切换时跳动 */
 .account-card-body .account-avatar { width: 48px; height: 48px; font-size: 20px; border-radius: var(--rmccc-radius-control); }
-.account-card-meta { font-size: 12px; color: var(--rmccc-text-muted); }
-.account-card-actions { margin-left: auto; display: flex; flex-direction: column; align-items: flex-end; gap: var(--rmccc-space-2); }
-.account-card-empty { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: var(--rmccc-space-3); width: 100%; color: var(--rmccc-text-muted); }
 .account-card-info { flex: 1; min-width: 0; }
 .account-card-name { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .account-avatar {
@@ -288,18 +282,6 @@ html[data-motion="on"] .toast {
   flex-shrink: 0;
 }
 .account-avatar.is-small { width: 24px; height: 24px; font-size: 12px; }
-
-.quick-versions { display: flex; flex-direction: column; gap: var(--rmccc-space-3); height: 100%; }
-.quick-versions-chips { display: flex; gap: var(--rmccc-space-2); flex-wrap: wrap; align-content: flex-start; }
-
-.downloads-card { display: flex; flex-direction: column; gap: var(--rmccc-space-2); height: 100%; overflow-y: auto; }
-.downloads-card-empty { display: flex; align-items: center; gap: var(--rmccc-space-3); color: var(--rmccc-text-muted); }
-.downloads-card-row { display: flex; align-items: center; gap: var(--rmccc-space-3); }
-.downloads-card-info { min-width: 0; flex: 1; }
-.downloads-card-title { font-size: 13px; font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.downloads-card-meta { font-size: 12px; color: var(--rmccc-text-muted); }
-
-.add-widget-list { display: flex; flex-direction: column; gap: 2px; }
 
 /* ── Instances ─────────────────────────────────────────────── */
 
