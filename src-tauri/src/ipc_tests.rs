@@ -165,7 +165,9 @@ fn ipc_command_count_is_stable() {
     // → 132：data_mode_get / data_mode_switch（SNGL 标准/便携根切换与剪切迁移）、
     //        background_catalog / background_open_folder /
     //        background_settings_get / background_settings_set（Background 目录与轮播策略）。
-    assert_eq!(crate::handlers::IPC_COMMANDS.len(), 132);
+    // → 133：auth_set_offline_uuid（左 Dock 账户卡手动修改离线 UUID）。
+    // → 135：onboarding_probe / onboarding_complete（初次启动引导）。
+    assert_eq!(crate::handlers::IPC_COMMANDS.len(), 135);
 }
 
 // ────────────────────────── 2. 错误码契约 ──────────────────────────

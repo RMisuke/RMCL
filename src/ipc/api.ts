@@ -206,6 +206,9 @@ export const auth = {
     safeInvoke<AuthSession>("auth_switch_account", { accountId }),
   removeAccount: (accountId: string) =>
     safeInvoke<void>("auth_remove_account", { accountId }),
+  /** Offline accounts only: null/empty restores the canonical name-based UUID. */
+  setOfflineUuid: (accountId: string, uuid: string | null) =>
+    safeInvoke<AuthSession>("auth_set_offline_uuid", { accountId, uuid }),
   /** Skin + cape texture URLs via the backend session-server proxy (null = none). */
   skinUrl: (uuid: string) =>
     safeInvoke<import("./types").SkinTextures | null>("auth_skin_url", { uuid }),
@@ -476,6 +479,14 @@ export const dataPaths = {
     safeInvoke<import("./types").DataModeSwitchResult>("data_mode_switch", { mode, migrate }),
 };
 
+// ── 初次启动引导 ──
+
+export const onboarding = {
+  probe: () => safeInvoke<import("./types").OnboardingProbeView>("onboarding_probe"),
+  complete: (mode: "standard" | "portable") =>
+    safeInvoke<void>("onboarding_complete", { mode }),
+};
+
 // ── Plugins（Phase 2 声明式插件）──
 
 export const plugins = {
@@ -559,8 +570,15 @@ export const ai = {
   probeModels: (baseUrl?: string, apiKey?: string) =>
     safeInvoke<string[]>("ai_models_probe", { baseUrl, apiKey }),
   /** 游戏日志一键分析：返回 analysis_id，增量经 `ai://delta/done/error` 事件回传。 */
-  analyzeLog: (key?: string) =>
-    safeInvoke<AiAnalysisHandle>("ai_analyze_log", { key }),
+  analyzeLog: (opts: {
+    key?: string;
+    runId?: string;
+    detail?: string;
+    logMode?: string;
+    language?: string;
+    exitCode?: number;
+    exitType?: string;
+  }) => safeInvoke<AiAnalysisHandle>("ai_analyze_log", opts),
   cancelAnalysis: (analysisId: string) =>
     safeInvoke<boolean>("ai_analyze_cancel", { analysisId }),
 };

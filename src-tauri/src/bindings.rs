@@ -77,6 +77,8 @@ pub fn generate_types() -> Result<String, String> {
         ts::<crate::commands::external::BackgroundCatalogView>()?,
         ts::<crate::commands::data_paths::DataLocationView>()?,
         ts::<crate::commands::data_paths::DataModeSwitchResult>()?,
+        ts::<crate::commands::onboarding::OnboardingProbeView>()?,
+        ts::<crate::commands::onboarding::LauncherConfigView>()?,
         ts::<rmccc_error::IpcError>()?,
         ts::<rmccc_error::ErrorCode>()?,
         ts::<crate::commands::external::BackgroundVideoAsset>()?,
