@@ -29,7 +29,7 @@
     ],
     "macOSPrivateApi": true,
     "security": {
-      "csp": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' asset: http://asset.localhost rmcccplugin: http://rmcccplugin.localhost data: blob:; media-src 'self' asset: http://asset.localhost rmcccplugin: http://rmcccplugin.localhost blob:; font-src 'self' data: asset: http://asset.localhost rmcccplugin: http://rmcccplugin.localhost; connect-src 'self' ipc: http://ipc.localhost; frame-src rmcccplugin: http://rmcccplugin.localhost",
+      "csp": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' asset: http://asset.localhost rmcccplugin: http://rmcccplugin.localhost rmcccicon: http://rmcccicon.localhost http://textures.minecraft.net https://textures.minecraft.net http://cdn.modrinth.com https://cdn.modrinth.com data: blob:; media-src 'self' asset: http://asset.localhost rmcccplugin: http://rmcccplugin.localhost blob:; font-src 'self' data: asset: http://asset.localhost rmcccplugin: http://rmcccplugin.localhost; connect-src 'self' ipc: http://ipc.localhost rmcccicon: http://rmcccicon.localhost http://textures.minecraft.net https://textures.minecraft.net http://cdn.modrinth.com https://cdn.modrinth.com; frame-src rmcccplugin: http://rmcccplugin.localhost",
       "assetProtocol": {
         "enable": true,
         "scope": []
