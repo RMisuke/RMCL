@@ -11,8 +11,8 @@ import { PluginFrame } from "../plugin-ui/PluginFrame";
 import { RmButton, RmIconButton, RmInput, RmSelect, RmSegmented, RmSwitch, RmTag } from "../components/rm/controls";
 import { RmDialog, RmMenu } from "../components/rm/overlays";
 import { RmCard, RmSideTabs, RmListRow, RmAdvancedSection, RmFieldRow, RmEmptyState, RmErrorState } from "../components/rm/surfaces";
-import { settings as settingsApi, userSettings, instances, gameDirectories, logs, external, mcp as mcpApi, ai as aiApi, plugins as pluginsApi, dashboard, storage, dataPaths } from "../ipc/api";
-import type { AppInfoView, JavaInfo, InstanceDetail, LocaleInfo, McpToolView, ThemeTokens, GlobalGameSettings, GameDirectory, StorageOverview, DataLocationView } from "../ipc/types";
+import { settings as settingsApi, userSettings, instances, gameDirectories, logs, external, mcp as mcpApi, dashboard, storage, dataPaths } from "../ipc/api";
+import type { AppInfoView, JavaInfo, InstanceDetail, LocaleInfo, McpToolView, GlobalGameSettings, GameDirectory, StorageOverview, DataLocationView } from "../ipc/types";
 import { Icon } from "../components/icons";
 import { settingsStore } from "../stores/settings";
 import { aiStore } from "../stores/ai";
@@ -110,8 +110,6 @@ export default function Settings(): JSX.Element {
 function GameDefaults(): JSX.Element {
   const navigate = useNavigate();
   const config = () => settingsStore.config();
-  const [rootDir, setRootDir] = createSignal("");
-  const [rootDirty, setRootDirty] = createSignal(false);
   const [javas, setJavas] = createSignal<JavaInfo[]>([]);
   const [autoMemory, setAutoMemory] = createSignal(false);
   const [gameSettings, setGameSettings] = createSignal<GlobalGameSettings | null>(null);
@@ -131,7 +129,6 @@ function GameDefaults(): JSX.Element {
   createEffect(() => {
     const c = config();
     if (!c) return;
-    if (!rootDirty()) setRootDir(c.game_root_dir ?? "");
     setAutoMemory(c.auto_memory);
     if (!touched.memory) {
       setMinMem(c.default_min_memory_mb ?? 1024);
@@ -166,12 +163,6 @@ function GameDefaults(): JSX.Element {
     void instances.globalSettings().then((r) => r.ok && setGameSettings(r.data));
     void gameDirectories.selected().then((r) => r.ok && setSelectedDirectory(r.data));
   });
-
-  async function patch(update: Parameters<typeof settingsStore.update>[0]): Promise<boolean> {
-    const res = await settingsStore.update(update);
-    if (!res.ok) toast({ message: res.message ?? "", tone: "error" });
-    return res.ok;
-  }
 
   async function patchGame(update: Partial<GlobalGameSettings>): Promise<boolean> {
     const current = gameSettings();

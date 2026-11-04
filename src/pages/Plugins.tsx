@@ -4,12 +4,12 @@
  * contributions / logic), JSON-Schema-driven config form.
  */
 import type { JSX } from "solid-js";
-import { Show, For, createMemo, createSignal, onMount, onCleanup, Switch, Match } from "solid-js";
+import { Show, For, createMemo, createSignal, onMount, Switch, Match } from "solid-js";
 import { PageHeader } from "../components/PageHeader";
 import { RmButton, RmIconButton, RmInput, RmSelect, RmSwitch, RmTag } from "../components/rm/controls";
 import { RmDialog, RmMenu } from "../components/rm/overlays";
-import { RmCard, RmListRow, RmTabs, RmEmptyState, RmErrorState, RmAdvancedSection, RmContentState } from "../components/rm/surfaces";
-import { plugins as pluginsApi, pluginUi, logic } from "../ipc/api";
+import { RmCard, RmListRow, RmTabs, RmEmptyState, RmAdvancedSection, RmContentState } from "../components/rm/surfaces";
+import { plugins as pluginsApi, logic } from "../ipc/api";
 import type { PluginSummary, PluginDetail, CapabilityInfo, InstallReport } from "../ipc/types";
 import { pluginsStore } from "../stores/plugins";
 import { toast } from "../stores/ui";
@@ -19,7 +19,6 @@ import type { PluginContributions } from "../ipc/types";
 import { useNavigate } from "@solidjs/router";
 
 export default function Plugins(): JSX.Element {
-  const navigate = useNavigate();
   const [selectedId, setSelectedId] = createSignal<string | null>(null);
   const [detail, setDetail] = createSignal<PluginDetail | null>(null);
   const [capabilities, setCapabilities] = createSignal<CapabilityInfo[]>([]);
@@ -119,7 +118,6 @@ export default function Plugins(): JSX.Element {
     }
   }
 
-  const list = createMemo(() => pluginsStore.list()?.plugins ?? []);
   const diagnostics = createMemo(() => pluginsStore.list()?.diagnostics ?? []);
   const hasLogic = createMemo(() => (detail()?.manifest.entry?.logic ?? null) !== null);
 
