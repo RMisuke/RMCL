@@ -10,6 +10,30 @@
 
 ## 0. 更新记录
 
+**2026-11-04（HMCL/PCL 折叠版本启动回归）**：
+
+1. **症状**：启动 HMCL/PCL 安装的整合包时 JVM 立即以
+   `Error: --add-opens requires modules to be specified` 退出（code 1）。
+2. **根因**：HMCL/PCL 的整合包版本 JSON 是"已折叠"的独立版本（无 `inheritsFrom`，
+   顶层 `arguments`/`libraries` 已是合并结果，`patches` 只为编辑/回写保留）。
+   `DefaultGameRepository::resolve` 仍在顶层结果上再套用一次 `patches`；参数去重只去重值、
+   不去重可重复 flag，于是 `--add-opens` 变成没有值的孤立 flag，JVM 拒绝启动。
+   同一原因还让 game args（`--username` 等）整体翻倍。
+3. **修复**：新增 `is_folded_standalone` 判定；折叠版本的 patch 只保留在 `standalone` 视图
+   （供 loader 检测/回写），不参与 `launch` 合并。MCBBS 额外库补丁改为同时折叠进顶层
+   `libraries`，避免跳过后丢失 classpath 条目。
+4. **验证**：本机 14 个实例 dry-run 均无孤立 flag；对每个实例用其 Java 执行
+   `java @args -version` 全部退出 0；新增 `test_folded_standalone_does_not_reapply_patches`；
+   `cargo test --workspace` 通过。
+
+**2026-11-04（产物命名对齐 SNGL）**：
+
+1. `src-tauri` 增加 `[[bin]] name = "SNGL"`（包名仍为 `rmccc`），`tauri build` 直接产出
+   `SNGL.exe`（Windows）与 `Contents/MacOS/SNGL`（macOS），不再出现 `rmccc.exe`。
+2. 逻辑 helper 的二进制改为 `SNGL-logic-host`：`HELPER_NAME`、`bundle.externalBin`、
+   `scripts/prepare-logic-host.mjs` 与测试路径同步；crate/包名保持 `rmccc-logic-host`。
+3. CI 的 Windows E2E 改用 `target/debug/SNGL.exe`。
+
 **2026-11-04（回归修复：头像缓存 + Windows 窗口直角）**：
 
 1. **头像/皮肤恢复**：CSP 漏了图标缓存协议与直连域名，`rmcccicon://` 与

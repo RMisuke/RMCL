@@ -154,12 +154,13 @@ impl DefaultGameRepository {
     /// Recursively resolve an instance along its `inheritsFrom` chain.
     ///
     /// Patches from every manifest on the chain are accumulated into
-    /// `patches_out` and applied by [`Self::resolve`] (sorted by priority).
+    /// `patches_out` (with an `apply` flag) and applied by [`Self::resolve`]
+    /// (sorted by priority).
     fn resolve_from(
         &self,
         id: &str,
         visited: &mut HashSet<String>,
-        patches_out: &mut Vec<GamePatch>,
+        patches_out: &mut Vec<(GamePatch, bool)>,
     ) -> Result<GameVersion> {
         if !visited.insert(id.to_string()) {
             return Err(RmcccError::Other(format!(
@@ -173,7 +174,14 @@ impl DefaultGameRepository {
             .ok_or_else(|| RmcccError::Other(format!("Version not installed: {id}")))?
             .clone();
 
-        patches_out.extend(manifest.patches.clone());
+        // HMCL/PCL 写"已折叠"的独立版本（无 inheritsFrom，顶层字段已是
+        // patch 合并后的结果，`patches` 只为编辑/回写保留）。再套用一次
+        // patch 会让 `--add-opens` / `--add-exports` 这类可重复参数变成
+        // 孤立 flag（值被去重、flag 不会），JVM 直接报
+        // `--add-opens requires modules to be specified` 并退出。
+        // 折叠版本的 patch 只保留在 standalone 视图里，不参与 launch 合并。
+        let apply = !Self::is_folded_standalone(&manifest);
+        patches_out.extend(manifest.patches.iter().cloned().map(|p| (p, apply)));
 
         let mut merged = if let Some(parent) = &manifest.inherits_from {
             let mut parent_resolved = self.resolve_from(parent, visited, patches_out)?;
@@ -185,6 +193,16 @@ impl DefaultGameRepository {
         // Base version's own patches (root-level) applied too.
         let _ = &mut merged;
         Ok(merged)
+    }
+
+    /// Whether the manifest is a standalone merged view (HMCL/PCL "root"):
+    /// no `inheritsFrom` and the top-level fields already carry the folded
+    /// patch data.
+    fn is_folded_standalone(manifest: &GameVersion) -> bool {
+        manifest.inherits_from.is_none()
+            && !manifest.main_class.is_empty()
+            && !manifest.libraries.is_empty()
+            && (manifest.arguments.is_some() || manifest.minecraft_arguments.is_some())
     }
 
     /// Resolve an instance into the dual-view [`ResolvedVersion`].
@@ -199,11 +217,17 @@ impl DefaultGameRepository {
         let mut patches = Vec::new();
         let merged = self.resolve_from(id, &mut visited, &mut patches)?;
         let root_id = self.get_game_version(id);
-        patches.sort_by_key(|p| p.priority);
+        patches.sort_by_key(|(p, _)| p.priority);
+        let all_patches: Vec<GamePatch> = patches.iter().map(|(p, _)| p.clone()).collect();
+        let launch_patches: Vec<&GamePatch> = patches
+            .iter()
+            .filter(|(_, apply)| *apply)
+            .map(|(p, _)| p)
+            .collect();
 
         let mut launch = merged.clone();
         let mut standalone = merged.clone();
-        for p in &patches {
+        for p in &launch_patches {
             Self::apply_patch(&mut launch, p);
             Self::apply_patch(&mut standalone, p);
         }
@@ -211,7 +235,7 @@ impl DefaultGameRepository {
         launch.patches = Vec::new();
         // standalone keeps the patches list (for editing / round-tripping).
         standalone.inherits_from = None;
-        standalone.patches = patches;
+        standalone.patches = all_patches;
 
         // `jar` falls back to the base version's id (HMCL): an inheriting
         // instance shares the parent's client JAR (e.g. `1.20.4-fabric` uses
@@ -821,6 +845,65 @@ mod tests {
         assert_eq!(resolved.standalone.patches.len(), 1);
         // base MC version resolution
         assert_eq!(repo.get_game_version("1.20.4-fabric"), "1.20.4");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 2026-11-04 HMCL 整合包启动回归：HMCL/PCL 导出的独立版本（无
+    /// `inheritsFrom`，顶层 `arguments` 已是 patch 合并结果，`patches`
+    /// 仅为回写保留）如果再次套用 patch，`--add-opens` 这类可重复 flag
+    /// 的值会被去重而 flag 保留，JVM 以
+    /// `Error: --add-opens requires modules to be specified` 退出。
+    /// 折叠版本必须直接使用顶层字段。
+    #[test]
+    fn test_folded_standalone_does_not_reapply_patches() {
+        let dir = temp_dir("folded-patches");
+        write_version(
+            &dir,
+            "1.20.1-hmcl",
+            r#"{
+                "id": "1.20.1-hmcl",
+                "type": "release",
+                "root": true,
+                "mainClass": "cpw.mods.bootstraplauncher.BootstrapLauncher",
+                "libraries": [{"name": "com.mojang:test:1.0"}],
+                "arguments": {
+                    "jvm": ["--add-opens", "java.base/java.util.jar=cpw.mods.securejarhandler"],
+                    "game": ["--username", "${auth_player_name}"]
+                },
+                "patches": [{
+                    "id": "forge",
+                    "version": "47.4.20",
+                    "priority": 30000,
+                    "mainClass": "cpw.mods.bootstraplauncher.BootstrapLauncher",
+                    "arguments": {
+                        "jvm": ["--add-opens", "java.base/java.util.jar=cpw.mods.securejarhandler"]
+                    }
+                }]
+            }"#,
+        );
+        let mut repo = DefaultGameRepository::new(dir.clone());
+        repo.refresh().unwrap();
+
+        let resolved = repo.get_resolved("1.20.1-hmcl").unwrap();
+        let jvm = resolved
+            .launch
+            .arguments
+            .as_ref()
+            .and_then(|a| a.jvm.as_ref())
+            .expect("jvm args");
+        let count = |needle: &str| {
+            jvm.iter()
+                .filter(|a| matches!(a, crate::types::VersionArgument::Simple(s) if s == needle))
+                .count()
+        };
+        assert_eq!(count("--add-opens"), 1, "duplicate flag left bare: {jvm:?}");
+        assert_eq!(
+            count("java.base/java.util.jar=cpw.mods.securejarhandler"),
+            1,
+            "duplicate value: {jvm:?}"
+        );
+        // The patch list is still available for editing / loader detection.
+        assert_eq!(resolved.standalone.patches.len(), 1);
         let _ = std::fs::remove_dir_all(&dir);
     }
 
