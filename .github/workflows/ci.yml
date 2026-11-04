@@ -99,12 +99,10 @@ jobs:
   # msedgedriver）与 Linux（WebKitWebDriver），**不支持 macOS**。此前这个 job
   # 跑在 macos-14 上，从未真正驱动过应用。现在改到 windows-latest：
   # 一次性验证 Windows 原生构建 + WebView2 首帧渲染。
-  # 首次接入期间标 `continue-on-error`（可见但不阻塞合并），Windows 实机
-  # 验收完成后应去掉。
+  # 2026-11-04：摘掉 `continue-on-error`，E2E 正式作为合并门禁。
   e2e:
     name: E2E (Windows / WebView2)
     runs-on: windows-latest
-    continue-on-error: true
     steps:
       - uses: actions/checkout@v4
 
