@@ -51,6 +51,7 @@ export type {
   IsolationPolicy,
   TaskBoard,
   TaskSnapshot,
+  ServerStatus,
   TaskStart,
   TaskKind,
   TaskState,
@@ -68,6 +69,7 @@ export type {
   PluginConfig,
   CapabilityInfo,
   PluginContributions,
+  WidgetDescriptor,
   ThemeInfo,
   ThemeTokens,
   ThemeSkinPayload,
@@ -94,6 +96,7 @@ import type { AppInfoView,
   ModpackInstallStart,
   TaskBoard,
   TaskSnapshot,
+  ServerStatus,
   TaskStart,
   TaskKind,
   TaskState,
@@ -143,6 +146,7 @@ import type { AppInfoView,
   PluginConfig,
   CapabilityInfo,
   PluginContributions,
+  WidgetDescriptor,
   ThemeInfo,
   ThemeTokens,
   ThemeSkinPayload,
@@ -239,6 +243,9 @@ export const instances = {
   /** `deleteFiles=false` hides the instance and keeps `versions/{id}`. */
   remove: (key: string, deleteFiles = false) =>
     safeInvoke<void>("instance_remove", { key, deleteFiles }),
+  /** Register an already-installed version as a first-class instance. */
+  import: (directoryId: string, id: string) =>
+    safeInvoke<InstanceDetail>("instance_import", { directoryId, id }),
   /** Download + create a new version-backed instance (background). */
   install: (
     directoryId: string,
@@ -368,11 +375,20 @@ export const modLoader = {
 export const tasks = {
   /** Active tasks + bounded recent history (survives a WebView reload). */
   list: () => safeInvoke<TaskBoard>("task_list"),
+  get: (taskId: string) => safeInvoke<TaskSnapshot | null>("task_get", { taskId }),
   log: (taskId: string) => safeInvoke<string[]>("task_log", { taskId }),
   pause: (taskId: string) => safeInvoke<void>("task_pause", { taskId }),
   resume: (taskId: string) => safeInvoke<void>("task_resume", { taskId }),
   cancel: (taskId: string) => safeInvoke<void>("task_cancel", { taskId }),
   clearHistory: () => safeInvoke<void>("task_clear_history"),
+};
+
+// ── Home server card（真实 SLP 查询）──
+
+export const servers = {
+  /** Query a Minecraft server with the Server List Ping protocol. */
+  status: (address: string) =>
+    safeInvoke<ServerStatus>("server_status", { address }),
 };
 
 // ── Settings ──
@@ -431,9 +447,13 @@ export const dialog = {
 // ── 本地壁纸（Appearance）──
 
 export const backgroundMedia = {
+  /** Native MP4 picker; null on cancel. */
+  pickVideo: () => safeInvoke<string | null>("dialog_pick_background_video"),
   /** Prepare, validate and authorize one native-resolution hardware-safe asset. */
   prepare: (path: string) =>
     safeInvoke<import("./types").BackgroundVideoAsset>("background_video_prepare", { path }),
+  /** Native still-image picker; null on cancel. */
+  pickImage: () => safeInvoke<string | null>("dialog_pick_background_image"),
   /** Validate the image and grant asset-protocol access; returns canonical path. */
   prepareImage: (path: string) =>
     safeInvoke<string>("background_image_prepare", { path }),
@@ -500,6 +520,8 @@ export const plugins = {
 // ── Dashboard themes（布局协议已随 HomeDashboard 下线，B3-1）──
 
 export const dashboard = {
+  listWidgets: () =>
+    safeInvoke<WidgetDescriptor[]>("dashboard_list_widgets"),
   listThemes: () => safeInvoke<ThemeInfo[]>("dashboard_list_themes"),
   getThemeTokens: (key: string) =>
     safeInvoke<ThemeTokens>("dashboard_get_theme_tokens", { key }),
