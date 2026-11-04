@@ -446,7 +446,7 @@ async function sampleWithRetry(attempts = 4): Promise<{ source: AdaptiveSource; 
   return null;
 }
 
-function fallbackForCurrentTheme(source: AdaptiveSource = "default"): AdaptivePalette {
+function fallbackForCurrentTheme(): AdaptivePalette {
   const tokens = currentThemeTokens();
   return paletteFromThemeAccent(tokens?.accent, activeMode());
 }
@@ -472,7 +472,7 @@ export async function refreshAdaptivePalette(): Promise<void> {
     try {
       const sample = await sampleWithRetry();
       if (!sample) {
-        const next = fallbackForCurrentTheme("default");
+        const next = fallbackForCurrentTheme();
         setPaletteSignal(next);
         storePalette(next);
         applyPalette(next);
@@ -498,7 +498,7 @@ export async function refreshAdaptivePalette(): Promise<void> {
           next = result.palette;
           ready = result.ready;
         } else {
-          next = fallbackForCurrentTheme("default");
+          next = fallbackForCurrentTheme();
           ready = false;
         }
       } else {
@@ -518,7 +518,7 @@ export async function refreshAdaptivePalette(): Promise<void> {
         next.readable ? "info" : "warn"
       );
     } catch (error) {
-      const next = fallbackForCurrentTheme("default");
+      const next = fallbackForCurrentTheme();
       setPaletteSignal(next);
       storePalette(next);
       applyPalette(next);

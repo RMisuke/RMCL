@@ -65,7 +65,6 @@ export interface AdaptiveOptions {
   sampleCount?: number;
 }
 
-const WHITE: Rgb = [255, 255, 255];
 const DARK_INK: Rgb = [10, 12, 16];
 const LIGHT_INK: Rgb = [255, 250, 242];
 

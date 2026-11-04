@@ -46,7 +46,7 @@ function readPrefs(): BackgroundImagePrefs {
 
 const [prefs, setPrefsSignal] = createRoot(() => createSignal<BackgroundImagePrefs>(readPrefs()));
 const [issue, setIssueSignal] = createRoot(() => createSignal(""));
-const [preparing, setPreparingSignal] = createRoot(() => createSignal(false));
+const [, setPreparingSignal] = createRoot(() => createSignal(false));
 
 let generation = 0;
 const completed = new Map<string, ResolvedBackgroundImage>();
