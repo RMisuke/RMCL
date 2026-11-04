@@ -269,18 +269,13 @@ impl Default for BackgroundSelection {
 }
 
 /// How the still-image wallpaper is chosen.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS, Default)]
 #[serde(rename_all = "lowercase")]
 #[ts(export_to = "types.ts")]
 pub enum BackgroundImageMode {
+    #[default]
     Single,
     Carousel,
-}
-
-impl Default for BackgroundImageMode {
-    fn default() -> Self {
-        Self::Single
-    }
 }
 
 /// Persisted background policy. Files themselves live in `{data_dir}/Background`.

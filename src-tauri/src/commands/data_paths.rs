@@ -105,20 +105,25 @@ pub async fn data_mode_switch(
     }
 
     // Flush the debounced settings writer before copying, otherwise the target
-    // can miss the user's latest preference edits.
+    // can miss the user's latest preference edits. Writing the source
+    // `settings.json` is only needed for migration: doing it on a no-migrate
+    // switch would create a config in the old root and make the onboarding
+    // probe think this install was already set up.
     {
         let mut core = state.core.write().await;
         core.flush_pending_writes();
-        let content = core.settings_json().map_err(|error| IpcError {
-            code: ErrorCode::Unknown,
-            message: error.to_string(),
-            retryable: false,
-        })?;
-        let settings = paths::launcher_settings_path(&source_data);
-        if let Some(parent) = settings.parent() {
-            std::fs::create_dir_all(parent).map_err(io_error)?;
+        if migrate {
+            let content = core.settings_json().map_err(|error| IpcError {
+                code: ErrorCode::Unknown,
+                message: error.to_string(),
+                retryable: false,
+            })?;
+            let settings = paths::launcher_settings_path(&source_data);
+            if let Some(parent) = settings.parent() {
+                std::fs::create_dir_all(parent).map_err(io_error)?;
+            }
+            std::fs::write(&settings, content).map_err(io_error)?;
         }
-        std::fs::write(&settings, content).map_err(io_error)?;
     }
 
     let mut migrated = false;
@@ -322,18 +327,16 @@ fn verify_tree(
         let destination = target.join(&name);
         if metadata.is_dir() {
             verify_tree(&path, &destination, skip_names, skip_path)?;
-        } else if metadata.is_file() {
-            if !files_equal(&path, &destination)? {
-                return Err(IpcError {
-                    code: ErrorCode::Unknown,
-                    message: format!(
-                        "migration verification failed: {} does not match {}",
-                        destination.display(),
-                        path.display()
-                    ),
-                    retryable: false,
-                });
-            }
+        } else if metadata.is_file() && !files_equal(&path, &destination)? {
+            return Err(IpcError {
+                code: ErrorCode::Unknown,
+                message: format!(
+                    "migration verification failed: {} does not match {}",
+                    destination.display(),
+                    path.display()
+                ),
+                retryable: false,
+            });
         }
     }
     Ok(())

@@ -356,12 +356,21 @@ fn rewrite_json_value(value: &mut serde_json::Value, old: &str, new: &str) -> bo
             }
             false
         }
-        serde_json::Value::Array(items) => items.iter_mut().fold(false, |changed, item| {
-            rewrite_json_value(item, old, new) || changed
-        }),
-        serde_json::Value::Object(object) => object.values_mut().fold(false, |changed, item| {
-            rewrite_json_value(item, old, new) || changed
-        }),
+        serde_json::Value::Array(items) => {
+            let mut changed = false;
+            for item in items.iter_mut() {
+                // 保留完整遍历：即便某个子项命中，其余子项也必须被重写。
+                changed = rewrite_json_value(item, old, new) || changed;
+            }
+            changed
+        }
+        serde_json::Value::Object(object) => {
+            let mut changed = false;
+            for item in object.values_mut() {
+                changed = rewrite_json_value(item, old, new) || changed;
+            }
+            changed
+        }
         _ => false,
     }
 }
@@ -383,6 +392,61 @@ fn directory_writable(dir: &Path) -> bool {
         }
         Err(_) => false,
     }
+}
+
+/// Configuration files whose presence marks a data root as already set up.
+///
+/// `game-directories.json` is deliberately excluded: the backend creates it
+/// while resolving the default layout, so it cannot prove the user finished
+/// onboarding.
+const LAUNCHER_CONFIG_FILES: [&str; 4] = [
+    "settings.json",
+    "config/launcher-settings.json",
+    "user-settings.json",
+    "state/launcher-state.json",
+];
+
+/// Marker written when the first-run wizard finishes.
+pub const ONBOARDED_MARKER: &str = ".onboarded";
+
+/// True when the data root carries a launcher config or the onboarding marker.
+pub fn data_root_configured(root: &Path) -> bool {
+    root.join(ONBOARDED_MARKER).is_file()
+        || LAUNCHER_CONFIG_FILES
+            .iter()
+            .any(|relative| root.join(relative).is_file())
+}
+
+/// True when neither the standard nor the portable root has been configured.
+///
+/// Checked at process start, before the core writes any files, so a first run
+/// can be distinguished from a returning user.
+pub fn has_any_launcher_config() -> bool {
+    // Local verification helper: re-open the wizard without deleting data.
+    if std::env::var_os("SNGL_FORCE_ONBOARDING").is_some() {
+        return false;
+    }
+    if data_root_configured(&standard_data_dir())
+        || data_root_configured(&executable_dir().join("SNGL"))
+    {
+        return true;
+    }
+    // Upgrading a pre-SNGL install must not look like a first run: migration
+    // renames these roots, but the rename happens after this probe.
+    let mut legacy = Vec::new();
+    if let Some(local) = dirs::data_local_dir() {
+        legacy.push(local.join("rmccc"));
+    }
+    if let Some(roaming) = dirs::data_dir() {
+        legacy.push(roaming.join("rmccc"));
+    }
+    legacy.iter().any(|root| data_root_configured(root))
+}
+
+/// Write the onboarding-complete marker for `root`.
+pub fn mark_onboarded(root: &Path) -> std::io::Result<()> {
+    std::fs::create_dir_all(root)?;
+    std::fs::write(root.join(ONBOARDED_MARKER), b"SNGL onboarding complete\n")
 }
 
 /// Current data directory (`SNGL`).
@@ -620,6 +684,29 @@ mod tests {
     fn game_root_for_explicit_data_dir_stays_conventional() {
         let dir = std::env::temp_dir().join("sngl-explicit-data-dir");
         assert_eq!(default_game_dir_for(&dir), dir.join("instances"));
+    }
+
+    #[test]
+    fn config_markers_and_onboarding_marker_are_detected() {
+        let dir = std::env::temp_dir().join(format!(
+            "sngl-config-marker-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        assert!(!data_root_configured(&dir));
+        std::fs::create_dir_all(dir.join("config")).unwrap();
+        // The core-created directory registry is not a finished install.
+        std::fs::write(dir.join("config/game-directories.json"), b"{}").unwrap();
+        assert!(!data_root_configured(&dir));
+        std::fs::write(dir.join("settings.json"), b"{}").unwrap();
+        assert!(data_root_configured(&dir));
+        std::fs::remove_file(dir.join("settings.json")).unwrap();
+        mark_onboarded(&dir).unwrap();
+        assert!(data_root_configured(&dir));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
