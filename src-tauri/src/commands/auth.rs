@@ -313,3 +313,59 @@ pub async fn auth_remove_account(
     core.account_repo.remove(&account_id)?;
     Ok(())
 }
+
+/// 修改离线账户的 UUID。
+///
+/// `uuid` 为空/缺省时恢复 HMCL 同款的、按用户名生成的规范离线 UUID。
+/// 只有离线账户允许修改；Microsoft 账户的 profile UUID 由 Mojang 决定。
+#[tauri::command]
+#[tracing::instrument(skip(state))]
+pub async fn auth_set_offline_uuid(
+    state: tauri::State<'_, AppState>,
+    account_id: String,
+    uuid: Option<String>,
+) -> Result<AuthSession, IpcError> {
+    let core = state.core.read().await;
+    let account = core
+        .account_repo
+        .load_account(&account_id)?
+        .ok_or_else(|| IpcError {
+            code: rmccc_error::ErrorCode::NotFound,
+            message: format!("Account not found: {account_id}"),
+            retryable: false,
+        })?;
+    if account.provider() != "offline" {
+        return Err(IpcError {
+            code: rmccc_error::ErrorCode::ValidationError,
+            message: "Only offline accounts can edit their UUID".into(),
+            retryable: false,
+        });
+    }
+
+    let username = account.profile_name();
+    let next_uuid = match uuid
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        Some(raw) => uuid::Uuid::parse_str(raw)
+            .map_err(|_| IpcError {
+                code: rmccc_error::ErrorCode::ValidationError,
+                message: format!("Invalid UUID '{raw}'"),
+                retryable: false,
+            })?
+            .to_string(),
+        None => rmccc_auth::OfflineAuthProvider::uuid_from_username(&username),
+    };
+
+    let rebuilt =
+        rmccc_auth::OfflineAccount::from_parts(*account.account_id(), username, next_uuid);
+    core.account_repo.save_account(&rebuilt)?;
+    core.account_repo
+        .load(&account_id)?
+        .ok_or_else(|| IpcError {
+            code: rmccc_error::ErrorCode::NotFound,
+            message: format!("Account not found after UUID update: {account_id}"),
+            retryable: false,
+        })
+}
