@@ -23,8 +23,9 @@
 
 - 首页（`/`）是**空白页**：背景铺满，主内容区不绘制卡片；启动入口只有右下角胶囊。
 - 其余页面占满 Dock 右侧区域；底部导航不存在，导航只在左 Dock。
-- 窗口 `decorations: false` + `transparent: true`，圆角、边框、阴影全部由 CSS 绘制；
-  最大化时通过 `html[data-window-maximized]` 去掉圆角。
+- 窗口 `decorations: false` + `transparent: true`，圆角与边框由 CSS 绘制；Windows 上另由
+  `main.rs::apply_windows_window_chrome` 关闭 DWM 非客户区渲染（原生矩形阴影/1px 边框），
+  否则 CSS 圆角外会露出直角的窗口框；最大化时通过 `html[data-window-maximized]` 去掉圆角。
 
 ## 2. 路由
 
@@ -60,12 +61,15 @@ GPU 探测把 SwiftShader/llvmpipe/software 判为 `low`，NVIDIA/AMD 独显/Int
 1. **WebView2 ≥ Chromium 111**：CSS 依赖 `color-mix()`（111+）与 `:has()`（105+）。
    `public/boot-guard.js` 在 bundle 之前检查 UA，版本过低时显示升级面板并阻止 UI 被误判为正常。
 2. **CSP 已启用**：主窗口只允许 self + `ipc:`/`http://ipc.localhost` + `asset:`/`http://asset.localhost`
-   + `rmcccplugin:`/`http://rmcccplugin.localhost`；`script-src 'self'`，因此 boot guard 必须是外部文件。
+   + `rmcccplugin:`/`http://rmcccplugin.localhost` + `rmcccicon:`/`http://rmcccicon.localhost`
+   + 皮肤/图标直连域名（`textures.minecraft.net`、`cdn.modrinth.com`）；`script-src 'self'`，
+   因此 boot guard 必须是外部文件。
 3. **插件 iframe URL 分平台**：WebView2 用 `http://rmcccplugin.localhost/<id>/ui/...`，
    macOS 用 `rmcccplugin://<id>/ui/...`（`src/plugin-ui/PluginFrame.tsx`）。
 4. **单实例**：`tauri-plugin-single-instance` 在第一个插件位注册，二次启动只聚焦已有窗口。
-5. **无边框窗口**：Windows 11 由 DWM 关闭系统圆角/1px 边框（`main.rs::apply_windows_window_chrome`）；
-   Windows 10 调用失败仅记录 debug。
+5. **无边框窗口**：`main.rs::apply_windows_window_chrome` 关闭 DWM 非客户区渲染
+   （`DWMWA_NCRENDERING_POLICY = DWMNCRP_DISABLED`）并关闭系统圆角/1px 边框，窗口矩形框不再可见；
+   `DWMNCRP_DISABLED` 在 Windows 10 也生效，圆角/边框色属性是 Win11 专属，旧系统调用失败仅记 debug。
 
 ## 5. 已知缺口
 

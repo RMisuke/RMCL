@@ -10,6 +10,17 @@
 
 ## 0. 更新记录
 
+**2026-11-04（回归修复：头像缓存 + Windows 窗口直角）**：
+
+1. **头像/皮肤恢复**：CSP 漏了图标缓存协议与直连域名，`rmcccicon://` 与
+   `textures.minecraft.net` 被拦截后头像退回首字母。`img-src` / `connect-src` 补齐
+   `rmcccicon:`（含 Windows 的 `http://rmcccicon.localhost`）与皮肤/图标 http/https 域名。
+2. **Windows 窗口直角**：tao 为保留缩放/Snap 始终带 `WS_CAPTION`/`WS_THICKFRAME`，DWM 因此给
+   矩形窗口画阴影与 1px 边框，CSS 圆角外露出直角。`apply_windows_window_chrome` 现关闭
+   非客户区渲染（`DWMWA_NCRENDERING_POLICY = DWMNCRP_DISABLED`）与原生阴影，形状只由 CSS 绘制；
+   Win10 同样生效（圆角/边框色属性才是 Win11 专属，失败仅记 debug）。
+3. **门禁**：`cargo fmt --check` ✅、`cargo check -p rmccc` ✅（Windows 分支按 macOS-only 约束未实机验收）。
+
 **2026-11-04（Windows / 体积 / 工程门禁 / 文档同步）**：
 
 1. **Windows**：`public/boot-guard.js` 在 bundle 前检测 WebView2/Chromium < 111 并显示升级面板；

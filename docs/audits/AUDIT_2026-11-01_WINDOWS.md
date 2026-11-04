@@ -52,7 +52,7 @@
 | W-10 | P2 | `bundle` 无 `resources`/`externalBin`：`rmccc-logic-host` 不进安装包 | `tauri.conf.json` | 打包版逻辑插件失效（各平台） | ✅ `externalBin` + `pnpm prep:host` 暂存 |
 | W-11 | P2 | `bundle.windows.webviewInstallMode` / `plugins.updater.windows.installMode` 缺失 | `tauri.conf.json` | WebView2 安装策略与更新安装模式落到 Tauri 默认值，行为不确定 | ✅ 显式配置 |
 | W-12 | P2 | E2E job 跑在 `macos-14`，而 `tauri-driver` **不支持 macOS**；测试还把 caps 换成 `chrome()` 并 `goto` 外部 URL | `.github/workflows/ci.yml:101`、`src-tauri/tests/e2e_smoke.rs` | 唯一的 WebView2 自动化窗口被浪费，E2E 实际从未驱动过应用 | ✅ 迁到 `windows-latest` + 改用 `tauri:options.application` |
-| W-13 | P2 | `transparent: true` + `decorations: false` 只在 macOS 验证 | `tauri.conf.json:25-26` | Windows 丢 DWM 阴影/Aero Snap，Win10 透明+最大化表现待测 | 🟡 代码侧已处理：DWM 关闭系统圆角/边框；最大化时 CSS 圆角归零；待 Windows 实机（见 §5） |
+| W-13 | P2 | `transparent: true` + `decorations: false` 只在 macOS 验证 | `tauri.conf.json:25-26` | Windows 丢 DWM 阴影/Aero Snap，Win10 透明+最大化表现待测 | 🟡 代码侧已处理：关闭 DWM 非客户区渲染（矩形阴影/1px 边框）、`set_shadow(false)`、系统圆角关闭；最大化时 CSS 圆角归零；待 Windows 实机（见 §5） |
 | W-16 | P1 | 主程序未声明 `windows_subsystem`；游戏 `java.exe` spawn 未设 `CREATE_NO_WINDOW` | `src-tauri/src/main.rs:1`；`crates/rmccc-launch/src/process.rs:156` | release 主程序弹控制台；启动游戏闪黑框 | 🟡 代码已加 `cfg_attr` + `hide_console_window`；待 Windows 实机 |
 | W-14 | P2 | 长路径（>260）无 `longPathAware`，深目录整合包可能失败 | — | 解压/安装报 OS error 108 | ⏳ 待实机确认触发面 |
 | W-15 | 已知降级 | 插件隔离 UI 在 `platform_id` 以 `windows` 开头时禁用 | `crates/rmccc-plugin/src/manager.rs:278`、ADR-006 | 插件卡片/页面降级为声明式 | ⏳ release-blocked（非本轮范围） |

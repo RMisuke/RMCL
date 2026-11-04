@@ -91,18 +91,27 @@ fn report_broken_bundle(window: tauri::WebviewWindow, report: &bundle::BundleRep
     }
 }
 
-/// Windows 11 draws its own rounded frame and a 1px border around borderless
-/// transparent windows. The webview paints an 18px rounded surface itself, so
-/// the system frame shows through as a second edge. Turn both DWM decorations
-/// off and let CSS be the only painter; on Windows 10 these attributes are
-/// unsupported and the call fails harmlessly.
+/// Windows paints its native frame (drop shadow + 1px border) around the
+/// **rectangular** window even when `decorations` is off, because tao keeps
+/// `WS_CAPTION`/`WS_THICKFRAME` for resizing and Snap. With an 18px CSS
+/// surface the DWM frame therefore shows up as a square outline in the
+/// transparent corner notches. Disabling native non-client rendering (the
+/// frameless-transparent recipe used by Electron) removes the shadow and the
+/// border; CSS becomes the only painter. `DWMNCRP_DISABLED` works on Windows 10
+/// too; the rounded-corner and border-colour attributes are Windows 11-only and
+/// fail harmlessly on older builds.
 #[cfg(target_os = "windows")]
 fn apply_windows_window_chrome(window: &tauri::WebviewWindow) {
     use std::ffi::c_void;
     use windows::Win32::Graphics::Dwm::{
-        DwmSetWindowAttribute, DWMWA_BORDER_COLOR, DWMWA_COLOR_NONE,
-        DWMWA_WINDOW_CORNER_PREFERENCE, DWMWCP_DONOTROUND,
+        DwmSetWindowAttribute, DWMNCRP_DISABLED, DWMWA_BORDER_COLOR, DWMWA_COLOR_NONE,
+        DWMWA_NCRENDERING_POLICY, DWMWA_WINDOW_CORNER_PREFERENCE, DWMWCP_DONOTROUND,
     };
+
+    // Keep tao's own hit-test/shadow bookkeeping in sync with the DWM policy.
+    if let Err(error) = window.set_shadow(false) {
+        tracing::warn!(%error, "Could not disable the native window shadow");
+    }
 
     let hwnd = match window.hwnd() {
         Ok(hwnd) => hwnd,
@@ -111,6 +120,23 @@ fn apply_windows_window_chrome(window: &tauri::WebviewWindow) {
             return;
         }
     };
+
+    // DWMNCRP_DISABLED removes the rectangular frame pixels (shadow + border)
+    // that DWM would otherwise draw for the frame styles tao keeps.
+    let policy = DWMNCRP_DISABLED;
+    // SAFETY: `hwnd` is the live top-level window handle; the pointer is valid
+    // for the duration of the call and the size matches the attribute layout.
+    let policy_result = unsafe {
+        DwmSetWindowAttribute(
+            hwnd,
+            DWMWA_NCRENDERING_POLICY,
+            &policy as *const _ as *const c_void,
+            std::mem::size_of_val(&policy) as u32,
+        )
+    };
+    if let Err(error) = policy_result {
+        tracing::debug!(%error, "DWM non-client rendering policy is not supported");
+    }
 
     // DWMWCP_DONOTROUND = 1. Keep CSS border-radius authoritative.
     let corner = DWMWCP_DONOTROUND.0 as u32;
