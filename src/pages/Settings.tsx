@@ -7,6 +7,7 @@ import type { JSX } from "solid-js";
 import { Show, For, createMemo, createSignal, createEffect, onMount, Switch, Match } from "solid-js";
 import { useNavigate } from "@solidjs/router";
 import { PageHeader } from "../components/PageHeader";
+import { PluginFrame } from "../plugin-ui/PluginFrame";
 import { RmButton, RmIconButton, RmInput, RmSelect, RmSegmented, RmSwitch, RmTag } from "../components/rm/controls";
 import { RmDialog, RmMenu } from "../components/rm/overlays";
 import { RmCard, RmSideTabs, RmListRow, RmAdvancedSection, RmFieldRow, RmEmptyState, RmErrorState } from "../components/rm/surfaces";
@@ -1504,13 +1505,12 @@ function PluginsHost(): JSX.Element {
         <For each={hosts()}>
           {(summary) => (
             <RmCard title={`${summary.name} · ${t("settings.plugins.host.provided")}`}>
-              <div class="plugin-settings-frame">
-                <iframe
-                  title={`settings-${summary.id}`}
-                  src={`rmcccplugin://${summary.id}/ui/index.html?page=settings`}
-                  sandbox="allow-scripts"
-                />
-              </div>
+              <PluginFrame
+                class="plugin-settings-frame"
+                pluginId={summary.id}
+                title={`settings-${summary.id}`}
+                entry="ui/index.html?page=settings"
+              />
               <div class="muted-line">{t("settings.plugins.host.permissionNote", { capability: "settings.read" })}</div>
             </RmCard>
           )}

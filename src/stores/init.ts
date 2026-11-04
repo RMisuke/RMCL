@@ -8,7 +8,6 @@
 import { listen } from "@tauri-apps/api/event";
 import { EVENTS } from "../ipc/events";
 import { t } from "../i18n";
-import { dispatchPluginPush } from "../plugin-ui/bridge";
 import { authStore } from "./auth";
 import { instancesStore } from "./instances";
 import { launchStore } from "./launch";
@@ -33,11 +32,6 @@ export function initStores(): void {
   aiStore.attachEvents();
   mcpStore.attachEvents((client) => {
     toast({ message: t("tasks.agentConnected", { client }), tone: "info" });
-  });
-
-  // ── Plugin push relay (S6 llm.chat streaming) ──
-  void listen<{ pluginId: string; message: unknown }>(EVENTS.PLUGIN_PUSH, (event) => {
-    dispatchPluginPush(event.payload.pluginId, event.payload.message);
   });
 
   // ── Attribution toasts: external Agent operations (mcp://call) ──
