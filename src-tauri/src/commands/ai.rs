@@ -9,10 +9,21 @@
 //! 迁移（ADR-013）：接替 `agent_config_get/set`——沿用同一 vault 键 `llm`，
 //! 旧配置无缝继承；内建 Agent 执行循环 / 会话 / 审批已退役。
 //!
-//! 数据外发边界：`ai_analyze_log` 只发送**脱敏后**的日志尾部（home → `~`、
+//! 数据外发边界：`ai_analyze_log` 只发送**脱敏后**的日志（home → `~`、
 //! 凭据形状遮蔽），返回值回传发送行数保持对用户透明。
+//!
+//! # S2 重构要点（见 `docs/AI_ANALYSIS_REFACTOR.md`）
+//!
+//! - **运行绑定**：分析输入经 `game_log::resolve_fresh_log` 绑定到本轮运行
+//!   （captured 优先，磁盘仅当 mtime ≥ 本次启动），不再读到上一轮的 `latest.log`。
+//! - **终止保证**：`Done` / `Cancelled` / `Error` 都会 emit 终止事件；取消不再
+//!   让前端永久停在"分析中"。
+//! - **提交模式**：标准＝完整日志尾部；激进＝仅 ERROR/WARNING 行（省 token）。
+//! - **详细程度**：简略 / 适中 / 详细三档，决定提示词与输出上限。
+//! - **跟随界面语言**：系统/用户提示按 zh-CN / en 生成。
 
-use crate::state::AppState;
+use crate::game_log::{self, LogSourceKind};
+use crate::state::{AnalysisRecord, AppState};
 use rmccc_error::{ErrorCode, IpcError, RmcccError};
 use rmccc_llm::credentials::{validate_endpoint, CredentialStore as _};
 use rmccc_llm::redact;
@@ -31,19 +42,96 @@ use ts_rs::TS;
 
 /// AI 服务在凭据 vault 里的键名（ADR-009；沿用 agent 时代的 `llm`，配置无缝迁移）。
 const AI_SERVICE: &str = "llm";
-/// 单次分析最多发送的日志字符数（尾部截取）。
-const ANALYSIS_LOG_MAX_CHARS: usize = 12_000;
+/// 标准模式：磁盘尾读 + 发送窗口（完整日志）。
+const ANALYSIS_STANDARD_WINDOW_CHARS: usize = 24_000;
+/// 激进模式：先扫更大窗口再筛 ERROR/WARNING 行。
+const ANALYSIS_AGGRESSIVE_SCAN_CHARS: usize = 120_000;
+/// 激进模式：筛选后发送上限。
+const ANALYSIS_AGGRESSIVE_MAX_CHARS: usize = 6_000;
 /// 并发分析上限（防狂点）。
 const MAX_CONCURRENT_ANALYSES: usize = 2;
 /// 单次分析整体超时（含流式读取）。
-const ANALYSIS_TIMEOUT_SECS: u64 = 180;
+const ANALYSIS_TIMEOUT_SECS: u64 = 120;
+/// 首字节超时（连接已建立但模型不吐字）。
+const ANALYSIS_FIRST_BYTE_TIMEOUT_SECS: u64 = 30;
+/// 诊断任务用低温度，输出稳定、克制。
+const ANALYSIS_TEMPERATURE: f32 = 0.2;
 
-const ANALYSIS_SYSTEM_PROMPT: &str = "你是 Minecraft 启动器（RMCCC）的日志分析助手。\
-用户提供一次游戏运行的日志片段（已脱敏）。请：\
-1) 指出最可能导致故障的原因，引用日志中的关键行；\
-2) 给出 2-3 条可执行的排查或修复建议；\
-3) 如果日志不足以判断，说明还需要什么信息。\
-用简体中文回答，简洁分点，不要编造日志中不存在的内容。";
+/// 日志提交模式（用户可在「设置 · AI」切换）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum LogMode {
+    /// 完整日志尾部。
+    Standard,
+    /// 仅 ERROR / WARNING（含 FATAL）行，最大程度省 token。
+    Aggressive,
+}
+
+impl LogMode {
+    fn parse(value: Option<&str>) -> Self {
+        match value {
+            Some("aggressive") => LogMode::Aggressive,
+            _ => LogMode::Standard,
+        }
+    }
+}
+
+/// 输出详细程度（用户可在「设置 · AI」切换）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Detail {
+    Brief,
+    Balanced,
+    Detailed,
+}
+
+impl Detail {
+    fn parse(value: Option<&str>) -> Self {
+        match value {
+            Some("brief") => Detail::Brief,
+            Some("detailed") => Detail::Detailed,
+            _ => Detail::Balanced,
+        }
+    }
+
+    fn max_tokens(self) -> u32 {
+        match self {
+            Detail::Brief => 500,
+            Detail::Balanced => 1_000,
+            Detail::Detailed => 1_800,
+        }
+    }
+}
+
+// ── 系统提示（按语言 × 详细程度）──
+//
+// 统一约束：只依据日志、禁止编造、禁止复述；固定三段（结论/关键行/建议）。
+
+const SYSTEM_PROMPT_ZH_BRIEF: &str = "你是 Minecraft 启动器的日志诊断助手。只依据用户提供的脱敏日志作答，禁止编造或推测日志中不存在的内容，禁止复述日志原文。用简体中文，总字数不超过 200 字，严格输出三段，不加前言、结语或额外标题：\n结论：一句话指出根因；日志不足时写“日志不足”并说明还缺什么。\n关键行：最多 2 条，每条引用日志片段（不超过 20 字）。\n建议：最多 2 条可执行步骤，每条一句话。";
+
+const SYSTEM_PROMPT_ZH_BALANCED: &str = "你是 Minecraft 启动器的日志诊断助手。只依据用户提供的脱敏日志作答，禁止编造或推测日志中不存在的内容，禁止复述日志原文。用简体中文，总字数 300–400 字，严格输出三段，不加前言、结语或额外标题：\n结论：2 句以内指出根因；日志不足时写“日志不足”并说明还缺什么。\n关键行：最多 3 条，每条引用日志片段（不超过 20 字）。\n建议：最多 3 条可执行修复步骤，每条一句话；涉及配置或命令时给出具体项。";
+
+const SYSTEM_PROMPT_ZH_DETAILED: &str = "你是 Minecraft 启动器的日志诊断助手。只依据用户提供的脱敏日志作答，禁止编造或推测日志中不存在的内容，禁止复述日志原文。用简体中文，总字数 600–800 字，严格输出三段，不加前言、结语或额外标题：\n结论：说明根因与触发条件。\n关键行：最多 5 条，每条引用日志片段（不超过 20 字）。\n建议：按优先级给出尽量具体的修复步骤（版本、加载器、配置文件、命令）；缺少信息时明确说明如何获取。";
+
+const SYSTEM_PROMPT_EN_BRIEF: &str = "You are the log-diagnostics assistant of a Minecraft launcher. Answer using ONLY the redacted log the user provides. Never invent or infer facts absent from the log, and never restate the log verbatim. Reply in English, at most 200 words, in exactly these three sections, with no preamble or closing:\nConclusion: one sentence naming the root cause; if the log is insufficient, write \"insufficient log\" and say what is missing.\nKey lines: at most 2, each quoting a short log fragment (<=20 chars).\nFix: at most 2 actionable steps, one sentence each.";
+
+const SYSTEM_PROMPT_EN_BALANCED: &str = "You are the log-diagnostics assistant of a Minecraft launcher. Answer using ONLY the redacted log the user provides. Never invent or infer facts absent from the log, and never restate the log verbatim. Reply in English, 300-400 words, in exactly these three sections, with no preamble or closing:\nConclusion: up to 2 sentences naming the root cause; if insufficient, say so and what is missing.\nKey lines: at most 3, each quoting a short log fragment (<=20 chars).\nFix: at most 3 actionable steps, one sentence each; name concrete config keys or commands when relevant.";
+
+const SYSTEM_PROMPT_EN_DETAILED: &str = "You are the log-diagnostics assistant of a Minecraft launcher. Answer using ONLY the redacted log the user provides. Never invent or infer facts absent from the log, and never restate the log verbatim. Reply in English, 600-800 words, in exactly these three sections, with no preamble or closing:\nConclusion: explain the root cause and trigger conditions.\nKey lines: at most 5, each quoting a short log fragment (<=20 chars).\nFix: prioritized, concrete steps (versions, loader, config files, commands); when information is missing, state how to obtain it.";
+
+fn system_prompt(language: &str, detail: Detail) -> &'static str {
+    if language == "en" {
+        match detail {
+            Detail::Brief => SYSTEM_PROMPT_EN_BRIEF,
+            Detail::Balanced => SYSTEM_PROMPT_EN_BALANCED,
+            Detail::Detailed => SYSTEM_PROMPT_EN_DETAILED,
+        }
+    } else {
+        match detail {
+            Detail::Brief => SYSTEM_PROMPT_ZH_BRIEF,
+            Detail::Balanced => SYSTEM_PROMPT_ZH_BALANCED,
+            Detail::Detailed => SYSTEM_PROMPT_ZH_DETAILED,
+        }
+    }
+}
 
 /// AI 配置的公开视图：永远不含 api_key 本体。
 #[derive(Debug, Clone, Serialize, TS)]
@@ -62,8 +150,14 @@ pub struct AiConfigView {
 #[ts(export_to = "types.ts")]
 pub struct AiAnalysisHandle {
     pub analysis_id: String,
-    /// 本次发送给模型的脱敏日志行数。
+    /// 本次分析绑定的运行 id（前端据此隔离结果）。
+    pub run_id: Option<String>,
+    /// 本次实际发送给模型的脱敏日志行数。
     pub sent_lines: usize,
+    /// 被筛选省略的行数（激进模式；标准模式为 0）。
+    pub omitted_lines: usize,
+    /// 日志来源：`captured` / `disk-fresh` / `disk-unbound`。
+    pub source: String,
 }
 
 async fn credential_store(state: &AppState) -> rmccc_error::Result<FileCredentialStore> {
@@ -195,177 +289,261 @@ pub async fn ai_models_probe(
 
 // ── 日志一键分析（S2 内置参考消费方）──
 
-/// 收集一次分析的输入：run_dir/logs/latest.log 尾部（脱敏）+ 实例上下文行。
-async fn gather_analysis_input(
-    state: &AppState,
-    instance_key: Option<&str>,
-) -> rmccc_error::Result<(String, String, usize)> {
-    let core = state.core.read().await;
-    let (log_path, context) = match instance_key {
-        Some(key) => {
-            let detail = {
-                let mut service = core
-                    .instances
-                    .lock()
-                    .map_err(|_| RmcccError::Other("Instance service lock poisoned".to_string()))?;
-                service.get(key)?
-            };
-            let loader = detail
-                .summary
-                .loader
-                .as_ref()
-                .map(|loader| loader.kind.clone())
-                .unwrap_or_else(|| "无".into());
-            (
-                detail.paths.logs_dir.join("latest.log"),
-                format!(
-                    "实例「{}」：Minecraft {}，加载器 {}",
-                    detail.summary.display_name, detail.summary.game_version, loader
-                ),
-            )
-        }
-        None => (
-            core.config
-                .resolved_game_root()
-                .join("logs")
-                .join("latest.log"),
-            "共享游戏目录（未指定实例）".into(),
-        ),
-    };
-    let log_path = log_path.clone();
-    let captured_key = instance_key.map(str::to_string);
-    drop(core);
-
-    // Perf audit 1.3: read only a tail window off-thread — the full
-    // latest.log (tens of MB after a crash) was previously buffered whole on
-    // the async worker just to slice `ANALYSIS_LOG_MAX_CHARS` from the end.
-    let read_tail = {
-        let log_path = log_path.clone();
-        tokio::task::spawn_blocking(move || -> std::io::Result<Option<String>> {
-            use std::io::{Read, Seek, SeekFrom};
-            let Ok(mut file) = std::fs::File::open(&log_path) else {
-                return Ok(None);
-            };
-            let len = file.metadata()?.len();
-            // Over-read ×3 to cover multi-byte UTF-8; exact truncation to
-            // ANALYSIS_LOG_MAX_CHARS happens below on the string.
-            let want = (ANALYSIS_LOG_MAX_CHARS as u64).saturating_mul(3).min(len);
-            if want > 0 {
-                file.seek(SeekFrom::End(-(want as i64)))?;
-            }
-            let mut buf = Vec::with_capacity(want as usize);
-            file.read_to_end(&mut buf)?;
-            Ok(Some(String::from_utf8_lossy(&buf).into_owned()))
-        })
-        .await
-        .map_err(|e| RmcccError::Other(format!("log tail read join error: {e}")))?
-    };
-    let (raw, source) = match read_tail {
-        Ok(Some(text)) if !text.trim().is_empty() => (text, "游戏日志 latest.log"),
-        Err(error) => {
-            return Err(RmcccError::Io(error));
-        }
-        // latest.log 未生成（log4j 初始化前崩溃，如 BootstrapLauncher 阶段的
-        // ExceptionInInitializerError）或为空 → 回退启动器捕获的进程输出。
-        _ => {
-            let captured = captured_key
-                .as_ref()
-                .and_then(|key| state.game_output.get(key))
-                .map(|buf| {
-                    buf.lock()
-                        .unwrap_or_else(|poisoned| poisoned.into_inner())
-                        .join("\n")
-                });
-            match captured {
-                Some(text) if !text.trim().is_empty() => {
-                    (text, "启动器捕获的进程输出（latest.log 未生成或为空）")
-                }
-                _ => {
-                    return Err(RmcccError::Validation(format!(
-                        "未找到游戏日志（{}），也没有捕获到进程输出：先启动一次游戏再分析",
-                        log_path.display()
-                    )));
-                }
-            }
-        }
-    };
-    // 尾部截取（崩溃信息几乎总在末尾），再脱敏（home → ~、凭据遮蔽）。
-    let tail = tail_chars(&raw, ANALYSIS_LOG_MAX_CHARS);
-    let sent_lines = tail.lines().count();
-    let redacted = redact::redact_text(tail, redact::user_home().as_deref());
-    let context = format!("{context}；日志来源：{source}");
-    Ok((redacted, context, sent_lines))
+/// 一次分析的输入（已脱敏、已按提交模式筛选）。
+struct AnalysisInput {
+    log_text: String,
+    context: String,
+    sent_lines: usize,
+    omitted_lines: usize,
+    source: &'static str,
 }
 
-fn tail_chars(text: &str, max_chars: usize) -> &str {
-    let total = text.chars().count();
-    if total <= max_chars {
-        return text;
+/// 从原始日志中按提交模式选取要发送的文本。
+fn select_log_text(raw: &str, mode: LogMode) -> (String, usize) {
+    match mode {
+        LogMode::Standard => (
+            game_log::tail_chars(raw, ANALYSIS_STANDARD_WINDOW_CHARS).to_string(),
+            0,
+        ),
+        LogMode::Aggressive => {
+            let total = raw.lines().count();
+            let kept: Vec<&str> = raw
+                .lines()
+                .filter(|line| {
+                    line.contains("ERROR") || line.contains("WARN") || line.contains("FATAL")
+                })
+                .collect();
+            let omitted = total.saturating_sub(kept.len());
+            let joined = kept.join("\n");
+            let text = game_log::tail_chars(&joined, ANALYSIS_AGGRESSIVE_MAX_CHARS).to_string();
+            (text, omitted)
+        }
     }
-    let start = text
-        .char_indices()
-        .nth(total - max_chars)
-        .map(|(index, _)| index)
-        .unwrap_or(0);
-    text[start..].trim_start_matches('\n')
+}
+
+/// 实例上下文（名称 / 版本 / 加载器）。
+async fn instance_context(state: &AppState, key: &str) -> Option<(String, String, String)> {
+    let core = state.core.read().await;
+    let mut service = core.instances.lock().ok()?;
+    let detail = service.get(key).ok()?;
+    let loader = detail
+        .summary
+        .loader
+        .as_ref()
+        .map(|loader| loader.kind.clone())
+        .unwrap_or_else(|| "vanilla".to_string());
+    Some((
+        detail.summary.display_name.clone(),
+        detail.summary.game_version.clone(),
+        loader,
+    ))
+}
+
+/// 上下文一行（本地化）+ 退出码/来源说明。
+fn build_context(
+    language: &str,
+    instance: Option<(String, String, String)>,
+    source: LogSourceKind,
+    exit_code: Option<i32>,
+    exit_type: Option<&str>,
+) -> String {
+    let zh = language != "en";
+    let mut context = match (&instance, zh) {
+        (Some((name, version, loader)), true) => {
+            format!("实例「{name}」：Minecraft {version}，加载器 {loader}")
+        }
+        (Some((name, version, loader)), false) => {
+            format!("Instance \"{name}\": Minecraft {version}, loader {loader}")
+        }
+        (None, true) => "共享游戏目录（未指定实例）".to_string(),
+        (None, false) => "Shared game directory (no instance)".to_string(),
+    };
+    if let Some(code) = exit_code {
+        if zh {
+            context.push_str(&format!("；退出码 {code}"));
+            if let Some(kind) = exit_type {
+                context.push_str(&format!("（{kind}）"));
+            }
+        } else {
+            context.push_str(&format!("; exit code {code}"));
+            if let Some(kind) = exit_type {
+                context.push_str(&format!(" ({kind})"));
+            }
+        }
+    }
+    let source_label = match (source, zh) {
+        (LogSourceKind::Captured, true) => "启动器捕获的本轮输出",
+        (LogSourceKind::DiskFresh, true) => "本轮 latest.log",
+        (LogSourceKind::DiskUnbound, true) => "磁盘 latest.log（未绑定运行）",
+        (LogSourceKind::Captured, false) => "launcher-captured output (this run)",
+        (LogSourceKind::DiskFresh, false) => "latest.log (this run)",
+        (LogSourceKind::DiskUnbound, false) => "latest.log (run unbound)",
+    };
+    if zh {
+        context.push_str(&format!("；日志来源：{source_label}"));
+    } else {
+        context.push_str(&format!("; log source: {source_label}"));
+    }
+    context
+}
+
+async fn gather_analysis_input(
+    state: &AppState,
+    key: Option<&str>,
+    mode: LogMode,
+    language: &str,
+    exit_code: Option<i32>,
+    exit_type: Option<&str>,
+) -> rmccc_error::Result<AnalysisInput> {
+    let window = match mode {
+        LogMode::Standard => ANALYSIS_STANDARD_WINDOW_CHARS,
+        LogMode::Aggressive => ANALYSIS_AGGRESSIVE_SCAN_CHARS,
+    };
+    let resolved = game_log::resolve_fresh_log(state, key, window).await?;
+    let (selected, omitted_lines) = select_log_text(&resolved.text, mode);
+    if selected.trim().is_empty() {
+        return Err(RmcccError::Validation(if mode == LogMode::Aggressive {
+            "日志中没有 ERROR / WARNING 记录；可切换到“标准”模式提交完整日志".into()
+        } else {
+            "本次运行尚未产生可分析的日志内容".into()
+        }));
+    }
+    // 脱敏（home → ~、凭据遮蔽）在发送前执行。
+    let log_text = redact::redact_text(&selected, redact::user_home().as_deref());
+    let sent_lines = log_text.lines().count();
+    let instance = match key {
+        Some(key) => instance_context(state, key).await,
+        None => None,
+    };
+    let context = build_context(language, instance, resolved.kind, exit_code, exit_type);
+    Ok(AnalysisInput {
+        log_text,
+        context,
+        sent_lines,
+        omitted_lines,
+        source: resolved.kind.as_str(),
+    })
+}
+
+fn build_user_message(language: &str, input: &AnalysisInput, mode: LogMode) -> String {
+    let zh = language != "en";
+    let mode_line = match (mode, zh) {
+        (LogMode::Standard, true) => "提交模式：标准（完整日志尾部）".to_string(),
+        (LogMode::Aggressive, true) => {
+            format!(
+                "提交模式：激进（仅 ERROR/WARNING 行，已省略 {} 行）",
+                input.omitted_lines
+            )
+        }
+        (LogMode::Standard, false) => "Mode: standard (full log tail)".to_string(),
+        (LogMode::Aggressive, false) => format!(
+            "Mode: aggressive (ERROR/WARNING lines only; {} lines omitted)",
+            input.omitted_lines
+        ),
+    };
+    let divider = if zh {
+        "----- 日志（脱敏）-----"
+    } else {
+        "----- Log (redacted) -----"
+    };
+    format!(
+        "{}\n{}\n{}\n{}",
+        input.context, mode_line, divider, input.log_text
+    )
 }
 
 #[tauri::command]
+#[allow(clippy::too_many_arguments)]
 #[tracing::instrument(skip(state))]
 pub async fn ai_analyze_log(
     state: tauri::State<'_, AppState>,
     key: Option<String>,
+    run_id: Option<String>,
+    detail: Option<String>,
+    log_mode: Option<String>,
+    language: Option<String>,
+    exit_code: Option<i32>,
+    exit_type: Option<String>,
 ) -> Result<AiAnalysisHandle, IpcError> {
     let credential = load_credential(&state).await?;
-    let (log_text, context, sent_lines) = gather_analysis_input(&state, key.as_deref()).await?;
+    let language = if language.as_deref() == Some("en") {
+        "en"
+    } else {
+        "zh-CN"
+    };
+    let mode = LogMode::parse(log_mode.as_deref());
+    let detail = Detail::parse(detail.as_deref());
+    let input = gather_analysis_input(
+        &state,
+        key.as_deref(),
+        mode,
+        language,
+        exit_code,
+        exit_type.as_deref(),
+    )
+    .await?;
 
     let analysis_id = uuid::Uuid::new_v4().simple().to_string();
     let cancel = CancelToken::new();
     {
-        let mut cancels = state
-            .ai_cancels
+        let mut analyses = state
+            .ai_analyses
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
-        if cancels.len() >= MAX_CONCURRENT_ANALYSES {
+        if analyses.len() >= MAX_CONCURRENT_ANALYSES {
             return Err(IpcError {
                 code: ErrorCode::AlreadyRunning,
                 message: "too many concurrent AI analyses".into(),
                 retryable: false,
             });
         }
-        cancels.insert(analysis_id.clone(), cancel.clone());
+        analyses.insert(
+            analysis_id.clone(),
+            AnalysisRecord {
+                cancel: cancel.clone(),
+                profile_id: key.clone(),
+            },
+        );
     }
 
+    let system = system_prompt(language, detail);
+    let user = build_user_message(language, &input, mode);
+    let handle = AiAnalysisHandle {
+        analysis_id: analysis_id.clone(),
+        run_id: run_id.clone(),
+        sent_lines: input.sent_lines,
+        omitted_lines: input.omitted_lines,
+        source: input.source.to_string(),
+    };
+
     let app = state.app_handle.clone();
-    let cancels = state.ai_cancels.clone();
-    let task_analysis_id = analysis_id.clone();
+    let analyses = state.ai_analyses.clone();
     tauri::async_runtime::spawn(async move {
         run_analysis(
             app,
-            cancels,
-            task_analysis_id,
+            analyses,
+            analysis_id,
             credential,
-            context,
-            log_text,
+            system,
+            user,
+            detail.max_tokens(),
             cancel,
         )
         .await;
     });
 
-    Ok(AiAnalysisHandle {
-        analysis_id,
-        sent_lines,
-    })
+    Ok(handle)
 }
 
 #[allow(clippy::too_many_arguments)]
 async fn run_analysis(
     app: tauri::AppHandle,
-    cancels: Arc<std::sync::Mutex<HashMap<String, CancelToken>>>,
+    analyses: Arc<std::sync::Mutex<HashMap<String, AnalysisRecord>>>,
     analysis_id: String,
     credential: ServiceCredential,
-    context: String,
-    log_text: String,
+    system: &'static str,
+    user: String,
+    max_tokens: u32,
     cancel: CancelToken,
 ) {
     use tauri::Emitter;
@@ -374,29 +552,32 @@ async fn run_analysis(
         &credential,
         LlmOptions {
             timeout: Duration::from_secs(ANALYSIS_TIMEOUT_SECS),
+            first_byte_timeout: Duration::from_secs(ANALYSIS_FIRST_BYTE_TIMEOUT_SECS),
             ..Default::default()
         },
     ) {
         Ok(provider) => provider,
         Err(error) => {
             emit_ai_error(&app, &analysis_id, &error.to_string());
-            remove_cancel(&cancels, &analysis_id);
+            remove_analysis(&analyses, &analysis_id);
             return;
         }
     };
-    let request = ChatRequest::new(vec![
-        ChatMessage::system(ANALYSIS_SYSTEM_PROMPT),
-        ChatMessage::user(format!("{context}\n\n----- 日志（脱敏）-----\n{log_text}")),
-    ]);
+    let mut request = ChatRequest::new(vec![ChatMessage::system(system), ChatMessage::user(user)]);
+    request.temperature = Some(ANALYSIS_TEMPERATURE);
+    request.max_tokens = Some(max_tokens);
+
     let mut stream = match provider.stream_chat(request, cancel) {
         Ok(stream) => stream,
         Err(error) => {
             emit_ai_error(&app, &analysis_id, &error.to_string());
-            remove_cancel(&cancels, &analysis_id);
+            remove_analysis(&analyses, &analysis_id);
             return;
         }
     };
 
+    // 终止保证：三条终止事件分支都会向 UI 回报，绝不静默结束。
+    let mut terminated = false;
     while let Some(event) = stream.recv().await {
         match event {
             LlmEvent::Delta(text) => {
@@ -410,21 +591,39 @@ async fn run_analysis(
             }
             LlmEvent::Usage { .. } => {}
             LlmEvent::Done { .. } => {
-                let _ = app.emit(
-                    crate::events::AI_DONE,
-                    &crate::events::AiDonePayload {
-                        analysis_id: analysis_id.clone(),
-                    },
-                );
+                emit_ai_done(&app, &analysis_id, "complete");
+                terminated = true;
+                break;
+            }
+            LlmEvent::Cancelled => {
+                emit_ai_done(&app, &analysis_id, "cancelled");
+                terminated = true;
                 break;
             }
             LlmEvent::Error(error) => {
                 emit_ai_error(&app, &analysis_id, &error.to_string());
+                terminated = true;
                 break;
             }
         }
     }
-    remove_cancel(&cancels, &analysis_id);
+    if !terminated {
+        // 流在没有任何终止事件的情况下关闭（理论不应发生）：兜底报错，
+        // 保证前端不会停在"分析中"。
+        emit_ai_error(&app, &analysis_id, "AI 流意外结束，请重试");
+    }
+    remove_analysis(&analyses, &analysis_id);
+}
+
+fn emit_ai_done(app: &tauri::AppHandle, analysis_id: &str, reason: &str) {
+    use tauri::Emitter;
+    let _ = app.emit(
+        crate::events::AI_DONE,
+        &crate::events::AiDonePayload {
+            analysis_id: analysis_id.to_string(),
+            reason: reason.to_string(),
+        },
+    );
 }
 
 fn emit_ai_error(app: &tauri::AppHandle, analysis_id: &str, message: &str) {
@@ -438,11 +637,34 @@ fn emit_ai_error(app: &tauri::AppHandle, analysis_id: &str, message: &str) {
     );
 }
 
-fn remove_cancel(cancels: &Arc<std::sync::Mutex<HashMap<String, CancelToken>>>, analysis_id: &str) {
-    let mut cancels = cancels
+fn remove_analysis(
+    analyses: &Arc<std::sync::Mutex<HashMap<String, AnalysisRecord>>>,
+    analysis_id: &str,
+) {
+    let mut analyses = analyses
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
-    cancels.remove(analysis_id);
+    analyses.remove(analysis_id);
+}
+
+/// 取消某实例名下所有在途分析（新运行开始时调用，旧运行的分析即失效）。
+pub(crate) fn cancel_analyses_for(
+    analyses: &Arc<std::sync::Mutex<HashMap<String, AnalysisRecord>>>,
+    profile_id: &str,
+) {
+    let mut analyses = analyses
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let ids: Vec<String> = analyses
+        .iter()
+        .filter(|(_, record)| record.profile_id.as_deref() == Some(profile_id))
+        .map(|(id, _)| id.clone())
+        .collect();
+    for id in ids {
+        if let Some(record) = analyses.remove(&id) {
+            record.cancel.cancel();
+        }
+    }
 }
 
 #[tauri::command]
@@ -451,12 +673,12 @@ pub async fn ai_analyze_cancel(
     state: tauri::State<'_, AppState>,
     analysis_id: String,
 ) -> Result<bool, IpcError> {
-    let mut cancels = state
-        .ai_cancels
+    let mut analyses = state
+        .ai_analyses
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
-    Ok(cancels.remove(&analysis_id).is_some_and(|token| {
-        token.cancel();
+    Ok(analyses.remove(&analysis_id).is_some_and(|record| {
+        record.cancel.cancel();
         true
     }))
 }
@@ -464,17 +686,6 @@ pub async fn ai_analyze_cancel(
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn tail_chars_keeps_the_tail_and_cuts_on_char_boundary() {
-        let text = "abcdefghij";
-        assert_eq!(tail_chars(text, 20), text);
-        let tail = tail_chars(text, 4);
-        assert_eq!(tail, "ghij");
-        // 多字节字符不被截半。
-        let cjk = "一二三四五";
-        assert_eq!(tail_chars(cjk, 2), "四五");
-    }
 
     fn stored_credential() -> ServiceCredential {
         ServiceCredential {
@@ -521,5 +732,34 @@ mod tests {
         let error = merge_credential(None, None, None, None)
             .expect_err("empty merge without a stored credential must fail");
         assert!(matches!(error, RmcccError::Validation(_)));
+    }
+
+    #[test]
+    fn aggressive_mode_keeps_only_error_and_warning_lines() {
+        let raw = "[INFO] loading\n[WARN] bad config\n[INFO] fine\n[ERROR] crash\n[FATAL] dead";
+        let (text, omitted) = select_log_text(raw, LogMode::Aggressive);
+        assert!(text.contains("[WARN] bad config"));
+        assert!(text.contains("[ERROR] crash"));
+        assert!(text.contains("[FATAL] dead"));
+        assert!(!text.contains("[INFO] loading"));
+        assert_eq!(omitted, 2);
+    }
+
+    #[test]
+    fn standard_mode_keeps_the_full_tail() {
+        let raw = "[INFO] loading\n[WARN] bad config\n[ERROR] crash";
+        let (text, omitted) = select_log_text(raw, LogMode::Standard);
+        assert_eq!(text, raw);
+        assert_eq!(omitted, 0);
+    }
+
+    #[test]
+    fn modes_and_details_parse_with_defaults() {
+        assert_eq!(LogMode::parse(Some("aggressive")), LogMode::Aggressive);
+        assert_eq!(LogMode::parse(None), LogMode::Standard);
+        assert_eq!(Detail::parse(Some("brief")), Detail::Brief);
+        assert_eq!(Detail::parse(Some("detailed")), Detail::Detailed);
+        assert_eq!(Detail::parse(Some("x")), Detail::Balanced);
+        assert!(Detail::Detailed.max_tokens() > Detail::Brief.max_tokens());
     }
 }

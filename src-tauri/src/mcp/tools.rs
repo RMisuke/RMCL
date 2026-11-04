@@ -747,66 +747,28 @@ async fn game_logs(app: &tauri::AppHandle, args: &Value) -> Result<Value, ToolEr
     use rmccc_llm::redact;
     let state = state(app);
     let lines = arg_u64(args, "lines").unwrap_or(200).min(1000) as usize;
-    let path = match arg_opt_str(args, "key") {
-        Some(key) => {
-            let core = state.core.read().await;
-            let mut service = core
-                .instances
-                .lock()
-                .map_err(|_| "instance service lock poisoned".to_string())?;
-            let detail = service.get(&key)?;
-            detail.paths.logs_dir.join("latest.log")
-        }
-        None => {
-            let core = state.core.read().await;
-            core.config
-                .resolved_game_root()
-                .join("logs")
-                .join("latest.log")
-        }
-    };
-    let (raw, source) = match std::fs::read_to_string(&path) {
-        Ok(text) if !text.trim().is_empty() => (text, "latest.log"),
-        Err(error) if error.kind() != std::io::ErrorKind::NotFound => {
-            return Err(
-                format!("cannot read game log ({}): {e}", path.display(), e = error).into(),
-            );
-        }
-        // latest.log 未生成（log4j 初始化前崩溃）或为空 → 启动器捕获的输出。
-        _ => {
-            let captured = arg_opt_str(args, "key")
-                .and_then(|id| state.game_output.get(&id))
-                .map(|buf| {
-                    buf.lock()
-                        .unwrap_or_else(|poisoned| poisoned.into_inner())
-                        .join("\n")
-                });
-            match captured {
-                Some(text) if !text.trim().is_empty() => (
-                    text,
-                    "launcher-captured output (latest.log missing or empty)",
-                ),
-                _ => {
-                    return Err(format!(
-                        "cannot read game log ({}): latest.log missing and no captured output",
-                        path.display()
-                    )
-                    .into());
-                }
-            }
-        }
-    };
-    let selected: Vec<&str> = {
-        let all: Vec<&str> = raw.lines().collect();
-        let start = all.len().saturating_sub(lines);
-        all[start..].to_vec()
-    };
-    let truncated = raw.lines().count() > selected.len();
+    // 与 UI 分析共用新鲜日志解析器：captured 优先、磁盘 mtime 校验，
+    // 不再整读 latest.log，也不会把上一轮日志当成这一轮。
+    let resolved = crate::game_log::resolve_fresh_log(
+        state.inner(),
+        arg_opt_str(args, "key").as_deref(),
+        200_000,
+    )
+    .await
+    .map_err(|error| error.message())?;
+    let all: Vec<&str> = resolved.text.lines().collect();
+    let start = all.len().saturating_sub(lines);
+    let selected = &all[start..];
+    let truncated = resolved.total_lines > selected.len();
     let text = redact::redact_text(&selected.join("\n"), redact::user_home().as_deref());
+    let path = resolved
+        .path
+        .as_ref()
+        .map(|path| redact::redact_text(&path.to_string_lossy(), redact::user_home().as_deref()));
     Ok(json!({
-        "path": redact::redact_text(&path.to_string_lossy(), redact::user_home().as_deref()),
-        "source": source,
-        "total_lines": raw.lines().count(),
+        "path": path,
+        "source": resolved.kind.as_str(),
+        "total_lines": resolved.total_lines,
         "returned_lines": selected.len(),
         "truncated": truncated,
         "log": text,

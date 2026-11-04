@@ -54,11 +54,34 @@ export function initStores(): void {
   );
 
   // ── Cross-domain reactions ──
-  void listen<{ key?: string; profile_id?: string; exit_code: number }>(EVENTS.LAUNCH_EXITED, (event) => {
+  void listen<{
+    key?: string;
+    profile_id?: string;
+    run_id?: string;
+    exit_code: number;
+    exit_type?: string;
+  }>(EVENTS.LAUNCH_EXITED, (event) => {
+    const profileId = event.payload.key ?? event.payload.profile_id ?? "";
     // User-initiated stops (P1-7) are not crashes — don't pop the log drawer.
-    if (event.payload.exit_code !== 0 && !launchStore.consumeUserKill(event.payload.key ?? event.payload.profile_id ?? "")) {
+    if (event.payload.exit_code !== 0 && !launchStore.consumeUserKill(profileId)) {
       // Abnormal exit: open the log drawer with the crash highlighted (10 §4).
-      uiStore.openLogDrawer(event.payload.key ?? event.payload.profile_id ?? "");
+      uiStore.openLogDrawer(profileId);
+      // 崩溃自动分析（设置 · AI，默认关）：仅在已批准外发且已配置时发起。
+      if (
+        aiStore.autoAnalyzeOnCrash() &&
+        aiStore.config()?.configured &&
+        aiStore.egressApproved()
+      ) {
+        void aiStore
+          .analyzeLog(
+            profileId,
+            event.payload.run_id ?? launchStore.currentRunId(profileId),
+            { exitCode: event.payload.exit_code, exitType: event.payload.exit_type ?? "Abnormal" }
+          )
+          .then((res) => {
+            if (!res.ok && res.message) toast({ message: res.message, tone: "error" });
+          });
+      }
     }
     // The backend persists this session's play time while handling the exit;
     // refresh shortly after so the account/launch docks pick it up without a

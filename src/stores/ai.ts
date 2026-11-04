@@ -7,14 +7,25 @@ import { ai } from "../ipc/api";
 import type { AiConfigView } from "../ipc/types";
 import { EVENTS } from "../ipc/events";
 import { listen } from "@tauri-apps/api/event";
+import { locale } from "../i18n";
+
+/** 输出详细程度（与设置页一致）。 */
+export type AnalysisDetail = "brief" | "balanced" | "detailed";
+/** 日志提交模式：标准=完整日志；激进=仅 ERROR/WARNING。 */
+export type LogMode = "standard" | "aggressive";
 
 export interface AnalysisState {
   analysisId: string;
   profileId: string | null;
+  /** 绑定的运行 id：UI 只展示属于当前 run 的分析。 */
+  runId: string | null;
   text: string;
-  state: "running" | "done" | "error";
+  state: "running" | "done" | "error" | "cancelled";
   error?: string;
   sentLines: number;
+  omittedLines: number;
+  /** 日志来源：captured / disk-fresh / disk-unbound。 */
+  source: string;
   startedAt: number;
 }
 
@@ -28,6 +39,51 @@ export const aiStore = createRoot(() => {
   const [egressApproved, setEgressApproved] = createSignal(
     localStorage.getItem("rmccc.ui.ai.egressApproved") === "1"
   );
+
+  // ── 分析行为偏好（设置 · AI 选项卡；localStorage 持久化）──
+  const DETAIL_KEY = "rmccc.ai.detail";
+  const LOG_MODE_KEY = "rmccc.ai.logMode";
+  const AUTO_CRASH_KEY = "rmccc.ai.autoAnalyzeOnCrash";
+
+  function readDetail(): AnalysisDetail {
+    const raw = localStorage.getItem(DETAIL_KEY);
+    return raw === "brief" || raw === "detailed" ? raw : "balanced";
+  }
+  function readLogMode(): LogMode {
+    return localStorage.getItem(LOG_MODE_KEY) === "aggressive" ? "aggressive" : "standard";
+  }
+  function readAutoCrash(): boolean {
+    return localStorage.getItem(AUTO_CRASH_KEY) === "1";
+  }
+
+  const [analysisDetail, setAnalysisDetail_] = createSignal<AnalysisDetail>(readDetail());
+  const [logMode, setLogMode_] = createSignal<LogMode>(readLogMode());
+  const [autoAnalyzeOnCrash, setAutoAnalyzeOnCrash_] = createSignal(readAutoCrash());
+
+  function setAnalysisDetail(detail: AnalysisDetail): void {
+    setAnalysisDetail_(detail);
+    try {
+      localStorage.setItem(DETAIL_KEY, detail);
+    } catch {
+      /* 持久化失败仅影响下次默认值 */
+    }
+  }
+  function setLogMode(mode: LogMode): void {
+    setLogMode_(mode);
+    try {
+      localStorage.setItem(LOG_MODE_KEY, mode);
+    } catch {
+      /* 同上 */
+    }
+  }
+  function setAutoAnalyzeOnCrash(enabled: boolean): void {
+    setAutoAnalyzeOnCrash_(enabled);
+    try {
+      localStorage.setItem(AUTO_CRASH_KEY, enabled ? "1" : "0");
+    } catch {
+      /* 同上 */
+    }
+  }
 
   async function refreshConfig(): Promise<void> {
     const res = await ai.getConfig();
@@ -61,16 +117,31 @@ export const aiStore = createRoot(() => {
     setEgressApproved(true);
   }
 
-  /** Start streaming analysis of a profile's (or shared) latest game log. */
-  async function analyzeLog(profileId: string | null): Promise<{ ok: boolean; message?: string }> {
-    const res = await ai.analyzeLog(profileId ?? undefined);
+  /** Start streaming analysis of a profile's (or shared) current-run log. */
+  async function analyzeLog(
+    profileId: string | null,
+    runId: string | null,
+    exit?: { exitCode: number; exitType: string }
+  ): Promise<{ ok: boolean; message?: string }> {
+    const res = await ai.analyzeLog({
+      key: profileId ?? undefined,
+      runId: runId ?? undefined,
+      detail: analysisDetail(),
+      logMode: logMode(),
+      language: locale(),
+      exitCode: exit?.exitCode,
+      exitType: exit?.exitType,
+    });
     if (!res.ok) return { ok: false, message: res.error.message };
     setAnalysis({
       analysisId: res.data.analysisId,
       profileId,
+      runId: res.data.runId ?? runId,
       text: "",
       state: "running",
       sentLines: res.data.sentLines,
+      omittedLines: res.data.omittedLines,
+      source: res.data.source,
       startedAt: Date.now(),
     });
     return { ok: true };
@@ -79,8 +150,15 @@ export const aiStore = createRoot(() => {
   async function cancelAnalysis(): Promise<void> {
     const current = analysis();
     if (current && current.state === "running") {
+      // 乐观置态：立即脱离"分析中"；后端的 ai://done{cancelled} 幂等确认。
+      setAnalysis({ ...current, state: "cancelled" });
       await ai.cancelAnalysis(current.analysisId);
     }
+  }
+
+  /** 新运行开始 / 切换实例时清掉旧结果。 */
+  function resetAnalysis(): void {
+    setAnalysis(null);
   }
 
   function attachEvents(): void {
@@ -113,11 +191,14 @@ export const aiStore = createRoot(() => {
       deltaBuf += text;
       if (!deltaTimer) deltaTimer = setTimeout(flushDeltas, 150);
     });
-    void listen<{ analysisId: string }>(EVENTS.AI_DONE, (event) => {
+    void listen<{ analysisId: string; reason: string }>(EVENTS.AI_DONE, (event) => {
       flushDeltas();
       setAnalysis((current) =>
         current && current.analysisId === event.payload.analysisId
-          ? { ...current, state: "done" }
+          ? {
+              ...current,
+              state: event.payload.reason === "cancelled" ? "cancelled" : "done",
+            }
           : current
       );
     });
@@ -138,12 +219,19 @@ export const aiStore = createRoot(() => {
     probeError,
     analysis,
     egressApproved,
+    analysisDetail,
+    logMode,
+    autoAnalyzeOnCrash,
     approveEgress,
+    setAnalysisDetail,
+    setLogMode,
+    setAutoAnalyzeOnCrash,
     refreshConfig,
     probeModels,
     saveConfig,
     analyzeLog,
     cancelAnalysis,
+    resetAnalysis,
     attachEvents,
   };
 });

@@ -10,12 +10,20 @@
 //! - a [`rmccc_launch::ProcessListener`] forwarding game events to the frontend,
 //! - process group termination for `launch_kill`.
 
-use crate::state::AppState;
+use crate::state::{AppState, RunRecord};
 use rmccc_core::pipeline::{ProgressCb, ProgressMsg};
 use rmccc_error::IpcError;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use tauri::Emitter;
+
+/// 当前 unix 毫秒（运行记录与日志新鲜度判定用）。
+fn now_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_millis() as u64)
+        .unwrap_or(0)
+}
 
 /// 每实例保留的输出行上限（与进程内存缓冲同量级，崩溃分析只需尾部）。
 const GAME_OUTPUT_CAP: usize = 2000;
@@ -72,10 +80,13 @@ fn is_window_ready_log(line: &str) -> bool {
 struct TauriProcessListener {
     app_handle: tauri::AppHandle,
     key: String,
+    /// 本次运行的 id（写入 `LAUNCH_EXITED`，日志分析据此绑定运行）。
+    run_id: String,
     running_games: Arc<dashmap::DashMap<String, u32>>,
-    /// 每实例输出环形缓冲（AI 日志分析 / MCP game_logs 的 latest.log 回退源）。
+    /// 每实例输出环形缓冲（AI 日志分析 / MCP game_logs 的 captured 来源）。
     game_output: Arc<dashmap::DashMap<String, Arc<std::sync::Mutex<Vec<String>>>>>,
-    /// Lines buffered for the next `LAUNCH_OUTPUT` emit.
+    /// 运行记录（退出时标记 `exited`）。
+    runs: Arc<dashmap::DashMap<String, RunRecord>>,
     pending: std::sync::Mutex<Vec<String>>,
     /// Epoch for `last_flush_ms`.
     created: std::time::Instant,
@@ -143,6 +154,9 @@ impl rmccc_launch::ProcessListener for TauriProcessListener {
 
     fn on_exit(&self, exit_code: i32, exit_type: rmccc_launch::ExitType) {
         self.running_games.remove(&self.key);
+        if let Some(mut run) = self.runs.get_mut(&self.key) {
+            run.exited = true;
+        }
         // Emit whatever the coalescer still holds so the UI sees the final
         // lines before the exit banner.
         self.flush_pending();
@@ -151,6 +165,7 @@ impl rmccc_launch::ProcessListener for TauriProcessListener {
             serde_json::json!({
                 "key": self.key,
                 "profile_id": self.key,
+                "run_id": self.run_id,
                 "exit_code": exit_code,
                 "exit_type": format!("{:?}", exit_type),
             }),
@@ -190,11 +205,28 @@ pub async fn launch_start(state: tauri::State<'_, AppState>, key: String) -> Res
         });
     }
 
+    // 本轮运行 id：把日志与分析绑定到具体一次运行。
+    let run_id = uuid::Uuid::new_v4().simple().to_string();
+    let started_at_ms = now_ms();
+    // 新运行开始 → 上一轮运行的在途分析立即失效并取消。
+    crate::commands::ai::cancel_analyses_for(&state.ai_analyses, &key);
+    state.runs.insert(
+        key.clone(),
+        RunRecord {
+            run_id: run_id.clone(),
+            pid: 0,
+            started_at_ms,
+            exited: false,
+        },
+    );
+
     let listener: Arc<dyn rmccc_launch::ProcessListener> = Arc::new(TauriProcessListener {
         app_handle: state.app_handle.clone(),
         key: key.clone(),
+        run_id: run_id.clone(),
         running_games: state.running_games.clone(),
         game_output: state.game_output.clone(),
+        runs: state.runs.clone(),
         pending: std::sync::Mutex::new(Vec::new()),
         created: std::time::Instant::now(),
         last_flush_ms: AtomicU64::new(0),
@@ -329,6 +361,9 @@ pub async fn launch_start(state: tauri::State<'_, AppState>, key: String) -> Res
     };
 
     state.running_games.insert(key.clone(), pid);
+    if let Some(mut run) = state.runs.get_mut(&key) {
+        run.pid = pid;
+    }
     emit_launch_progress(
         &state.app_handle,
         &key,
@@ -339,7 +374,7 @@ pub async fn launch_start(state: tauri::State<'_, AppState>, key: String) -> Res
     );
     let _ = state.app_handle.emit(
         crate::events::LAUNCH_STARTED,
-        serde_json::json!({ "key": key, "profile_id": key, "pid": pid }),
+        serde_json::json!({ "key": key, "profile_id": key, "pid": pid, "run_id": run_id }),
     );
 
     Ok(())

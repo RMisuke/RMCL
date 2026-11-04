@@ -138,7 +138,7 @@ impl Default for ModelCapabilities {
     }
 }
 
-/// 流式事件。`Error` 之后 channel 关闭。
+/// 流式事件。`Done` / `Cancelled` / `Error` 都是**终止事件**，之后 channel 关闭。
 #[derive(Debug, Clone, PartialEq)]
 pub enum LlmEvent {
     Delta(String),
@@ -149,6 +149,11 @@ pub enum LlmEvent {
     Done {
         finish_reason: Option<String>,
     },
+    /// 请求被取消（用户主动中止，或新运行取代旧运行）。
+    ///
+    /// 这是一个显式终止事件：消费方必须据此结束并回报"已取消"。历史上取消
+    /// 只会让 channel 静默关闭，调用方便永远停在"进行中"（见 ADR-013 S2 重构）。
+    Cancelled,
     Error(LlmError),
 }
 
@@ -257,6 +262,9 @@ impl RetryPolicy {
 pub struct LlmOptions {
     /// 单次请求的总超时（含流式读取）。
     pub timeout: Duration,
+    /// 首个响应数据块的最长等待。连接已建立但服务端不吐数据时，用它快速失败，
+    /// 而不是等满整轮超时。
+    pub first_byte_timeout: Duration,
     pub retry: RetryPolicy,
     /// 两次请求之间的最小间隔（粗粒度限流，避免用户狂点/loop 失控）。
     pub min_request_interval: Duration,
@@ -267,6 +275,7 @@ impl Default for LlmOptions {
     fn default() -> Self {
         Self {
             timeout: Duration::from_secs(120),
+            first_byte_timeout: Duration::from_secs(30),
             retry: RetryPolicy::default(),
             min_request_interval: Duration::ZERO,
             capabilities: ModelCapabilities::default(),
@@ -363,6 +372,7 @@ impl LlmProvider for OpenAiCompatibleProvider {
         let api_key = self.api_key.clone();
         let body = self.request_body(&request);
         let timeout = self.options.timeout;
+        let first_byte_timeout = self.options.first_byte_timeout;
         let retry = self.options.retry;
         let limiter = self.rate_limiter.clone();
 
@@ -370,14 +380,24 @@ impl LlmProvider for OpenAiCompatibleProvider {
             let outcome = tokio::time::timeout(
                 timeout,
                 run_stream(
-                    &client, &endpoint, &api_key, body, retry, limiter, &cancel, &tx,
+                    &client,
+                    &endpoint,
+                    &api_key,
+                    body,
+                    retry,
+                    limiter,
+                    first_byte_timeout,
+                    &cancel,
+                    &tx,
                 ),
             )
             .await;
 
             let event = match outcome {
+                // 外层整轮超时。
                 Err(_) => Some(LlmEvent::Error(LlmError::Timeout)),
-                Ok(Err(LlmError::Cancelled)) => None,
+                // 取消是终止事件，必须显式通知消费方（而不是静默关闭 channel）。
+                Ok(Err(LlmError::Cancelled)) => Some(LlmEvent::Cancelled),
                 Ok(Err(error)) => Some(LlmEvent::Error(error)),
                 Ok(Ok(())) => None,
             };
@@ -464,6 +484,7 @@ async fn run_stream(
     body: Value,
     retry: RetryPolicy,
     limiter: Arc<RateLimiter>,
+    first_byte_timeout: Duration,
     cancel: &CancelToken,
     tx: &mpsc::Sender<LlmEvent>,
 ) -> Result<(), LlmError> {
@@ -524,7 +545,7 @@ async fn run_stream(
             return Err(error);
         }
 
-        stream_response(&mut response, cancel, tx).await?;
+        stream_response(&mut response, cancel, tx, first_byte_timeout).await?;
         return Ok(());
     }
 }
@@ -541,18 +562,30 @@ async fn stream_response(
     response: &mut reqwest::Response,
     cancel: &CancelToken,
     tx: &mpsc::Sender<LlmEvent>,
+    first_byte_timeout: Duration,
 ) -> Result<(), LlmError> {
     let mut parser = SseParser::default();
     let mut finish_reason: Option<String> = None;
+    let mut awaiting_first_byte = true;
 
     loop {
         if cancel.is_cancelled() {
             return Err(LlmError::Cancelled);
         }
-        let chunk = response
-            .chunk()
-            .await
-            .map_err(|e| LlmError::Http(e.to_string()))?;
+        // 首字节看门狗：连接建立后若迟迟没有任何数据，快速失败为 Timeout，
+        // 而不是让用户干等整轮超时。
+        let chunk = if awaiting_first_byte {
+            let first = tokio::time::timeout(first_byte_timeout, response.chunk())
+                .await
+                .map_err(|_| LlmError::Timeout)?;
+            awaiting_first_byte = false;
+            first.map_err(|e| LlmError::Http(e.to_string()))?
+        } else {
+            response
+                .chunk()
+                .await
+                .map_err(|e| LlmError::Http(e.to_string()))?
+        };
         let Some(bytes) = chunk else {
             break;
         };
@@ -650,6 +683,7 @@ pub async fn collect(mut stream: LlmStream) -> Result<ChatOutcome, LlmError> {
                 completion_tokens,
             } => usage = Some((prompt_tokens, completion_tokens)),
             LlmEvent::Done { finish_reason: r } => finish_reason = r,
+            LlmEvent::Cancelled => return Err(LlmError::Cancelled),
             LlmEvent::Error(error) => return Err(error),
         }
     }
@@ -934,11 +968,11 @@ mod tests {
             Some(LlmEvent::Delta("first".to_string()))
         );
         cancel.cancel();
-        // 之后的读取必须在下一 chunk 到达前观察到取消并结束。
+        // 取消必须产出一个显式终止事件（不是静默关闭）。
         let next = tokio::time::timeout(Duration::from_secs(2), stream.recv())
             .await
             .expect("cancel observed");
-        assert!(next.is_none() || matches!(next, Some(LlmEvent::Error(LlmError::Cancelled))));
+        assert_eq!(next, Some(LlmEvent::Cancelled));
     }
 
     #[tokio::test]

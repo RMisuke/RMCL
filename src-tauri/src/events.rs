@@ -64,6 +64,8 @@ pub struct AiDeltaPayload {
 #[ts(export_to = "types.ts")]
 pub struct AiDonePayload {
     pub analysis_id: String,
+    /// `complete` | `cancelled`。取消也是正常终止，前端据此切到"已取消"态。
+    pub reason: String,
 }
 
 #[derive(Debug, Clone, Serialize, ts_rs::TS)]

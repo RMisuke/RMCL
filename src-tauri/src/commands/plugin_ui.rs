@@ -818,6 +818,8 @@ async fn llm_chat(state: &AppState, plugin_id: &str, params: &Value) -> Result<V
                             ));
                         }
                         LlmEvent::Done { .. } => break,
+                        // 取消：插件侧按"正常结束"收尾（宿主已停止推送）。
+                        LlmEvent::Cancelled => break,
                         LlmEvent::Error(e) => {
                             push(rmccc_core::rmccc_plugin::ui::llm_error_message(
                                 &push_stream_id,
@@ -951,6 +953,7 @@ async fn collect_stream(
                 text.push_str(&delta);
             }
             LlmEvent::Done { .. } => break,
+            LlmEvent::Cancelled => return Err("请求已取消".into()),
             LlmEvent::Error(e) => return Err(e.to_string()),
             LlmEvent::Usage { .. } => {}
         }
