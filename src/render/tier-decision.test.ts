@@ -36,12 +36,20 @@ describe("decideTier", () => {
     expect(decideTier({ ...base, platform: "macos" })).toBe("acrylic");
   });
 
-  it("allows full glass on Windows with an ambient backdrop", () => {
-    expect(decideTier({ ...base, backdropKind: "ambient" })).toBe("full");
+  it("keeps integrated-GPU Windows on acrylic", () => {
+    expect(decideTier({ ...base, gpuTier: "standard" })).toBe("acrylic");
   });
 
-  it("allows full glass on Windows with a still-image backdrop", () => {
-    expect(decideTier({ ...base, backdropKind: "image" })).toBe("full");
+  it("allows full glass on a discrete-GPU Windows machine with an ambient backdrop", () => {
+    expect(decideTier({ ...base, gpuTier: "high", backdropKind: "ambient" })).toBe("full");
+  });
+
+  it("allows full glass on a discrete-GPU Windows machine with a still-image backdrop", () => {
+    expect(decideTier({ ...base, gpuTier: "high", backdropKind: "image" })).toBe("full");
+  });
+
+  it("never uses full glass on a discrete GPU over video", () => {
+    expect(decideTier({ ...base, gpuTier: "high", backdropKind: "video" })).toBe("acrylic");
   });
 
   it("falls back to acrylic for unknown platforms", () => {

@@ -25,18 +25,24 @@ import type { BackdropKind, GpuTier, PlatformKind, RenderTier } from "./tier-dec
 export { decideTier };
 export type { BackdropKind, GpuTier, PlatformKind, RenderTier, TierInputs } from "./tier-decision";
 
-const GPU_KEY = "rmccc.gpuTier.v1";
+const GPU_KEY = "rmccc.gpuTier.v2";
 
 function readCachedGpu(): GpuTier | null {
   try {
     const raw = localStorage.getItem(GPU_KEY);
-    return raw === "low" || raw === "standard" ? raw : null;
+    return raw === "low" || raw === "standard" || raw === "high" ? raw : null;
   } catch {
     return null;
   }
 }
 
-/** Conservative one-shot probe; failure always maps to `standard`. */
+/**
+ * Conservative one-shot probe; failure always maps to `standard`.
+ *
+ * `high` is reserved for discrete GPUs (NVIDIA/AMD/Intel Arc). Integrated GPUs
+ * stay `standard` so Windows does not default to 70 live `backdrop-filter`
+ * layers on a laptop iGPU that was never measured.
+ */
 function detectGpuTier(): GpuTier {
   if (typeof document === "undefined") return "standard";
   const cached = readCachedGpu();
@@ -56,6 +62,10 @@ function detectGpuTier(): GpuTier {
         : "";
       if (/swiftshader|llvmpipe|software|basic render/i.test(renderer)) {
         tier = "low";
+      } else if (
+        /nvidia|geforce|rtx|gtx|quadro|radeon rx|rx \d{3,4}|arc a\d/i.test(renderer)
+      ) {
+        tier = "high";
       }
       const lose = gl.getExtension("WEBGL_lose_context");
       lose?.loseContext();
@@ -79,8 +89,8 @@ function detectPlatform(): PlatformKind {
   return "other";
 }
 
-const [platformSignal, setPlatformSignal] = createRoot(() => createSignal<PlatformKind>(detectPlatform()));
-const [gpuSignal, setGpuSignal] = createRoot(() => createSignal<GpuTier>(detectGpuTier()));
+const [platformSignal] = createRoot(() => createSignal<PlatformKind>(detectPlatform()));
+const [gpuSignal] = createRoot(() => createSignal<GpuTier>(detectGpuTier()));
 const [backdropSignal, setBackdropSignal] = createRoot(() =>
   createSignal<BackdropKind>("ambient")
 );

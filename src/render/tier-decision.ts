@@ -5,7 +5,7 @@
 export type RenderTier = "full" | "acrylic" | "static";
 export type BackdropKind = "ambient" | "image" | "video" | "theme";
 export type PlatformKind = "windows" | "macos" | "other";
-export type GpuTier = "low" | "standard";
+export type GpuTier = "low" | "standard" | "high";
 
 export interface TierInputs {
   platform: PlatformKind;
@@ -20,7 +20,10 @@ export interface TierInputs {
  *
  * Precedence matters: reduced/user motion wins over everything, then low-end
  * GPU, then a moving backdrop (never sampled by glass), then macOS (conservative
- * acrylic), then Windows with a static backdrop (full glass).
+ * acrylic), then a Windows machine with a discrete GPU and a static backdrop
+ * (full glass). Integrated-GPU Windows machines stay on acrylic: the full tier
+ * runs every live `backdrop-filter`, and that path has not been profiled on
+ * iGPUs yet.
  */
 export function decideTier(input: TierInputs): RenderTier {
   if (!input.userMotion || input.reducedMotion) return "static";
@@ -29,6 +32,7 @@ export function decideTier(input: TierInputs): RenderTier {
   if (input.platform === "macos") return "acrylic";
   if (
     input.platform === "windows" &&
+    input.gpuTier === "high" &&
     (input.backdropKind === "ambient" || input.backdropKind === "image")
   ) {
     return "full";
