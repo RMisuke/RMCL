@@ -11,7 +11,7 @@
 （主页拥挤、无全局导航、Mod 浏览器半成品、15 条 IPC 命令无 UI 入口），本设计推倒重来，
 以「干净简洁、主页卡片化、一级只放高频必要项、高级参数下沉」为核心原则，
 参考 HMCL 的成熟设计层级，并把后端全部 IPC 命令与 10 个事件安排到明确的界面位置。
-**命令面口径**：设计基线是 2026-10-23 的 **86 条**；2026-11-03 实测注册表为 **132 条**
+**命令面口径**：设计基线是 2026-10-23 的 **86 条**；2026-11-04 实测注册表为 **133 条**
 （权威清单 `../../src-tauri/src/handlers.rs`，计数断言 `ipc_tests.rs:168`），
 差集 36 条的分组清单见 [`11_IPC_COVERAGE.md`](11_IPC_COVERAGE.md) 文首。
 
@@ -47,7 +47,8 @@
 | 15 | [14_CARD_SYSTEM.md](14_CARD_SYSTEM.md) | **主页卡片系统 v3**：尺寸档位、布局 v3、默认卡片功能、插件卡片/Host Bridge 契约、验收 | 实施者必读 |
 | 16 | [15_THEME_SYSTEM_V4.md](15_THEME_SYSTEM_V4.md) | **主题系统 V4**：8 配色收敛（6 预设动效+自适应+自定义）、日夜三档、base3 派生、配置重构 | 实施者必读 |
 | 17 | [16_FIRST_RUN_ONBOARDING.md](16_FIRST_RUN_ONBOARDING.md) | **初次启动引导**：标准/便携选择、`.minecraft` 检测、HMCL/PCL 配置导入、登录与欢迎页 | 实施者必读 |
-| 18 | [ACCEPTANCE_CHECKLIST.md](ACCEPTANCE_CHECKLIST.md) | 手动走查清单（启动 / 主页 / 实例 / 下载 / 账号 / 插件 / 设置 逐项可勾选），CI 之外的验收口径 | 验收执行者 |
+| 18 | [17_HOME_DOCK.md](17_HOME_DOCK.md) | **当前外壳**：左浮动 Dock、窗口控件、空白首页 + 启动胶囊、RenderTier 与 Windows 约束 | 实施者必读 |
+| 19 | [ACCEPTANCE_CHECKLIST.md](ACCEPTANCE_CHECKLIST.md) | 手动走查清单（启动 / 主页 / 实例 / 下载 / 账号 / 插件 / 设置 逐项可勾选），CI 之外的验收口径 | 验收执行者 |
 
 ## 使用规则（与项目「设计文档优先」原则一致）
 

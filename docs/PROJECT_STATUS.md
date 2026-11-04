@@ -1,4 +1,4 @@
-# RMCCC 项目现状与继续开发交接（2026-11-03 更新）
+# RMCCC 项目现状与继续开发交接（2026-11-04 更新）
 
 > 本文档是**变更记录与交接入口**，按轮次记录"这轮改了什么"。
 > **完整架构说明 + 功能矩阵 + 技术债台账**见 [`audits/AUDIT_2026-10-20.md`](audits/AUDIT_2026-10-20.md)（横切全景，不按轮次组织）。
@@ -9,6 +9,26 @@
 ---
 
 ## 0. 更新记录
+
+**2026-11-04（Windows / 体积 / 工程门禁 / 文档同步）**：
+
+1. **Windows**：`public/boot-guard.js` 在 bundle 前检测 WebView2/Chromium < 111 并显示升级面板；
+   RenderTier 的 `full` 档改为「Windows + 独显（`gpuTier=high`）+ 静态背景」，集显保持 `acrylic`
+   （Windows 首启路径此前从未在核显上实测）；插件 iframe 按平台拼 `http://rmcccplugin.localhost`；
+   `tauri-plugin-single-instance` 阻止同一数据根双开。
+2. **安全**：主窗口启用 CSP（`script-src 'self'`，boot guard 由内联改为 `public/` 外部文件）；
+   capabilities 移除 `updater:default` / `process:default` / `dialog:allow-open`。
+3. **体积**：下线未启用的 updater 插件（移除重复的 reqwest 0.13 与 osakit/minisign）并去掉
+   reqwest `brotli`；主程序 11,348,576 B → **10,683,840 B（−664,736 B，约 −5.9%）**；
+   `SNGL.app` 14M → 13M。
+4. **工程门禁**：`tsconfig` 开启 `noUnusedLocals` / `noUnusedParameters` /
+   `noFallthroughCasesInSwitch`，清理 46 处历史未用导入/变量；CI 的 Windows E2E 摘掉
+   `continue-on-error`，正式阻塞合并。
+5. **文档**：新增 [17_HOME_DOCK.md](ui-design/17_HOME_DOCK.md)；IPC 计数 132→133；
+   `unsupported.rs` 的 Windows TODO 改为「已实现」指引；渲染档文档补充独显前提。
+6. **门禁**：`pnpm typecheck` ✅、`pnpm test` ✅（80）、`pnpm build` ✅、
+   `cargo fmt --check` ✅、`cargo test --workspace` ✅、`pnpm tauri build --bundles app` ✅。
+   视觉与 Windows 实机项仍待验收（见 `audits/AUDIT_2026-11-01_WINDOWS.md` §5）。
 
 **2026-11-04（初次启动引导 + git 更新日志 + 设置收口）**：
 

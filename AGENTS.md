@@ -61,7 +61,7 @@ RMCL/
 ├── crates/                # Rust workspace crates（含 rmccc-platform / rmccc-plugin / rmccc-dashboard / rmccc-logic / rmccc-llm / rmccc-agent[ADR-013 瘦身]）
 ├── examples/plugins/      # 插件样例 4 个（server-dashboard 隔离 UI 卡片；theme-midnight / theme-aurora / theme-grass 主题）
 ├── plugin-sdk/            # 第三方插件 SDK（plugin-api / plugin-ui / 模板 / 校验打包工具）
-├── src-tauri/             # Tauri 应用层（IPC 命令：132 条，权威清单 handlers.rs，断言 ipc_tests.rs:168）
+├── src-tauri/             # Tauri 应用层（IPC 命令：133 条，权威清单 handlers.rs，断言 ipc_tests.rs:168）
 ├── src-logic-host/        # 逻辑插件 helper 进程（唯一链接 wasmi 的二进制，ADR-007）
 ├── poc/                   # 一次性 PoC（非 workspace 成员，如 ADR-007 的运行时测量）
 ├── src/                   # SolidJS 前端（src/assets/ 为前端静态资源；src-tauri/icons/ 为打包图标）

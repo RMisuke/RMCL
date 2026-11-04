@@ -115,7 +115,7 @@ Rust 三门禁（fmt/clippy/test）：本重构**零 Rust 改动**时可免跑�
 
 | 风险/取舍 | 说明 | 缓解 |
 |---|---|---|
-| **亚克力非真透出模糊** | 视频壁纸上卡片是"染色"而非像素级 backdrop 采样，肉眼接近但非等价 | Windows 静态壁纸档（full）仍给真玻璃；用户可通过 cardBlur 偏好在 full 档调节 |
+| **亚克力非真透出模糊** | 视频壁纸上卡片是"染色"而非像素级 backdrop 采样，肉眼接近但非等价 | Windows 静态壁纸档（full，且需独显）仍给真玻璃；用户可通过 cardBlur 偏好在 full 档调节 |
 | **黑屏兜底探测误判** | WKWebView 黑屏探针若误判，可能该走兜底却没走 | 探针保守：不确定时**倾向启用兜底**（宁可多一次 canvas，不可黑屏）；保留现有 recover 逻辑 |
 | **删 legacy 变量破坏历史 skin CSS** | 若有第三方手写 CSS 引用 `--soft-*` | 主题契约本就不含 CSS（themes never provide CSS）；影响面仅限历史手写 skin，属可接受清理 |
 | **CSS 巨石拆分回归** | 4024 行拆散可能漏样式 | 放最后阶段（S8）；拆分前后 `pnpm build` 产物比对 + macOS 实机逐页走查（[`ui-design/ACCEPTANCE_CHECKLIST.md`](../ui-design/ACCEPTANCE_CHECKLIST.md)） |

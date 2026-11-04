@@ -55,7 +55,7 @@
 
 | Tier | 触发条件 | 背景 | 玻璃 | 装饰动画 |
 |---|---|---|---|---|
-| **full** | Windows/Chromium **且** 背景静态 **且** 未减动效 | 原生合成 | 允许真 `backdrop-filter`（少量浮层） | 允许 1 个 transform-only 层 |
+| **full** | Windows/Chromium **且** 独显（gpuTier=high）**且** 背景静态 **且** 未减动效 | 原生合成 | 允许真 `backdrop-filter`（少量浮层） | 允许 1 个 transform-only 层 |
 | **acrylic**（默认） | macOS，**或** 任意端的视频壁纸 | 原生 `<video>`/静态 | 一律染色亚克力，不采样背景 | 静态装饰，无常驻动画 |
 | **static** | `prefers-reduced-motion` / 低配探测 / 用户关动效 | 静态 | 实色面 | 全部关闭 |
 

@@ -36,7 +36,8 @@ decideTier(input) ->
   else if gpuTier == "low"                    => "static"
   else if backdropKind == "video"             => "acrylic"   // 活背景：玻璃禁止采样
   else if platform == "macos"                 => "acrylic"   // WKWebView：backdrop over 任意背景偏贵
-  else if platform == "windows" && backdropKind in {ambient,image} => "full"
+  else if platform == "windows" && gpuTier == "high"
+          && backdropKind in {ambient,image} => "full"
   else                                        => "acrylic"   // 保守默认
 ```
 
