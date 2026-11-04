@@ -115,3 +115,5 @@ macOS ARM64、release、LTO、strip 后实测：
 ## 状态变更记录
 
 - 2026-10-21：proposed（PoC 完成，数据见 `poc/logic-runtime/README.md`）→ accepted
+- 2026-11-04：交付二进制更名为 `SNGL-logic-host`（crate/包名保持 `rmccc-logic-host`），
+  协议、进程隔离与资源限制均不变

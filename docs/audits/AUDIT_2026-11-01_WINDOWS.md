@@ -41,7 +41,7 @@
 | 编号 | 严重度 | 问题 | 证据 | Windows 影响 | 处置 |
 |---|---|---|---|---|---|
 | W-1 | P0 | 五个图标文件都是同一个 **1×1 PNG**（各 70 B）冒充 `.ico`/`.icns` | `src-tauri/icons/*`；`file` 报 `PNG image data, 1 x 1` | `tauri-build → tauri-winres → ico` 解析 `icon.ico` 失败 → **构建中断**；即使侥幸嵌入，exe/任务栏/托盘/安装包图标全空 | ✅ 用上传图重新生成（见 §3） |
-| W-2 | P0 | `resolve_helper()` 用 `with_file_name("rmccc-logic-host")`，Windows 上真实文件名是 `rmccc-logic-host.exe` | `crates/rmccc-logic/src/supervisor.rs:313` | `is_file()` 恒假 → 所有逻辑插件报 "helper not found" | ✅ 按 `EXE_SUFFIX` 拼名 + 无后缀回退 |
+| W-2 | P0 | `resolve_helper()` 用 `with_file_name("SNGL-logic-host")`，Windows 上真实文件名是 `rmccc-logic-host.exe` | `crates/rmccc-logic/src/supervisor.rs:313` | `is_file()` 恒假 → 所有逻辑插件报 "helper not found" | ✅ 按 `EXE_SUFFIX` 拼名 + 无后缀回退 |
 | W-3 | P1 | JVM 用 `file.encoding`（中文 Windows = GBK）输出日志，日志泵却用 `BufReader::lines()`（UTF-8 only） | `descriptor.rs` `default_encoding()` + `managed.rs` `read_lines()` | 第一条非 UTF-8 行 → `InvalidData` → 泵退出：**日志冻结**，管道写满后**游戏进程阻塞** | ✅ 日志流强制 UTF-8（`stdout_encoding`）+ 泵改字节级 lossy 解码 |
 | W-4 | P1 | `build_response_file` 把 `restrict_owner_only` 当硬前提（`?` 传播） | `crates/rmccc-launch/src/process.rs:46` | `icacls` 在 exFAT/FAT32 移动盘、网络盘、受限账户上失败 → **游戏装在移动盘就无法启动** | ✅ 降级为 warn + 继续（文件仍在 5s 后被删除） |
 | W-5 | P1 | 前后置命令 `split_whitespace()` 后直接 `Command::new(tokens[0])`，不经 shell | `default_launcher.rs:1181` `run_external_command` | `C:\Program Files\...` 必炸、`.bat` 与内建命令不执行、引号参数被拆碎、闪黑框 | ✅ `cmd /C` / `sh -c` 包装 + `hide_console_window` |
@@ -49,7 +49,7 @@
 | W-7 | P1 | WinRT 转码先 `File::create(output)` 再交给 MediaTranscoder；输出目标为 HEVC | `video_windows.rs:45` | 目标文件已存在 → `PrepareFileTranscodeAsync` 失败；HEVC 需商店付费"HEVC 视频扩展"，WebView2 默认播不了 | ✅ 删预建文件 + 目标改 H.264（`CreateMp4`）+ 缓存 key 分后端 |
 | W-8 | P1 | 发布产物路径写死 `src-tauri/target/release/bundle`，但 workspace 产物在仓库根 `target/` | `.github/workflows/release.yml:73`，本地口径见 `AGENTS.md` | Windows 安装包不会进 release artifact | ✅ 改 `target/**/release/bundle/**/*` |
 | W-9 | P1 | `TAURI_SIGNING_PRIVATE_KEY_PATH` 兜底 `/tmp/rmccc.key`（Windows 无 `/tmp`，且文件永不存在的路径） | `release.yml` | Windows runner 上 updater 签名配置不成立 | ✅ 改用 secret 内容注入，未配置则跳过 |
-| W-10 | P2 | `bundle` 无 `resources`/`externalBin`：`rmccc-logic-host` 不进安装包 | `tauri.conf.json` | 打包版逻辑插件失效（各平台） | ✅ `externalBin` + `pnpm prep:host` 暂存 |
+| W-10 | P2 | `bundle` 无 `resources`/`externalBin`：`SNGL-logic-host` 不进安装包 | `tauri.conf.json` | 打包版逻辑插件失效（各平台） | ✅ `externalBin` + `pnpm prep:host` 暂存 |
 | W-11 | P2 | `bundle.windows.webviewInstallMode` / `plugins.updater.windows.installMode` 缺失 | `tauri.conf.json` | WebView2 安装策略与更新安装模式落到 Tauri 默认值，行为不确定 | ✅ 显式配置 |
 | W-12 | P2 | E2E job 跑在 `macos-14`，而 `tauri-driver` **不支持 macOS**；测试还把 caps 换成 `chrome()` 并 `goto` 外部 URL | `.github/workflows/ci.yml:101`、`src-tauri/tests/e2e_smoke.rs` | 唯一的 WebView2 自动化窗口被浪费，E2E 实际从未驱动过应用 | ✅ 迁到 `windows-latest` + 改用 `tauri:options.application` |
 | W-13 | P2 | `transparent: true` + `decorations: false` 只在 macOS 验证 | `tauri.conf.json:25-26` | Windows 丢 DWM 阴影/Aero Snap，Win10 透明+最大化表现待测 | 🟡 代码侧已处理：关闭 DWM 非客户区渲染（矩形阴影/1px 边框）、`set_shadow(false)`、系统圆角关闭；最大化时 CSS 圆角归零；待 Windows 实机（见 §5） |
@@ -121,11 +121,11 @@
 
 ### W-10 / W-12 打包与 CI
 
-- `tauri.conf.json`：`bundle.externalBin: ["binaries/rmccc-logic-host"]`，
+- `tauri.conf.json`：`bundle.externalBin: ["binaries/SNGL-logic-host"]`，
   `beforeBuildCommand` 追加 `pnpm prep:host`；补 `bundle.windows.webviewInstallMode` 与
   `plugins.updater.windows.installMode`。
-- `scripts/prepare-logic-host.mjs`：读 `rustc -vV` 的 host triple，`cargo build -p rmccc-logic-host --release`，
-  复制成 `src-tauri/binaries/rmccc-logic-host-<triple>[.exe]`（Tauri 打包时会去掉 triple，
+- `scripts/prepare-logic-host.mjs`：读 `rustc -vV` 的 host triple，`cargo build -p rmccc-logic-host --release`（crate 名不变），
+  复制成 `src-tauri/binaries/SNGL-logic-host-<triple>[.exe]`（Tauri 打包时会去掉 triple，
   与 `resolve_helper` 的"同目录"查找对上）；`src-tauri/binaries/` 进 `.gitignore`。
 - E2E：job 移到 `windows-latest`（`continue-on-error` 直至 Windows 实机验收完成），
   用 `--no-bundle` 构建后由 `tauri-driver` 驱动；测试改用
@@ -149,15 +149,15 @@
 
 ```
 target/release/bundle/macos/SNGL.app
-  Contents/MacOS/rmccc              10,684,976 B   ← strip 后的主可执行（< 20 MiB，ADR-011）
-  Contents/MacOS/rmccc-logic-host    1,116,256 B   ← externalBin 生效（on-demand spawn，不计入主程序）
+  Contents/MacOS/SNGL               10,684,976 B   ← strip 后的主可执行（< 20 MiB，ADR-011）
+  Contents/MacOS/SNGL-logic-host     1,116,256 B   ← externalBin 生效（on-demand spawn，不计入主程序）
   Contents/Resources/icon.icns      Mac OS X icon, "is32"
 ```
 
 - 主可执行 10,684,976 B：与整改前（10,684,960 B）基本持平，新增 16 B 为编码选择与
   helper 路径分支的差异。
 - 打包前的 `beforeBuildCommand` 实际执行了 `pnpm build && pnpm prep:host`，因此
-  `src-tauri/binaries/rmccc-logic-host-<triple>` 在构建时可被 CLI 找到并落入 `Contents/MacOS/`。
+  `src-tauri/binaries/SNGL-logic-host-<triple>` 在构建时可被 CLI 找到并落入 `Contents/MacOS/`。
 
 ---
 

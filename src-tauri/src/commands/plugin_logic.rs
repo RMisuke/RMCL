@@ -1,7 +1,7 @@
 //! Logic plugin execution (Phase 5, ADR-007).
 //!
 //! The launcher never links a WASM engine: [`LogicRunner`] spawns
-//! `rmccc-logic-host` per plugin and enforces the wall-clock budget by killing
+//! `SNGL-logic-host` per plugin and enforces the wall-clock budget by killing
 //! it. Authorization happens here, once per call, against the live registry and
 //! permission state — the helper has no idea what a capability is.
 

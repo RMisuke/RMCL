@@ -50,7 +50,7 @@ async fn app_boots_and_serves_frontend() -> WebDriverResult<()> {
 
     let application = app_binary().expect(
         "RMCCC_E2E_BINARY must point at the built app binary \
-         (e.g. target/debug/rmccc.exe)",
+         (e.g. target/debug/SNGL.exe)",
     );
 
     // tauri-driver 通过 `tauri:options.application` 启动被测应用；会话建立后

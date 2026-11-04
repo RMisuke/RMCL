@@ -5,11 +5,11 @@
 //! 适合 Claude Desktop / ZCode 等"工具自己拉起 MCP 服务器"的客户端：
 //!
 //! ```jsonc
-//! { "mcpServers": { "rmccc": { "command": "/path/to/rmccc", "args": ["mcp"] } } }
+//! { "mcpServers": { "rmccc": { "command": "/path/to/SNGL", "args": ["mcp"] } } }
 //! ```
 //!
 //! 启动器未运行时对每个请求返回明确的 JSON-RPC 错误（不写非 JSON 到 stdout）；
-//! `--launch` 先拉起 GUI（同目录的 `rmccc` 可执行文件或 `RMCCC_APP_PATH`），
+//! `--launch` 先拉起 GUI（同目录的 `SNGL` 可执行文件或 `RMCCC_APP_PATH`），
 //! 等端点就绪（≤ 10s）再进入转发循环。
 
 use std::io::{BufRead, Write};
@@ -181,7 +181,7 @@ fn launch_gui_and_wait(data_dir: &Path) -> Result<(), String> {
     };
     if !exe.exists() {
         return Err(format!(
-            "GUI binary not found at {} (set RMCCC_APP_PATH to the rmccc app binary)",
+            "GUI binary not found at {} (set RMCCC_APP_PATH to the SNGL app binary)",
             exe.display()
         ));
     }
@@ -204,9 +204,9 @@ fn launch_gui_and_wait(data_dir: &Path) -> Result<(), String> {
 
 fn gui_binary_name() -> &'static str {
     if cfg!(windows) {
-        "rmccc.exe"
+        "SNGL.exe"
     } else {
-        "rmccc"
+        "SNGL"
     }
 }
 

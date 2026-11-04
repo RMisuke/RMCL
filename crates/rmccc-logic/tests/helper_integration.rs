@@ -1,11 +1,11 @@
 //! End-to-end tests for the logic helper supervisor (Phase 5, ADR-007).
 //!
-//! These spawn the real `rmccc-logic-host` binary, so they cover the pieces that
+//! These spawn the real `SNGL-logic-host` binary, so they cover the pieces that
 //! unit tests cannot: the handshake, stdio framing, fuel/memory limits, the
 //! import allowlist and the kill-on-timeout policy.
 //!
 //! The helper is a workspace member, so `cargo test --workspace` builds it at
-//! `target/debug/rmccc-logic-host`. When it is missing the tests skip instead of
+//! `target/debug/SNGL-logic-host`. When it is missing the tests skip instead of
 //! failing a `cargo test -p rmccc-logic --lib`-style invocation.
 
 use std::path::PathBuf;
@@ -13,13 +13,14 @@ use std::time::{Duration, Instant};
 
 use rmccc_logic::abi::LogicLimits;
 use rmccc_logic::protocol::LogicErrorCode;
+use rmccc_logic::supervisor::helper_file_name;
 use rmccc_logic::{LogicHost, Request};
 
 fn helper_path() -> Option<PathBuf> {
     let manifest = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let root = manifest.parent()?.parent()?;
     for profile in ["debug", "release"] {
-        let candidate = root.join("target").join(profile).join("rmccc-logic-host");
+        let candidate = root.join("target").join(profile).join(helper_file_name());
         if candidate.is_file() {
             return Some(candidate);
         }
@@ -81,7 +82,7 @@ fn write_module(name: &str, wat: &str) -> PathBuf {
 #[test]
 fn ping_reports_the_logic_api_version() {
     let Some(mut host) = spawn() else {
-        eprintln!("skipping: build rmccc-logic-host first");
+        eprintln!("skipping: build SNGL-logic-host first");
         return;
     };
     assert_eq!(host.ping().expect("ping"), rmccc_logic::LOGIC_API_VERSION);

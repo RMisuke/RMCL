@@ -40,7 +40,7 @@ Windows 侧隔离 UI 与 helper 原生化验收——仍 `deferred / release-blo
 - 优点：与 `ARCHITECTURE.md`、插件平台指南、`roadmap/04–07` 的 ✅ 结论一致；不销毁已实施的卡片契约与 SDK；
   逻辑插件继续走独立 helper 进程（ADR-007），主可执行不被 wasmi 污染。
 - 缺点：保留 helper 的打包链路（`bundle.externalBin` + `pnpm prep:host`）与攻击面；Windows 需要
-  `rmccc-logic-host.exe` 原生验收；插件 IPC 占 132 条中的 15 条，维护面大。
+  `SNGL-logic-host.exe` 原生验收；插件 IPC 占 132 条中的 15 条，维护面大。
 
 **B. 收缩到「主题 + iframe 卡片」（10-28 方案 B）。**
 - 优点：删掉 wasmi/ABI/supervisor 与 SDK 协议面。
@@ -89,8 +89,8 @@ Windows 侧隔离 UI 与 helper 原生化验收——仍 `deferred / release-blo
 ## 跨平台验证方式
 
 - macOS（本机 aarch64）：本 ADR 只做口径收口，不动代码，无需新实测；引用的体积数字来自
-  `target/release/bundle/macos/SNGL.app/Contents/MacOS/rmccc` 的 `stat`。
-- Windows：`rmccc-logic-host.exe` 解析、iframe/隔离 UI、`CREATE_NO_WINDOW` 等仍按
+  `target/release/bundle/macos/SNGL.app/Contents/MacOS/SNGL` 的 `stat`。
+- Windows：`SNGL-logic-host.exe` 解析、iframe/隔离 UI、`CREATE_NO_WINDOW` 等仍按
   `../audits/AUDIT_2026-11-01_WINDOWS.md` §5 记 deferred，不得因本 ADR 宣称验收。
 - Linux：未在本机实测，保持 deferred。
 

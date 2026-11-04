@@ -40,7 +40,7 @@
     "active": true,
     "targets": "all",
     "externalBin": [
-      "binaries/rmccc-logic-host"
+      "binaries/SNGL-logic-host"
     ],
     "windows": {
       "webviewInstallMode": {

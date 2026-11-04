@@ -114,7 +114,7 @@ cargo test --workspace
 pnpm typecheck && pnpm build
 cargo build --release -p rmccc && cargo build --release -p rmccc-cli
 # 体积
-ls -l target/release/rmccc target/release/rmcli
+ls -l target/release/SNGL target/release/rmcli
 ```
 
 ## 7. 平台策略

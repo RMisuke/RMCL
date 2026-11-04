@@ -3,6 +3,12 @@ name = "rmccc"
 version = "0.3.3"
 edition = "2021"
 
+# 可执行文件按产品名输出（Windows 上即 SNGL.exe）；crate 名保留 rmccc，
+# 避免改动 workspace 里所有 `-p rmccc` 的引用。
+[[bin]]
+name = "SNGL"
+path = "src/main.rs"
+
 [build-dependencies]
 tauri-build = { workspace = true }
 

@@ -2176,7 +2176,7 @@ plugin-sdk/
 
 决策与实测数据见 [ADR-007](adr/ADR-007-logic-runtime.md)。三条硬边界：
 
-1. **主程序不链接 WASM 引擎**。引擎只存在于 helper 进程 `rmccc-logic-host` 里，
+1. **主程序不链接 WASM 引擎**。引擎只存在于 helper 进程 `SNGL-logic-host` 里，
    因此 ADR-011 的主可执行文件体积不受影响（实测：嵌入式 wasmtime +5.89 MiB 会直接顶破红线）。
 2. **进程隔离**：helper 崩溃/死循环不会带走启动器；超时由宿主 `kill` 子进程强制实现，
    不依赖模块配合。
@@ -2187,7 +2187,7 @@ plugin-sdk/
 | 组件 | 位置 | 职责 |
 |------|------|------|
 | `rmccc-logic` | `crates/rmccc-logic` | ABI 常量、JSON-RPC 协议、`LogicLimits`、`LogicHost` 监管者（spawn/超时/重启） |
-| `rmccc-logic-host` | `src-logic-host` | 唯一链接 wasmi 的二进制：校验导入 → 实例化 → 执行 `rmccc_invoke` |
+| `SNGL-logic-host` | `src-logic-host` | 唯一链接 wasmi 的二进制：校验导入 → 实例化 → 执行 `rmccc_invoke` |
 | PoC | `poc/logic-runtime`（非 workspace 成员） | ADR-007 的体积/延迟/内存实测与复现脚本 |
 
 ### 24.2 协议

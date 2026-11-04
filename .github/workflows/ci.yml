@@ -155,5 +155,5 @@ jobs:
           cargo test --test e2e_smoke app_boots_and_serves_frontend
         env:
           TAURI_DRIVER_URL: "http://localhost:4444"
-          RMCCC_E2E_BINARY: "${{ github.workspace }}/target/debug/rmccc.exe"
+          RMCCC_E2E_BINARY: "${{ github.workspace }}/target/debug/SNGL.exe"
           RMCCC_RUN_E2E: "1"

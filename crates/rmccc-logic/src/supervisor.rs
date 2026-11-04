@@ -2,7 +2,7 @@
 //!
 //! Responsibilities:
 //!
-//! - resolve and spawn `rmccc-logic-host` (env override → next to the launcher);
+//! - resolve and spawn `SNGL-logic-host` (env override → next to the launcher);
 //! - frame requests/responses as one JSON object per line;
 //! - enforce a wall-clock timeout per call, then **kill** the helper (a WASM
 //!   module cannot be trusted to cooperate with cooperative fuel limits);
@@ -28,11 +28,11 @@ pub const HELPER_ENV: &str = "RMCCC_LOGIC_HOST";
 
 /// Binary name looked up next to the launcher executable, **without** the
 /// platform executable suffix (use [`helper_file_name`] to get the real name).
-pub const HELPER_NAME: &str = "rmccc-logic-host";
+pub const HELPER_NAME: &str = "SNGL-logic-host";
 
 /// File name of the helper on the current platform.
 ///
-/// Windows binaries always carry `.exe` (`rmccc-logic-host.exe`); every other
+/// Windows binaries always carry `.exe` (`SNGL-logic-host.exe`); every other
 /// target uses the bare name. Hard-coding [`HELPER_NAME`] made `is_file()`
 /// return false on Windows, so every logic plugin reported "helper not found".
 pub fn helper_file_name() -> String {
@@ -354,8 +354,8 @@ mod tests {
         );
         // Windows resolves the helper as `.exe`; Unix keeps the bare name.
         #[cfg(windows)]
-        assert_eq!(name, "rmccc-logic-host.exe");
+        assert_eq!(name, "SNGL-logic-host.exe");
         #[cfg(not(windows))]
-        assert_eq!(name, "rmccc-logic-host");
+        assert_eq!(name, "SNGL-logic-host");
     }
 }

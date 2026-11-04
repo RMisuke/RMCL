@@ -85,7 +85,7 @@ grep -rn 'cfg(unix)|cfg(windows)|cfg(target_os|cfg!(target_os' crates/*/src --in
 | # | 问题 | 归属层 |
 |---|---|---|
 | W-1 | `src-tauri/icons/*` 五个文件都是同一个 1×1 PNG，`icon.ico` 不是 ICO、`icon.icns` 不是 ICNS（Windows 资源编译 + 托盘/安装包图标全空） | 打包资源 |
-| W-2 | `resolve_helper()` 拼 `rmccc-logic-host` 不带 `.exe` → Windows 上逻辑插件全灭 | `rmccc-logic` |
+| W-2 | `resolve_helper()` 拼 `SNGL-logic-host` 不带 `.exe` → Windows 上逻辑插件全灭 | `rmccc-logic` |
 | W-3 | JVM 以 `file.encoding`（中文系统 GBK）输出日志，日志泵却按 UTF-8 逐行解码 → 首个非 UTF-8 行即终止泵（日志冻结 + 管道写满阻塞游戏） | `rmccc-platform` + `rmccc-launch` |
 | W-4 | argfile 的 `restrict_owner_only` 失败被当成致命错误（`icacls` 在 exFAT/网络盘/受限账户必然失败）→ 游戏装在移动盘就无法启动 | `rmccc-launch` |
 | W-5 | 前后置命令按空白切词、不经 shell → 含空格路径 / `.bat` / 内建命令全废，且会闪控制台 | `rmccc-launch` |
