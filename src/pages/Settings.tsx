@@ -7,7 +7,7 @@ import type { JSX } from "solid-js";
 import { Show, For, createMemo, createSignal, createEffect, onMount, Switch, Match } from "solid-js";
 import { useNavigate } from "@solidjs/router";
 import { PageHeader } from "../components/PageHeader";
-import { RmButton, RmIconButton, RmInput, RmSelect, RmSwitch, RmTag } from "../components/rm/controls";
+import { RmButton, RmIconButton, RmInput, RmSelect, RmSegmented, RmSwitch, RmTag } from "../components/rm/controls";
 import { RmDialog, RmMenu } from "../components/rm/overlays";
 import { RmCard, RmSideTabs, RmListRow, RmAdvancedSection, RmFieldRow, RmEmptyState, RmErrorState } from "../components/rm/surfaces";
 import { settings as settingsApi, userSettings, instances, gameDirectories, logs, external, mcp as mcpApi, ai as aiApi, plugins as pluginsApi, dashboard, storage, dataPaths } from "../ipc/api";
@@ -18,16 +18,16 @@ import { aiStore } from "../stores/ai";
 import { mcpStore } from "../stores/mcp";
 import { pluginsStore } from "../stores/plugins";
 import { uiStore, toast, confirmDanger, promptText } from "../stores/ui";
-import { listThemes, visualPaletteFor } from "../theme";
 import {
   adaptiveEnabled,
   adaptivePalette,
   adaptiveSource,
   adaptiveStatus,
-  disableAdaptive,
-  enableAdaptive,
   refreshAdaptivePalette,
 } from "../lib/adaptiveTheme";
+import { themeV4 } from "../theme/v4/store";
+import { THEME_REGISTRY, type ThemeDef } from "../theme/v4/registry";
+import { deriveTokens } from "../theme/v4/palette";
 import { cacheStore } from "../stores/cache";
 import { formatBytes } from "../lib/format";
 import { t } from "../i18n";
@@ -36,6 +36,9 @@ import type { TranslationKey } from "../i18n/locales/messages";
 import { elidePath } from "../lib/format";
 import { useHashTab } from "../lib/useHashTab";
 import { homeCardBlur, homeCardOpacity, panelOpacity, setHomeCardBlur, setHomeCardOpacity, setPanelOpacity } from "../lib/glass";
+import { recentChangelog } from "../lib/changelog";
+import { hasOnboardingForce, requestOnboardingOnNextLaunch } from "../lib/onboarding";
+import { coreVersionLabel, launcherVersionLabel } from "../lib/version";
 import { backgroundVideoIssue } from "../lib/backgroundVideo";
 import { backgroundImageIssue } from "../lib/backgroundImage";
 import {
@@ -400,18 +403,11 @@ function resolvedThemeKey(preference: string | null): string {
 }
 
 function General(): JSX.Element {
-  const navigate = useNavigate();
   const [locales, setLocales] = createSignal<LocaleInfo[]>([]);
-  const [logLines, setLogLines] = createSignal<string[]>([]);
-  const [javas, setJavas] = createSignal<JavaInfo[]>([]);
-  const config = () => settingsStore.config();
 
   onMount(async () => {
     const localeRes = await userSettings.supportedLocales();
     if (localeRes.ok) setLocales(localeRes.data);
-    const logRes = await logs.get(200);
-    if (logRes.ok) setLogLines(logRes.data);
-    void settingsApi.detectJava().then((r) => r.ok && setJavas(r.data));
   });
 
   return (
@@ -429,65 +425,6 @@ function General(): JSX.Element {
             ...locales().map((l) => ({ value: l.code, label: l.native_name })),
           ]}
         />
-      </RmCard>
-
-      <RmCard title={t("settings.general.debug.title")}>
-        <RmFieldRow
-          label={t("settings.general.debug.toggle")}
-          hint={<span class="muted-line">{t("settings.general.debug.hint")}</span>}
-        >
-          <RmSwitch checked={settingsStore.debugMode()} onChange={(v) => settingsStore.setDebugMode(v)} />
-        </RmFieldRow>
-        <Show when={settingsStore.debugMode()}>
-          <RmAdvancedSection title={t("settings.general.debug.infoTitle")}>
-            <div class="kv-grid">
-              <span>{t("settings.about.version")}</span><span>{__APP_VERSION__}</span>
-              <span>{t("settings.game.rootDir")}</span><span>{config()?.game_root_dir ?? "-"}</span>
-              <span>{t("settings.download.mirror")}</span><span>{config()?.mirror_url || "-"}</span>
-              <span>{t("settings.download.concurrency")}</span><span>{config()?.download_concurrency ?? "-"}</span>
-              <span>{t("settings.debug.isolation")}</span><span>{config()?.default_isolation ?? "-"}</span>
-              <span>{t("settings.debug.java")}</span>
-              <span>
-                <For each={javas()}>{(j) => <div class="rm-input-mono" style={{ "font-size": "11px" }}>{`Java ${j.major_version} · ${j.path}`}</div>}</For>
-              </span>
-            </div>
-          </RmAdvancedSection>
-        </Show>
-      </RmCard>
-
-      <RmCard title={t("settings.general.log.title")}>
-        <div class="btn-row">
-          <RmButton size="sm" icon="refresh" onClick={async () => {
-            const res = await logs.get(200);
-            if (res.ok) setLogLines(res.data);
-          }}>
-            {t("common.refresh")}
-          </RmButton>
-          <RmButton size="sm" icon="copy" onClick={() => { void navigator.clipboard.writeText(logLines().join("\n")); toast({ message: t("logs.copied"), tone: "success" }); }}>
-            {t("common.copy")}
-          </RmButton>
-          <RmButton
-            size="sm"
-            variant="danger"
-            icon="trash"
-            onClick={async () => {
-              const allowed = await confirmDanger({
-                title: t("settings.general.log.clear.title"),
-                body: t("settings.general.log.clear.body"),
-                confirmLabel: t("common.delete"),
-              });
-              if (allowed) {
-                await logs.clear();
-                setLogLines([]);
-              }
-            }}
-          >
-            {t("settings.general.log.clear.title")}
-          </RmButton>
-        </div>
-        <pre class="log-viewer">
-          <For each={logLines()}>{(line) => <div class={`log-line log-${line.includes("ERROR") ? "error" : line.includes("WARN") ? "warn" : "info"}`}>{line}</div>}</For>
-        </pre>
       </RmCard>
 
       <RmCard title={t("settings.general.updates")}>
@@ -759,24 +696,15 @@ function savingLabel(): string {
 // ── Appearance（从通用拆出，2026-10-25）：配色 + 动效 ──
 
 function Appearance(): JSX.Element {
-  const [themes, setThemes] = createSignal<Awaited<ReturnType<typeof listThemes>>>([]);
   const [themeJson, setThemeJson] = createSignal<string>("");
-
-  onMount(async () => setThemes(await listThemes()));
 
   const adaptiveColors = () =>
     adaptivePalette()?.colors ?? ["#efb35e", "#d96b4f", "#73c9d4"];
-  const adaptivePanel = () => adaptivePalette()?.vars["--adaptive-raised"] ?? "#1a1d24";
   const adaptiveSourceLabel = () => {
     const source = adaptiveSource();
     return t(
       `settings.appearance.adaptive.source.${source ?? "default"}` as TranslationKey
     );
-  };
-  const adaptiveSubtitle = () => {
-    if (!adaptiveEnabled()) return t("settings.appearance.adaptive.subtitle");
-    if (adaptiveStatus() === "sampling") return t("settings.appearance.adaptive.sampling");
-    return t("settings.appearance.adaptive.active");
   };
   const adaptiveDetailText = () => {
     if (adaptiveStatus() === "sampling") return t("settings.appearance.adaptive.sampling");
@@ -812,50 +740,129 @@ function Appearance(): JSX.Element {
       .join(" · ");
   };
 
-  async function chooseTheme(key: string): Promise<void> {
-    const res = await settingsStore.setTheme(key);
-    if (!res.ok) {
-      toast({ message: res.message ?? "", tone: "error" });
-      return;
+  /**
+   * 卡片四色预览。预设用日/夜基色；自适应读实时采样结果，自定义读用户三基色
+   * ——此前三种都读 registry 静态值，导致自适应卡片永远停在占位色上。
+   */
+  function swatchColors(def: ThemeDef): string[] {
+    if (def.kind === "adaptive") {
+      const vars = adaptivePalette()?.vars;
+      const accent = vars?.["--adaptive-accent"] ?? def.night.accent;
+      return [
+        vars?.["--adaptive-canvas-1"] ?? def.night.background,
+        accent,
+        vars?.["--adaptive-panel"] ?? def.night.background,
+        vars?.["--adaptive-accent-secondary"] ?? accent,
+      ];
     }
-    if (adaptiveEnabled()) await disableAdaptive(false);
+    if (def.kind === "custom") {
+      const base = themeV4.custom();
+      return [base.background, base.accent, deriveTokens(base).surfaceElevated, base.text];
+    }
+    return [def.night.background, def.night.accent, def.day.background, def.day.accent];
   }
 
   return (
     <div class="tab-stack narrow">
       <RmCard title={t("settings.general.appearance")}>
-        {/* 「跟随系统」已按需求移除：只保留显式选择的主题卡片 */}
         <div class="theme-grid">
-          <button
-            class={`theme-card is-adaptive${adaptiveEnabled() ? " is-active" : ""}`}
-            onClick={() => void enableAdaptive()}
-          >
-            <div class="adaptive-swatch" aria-hidden="true">
-              <span style={{ background: adaptiveColors()[0] }} />
-              <span style={{ background: adaptiveColors()[1] }} />
-              <span style={{ background: adaptiveColors()[2] }} />
-              <span class="adaptive-swatch-light" style={{ background: adaptivePanel() }} />
-            </div>
-            <span class="adaptive-title">
-              <Icon name="sparkles" size={13} />
-              {t("settings.appearance.adaptive.title")}
-            </span>
-            <small class="adaptive-subtitle">{adaptiveSubtitle()}</small>
-          </button>
-          <For each={themes()}>
-            {(info) => (
+          <For each={THEME_REGISTRY}>
+            {(def) => (
               <button
-                class={`theme-card${
-                  !adaptiveEnabled() && settingsStore.themePreference() === info.key ? " is-active" : ""
-                }`}
-                onClick={() => void chooseTheme(info.key)}
+                class={`theme-card${themeV4.themeId() === def.id ? " is-active" : ""}`}
+                onClick={() => themeV4.setThemeId(def.id)}
               >
-                <ThemeSwatch key_={info.key} />
-                <span>{info.name}</span>
+                <span class="theme-v4-swatch" aria-hidden="true">
+                  <For each={swatchColors(def)}>
+                    {(color) => <i style={{ background: color }} />}
+                  </For>
+                </span>
+                <span>{t(def.nameKey as TranslationKey)}</span>
+                <small>{t(`theme.kind.${def.kind}` as TranslationKey)}</small>
               </button>
             )}
           </For>
         </div>
+
+        <Show when={themeV4.themeId() !== "adaptive" && themeV4.themeId() !== "custom"}>
+          <RmFieldRow
+            label={t("theme.daynight.title")}
+            hint={<span class="muted-line">{t("theme.daynight.hint")}</span>}
+          >
+            <div class="btn-row">
+              <For each={["off", "auto", "schedule"] as const}>
+                {(mode) => (
+                  <RmButton
+                    size="sm"
+                    variant={themeV4.dayNight().mode === mode ? "primary" : "ghost"}
+                    onClick={() => themeV4.setDayNight({ mode })}
+                  >
+                    {t(`theme.daynight.${mode}` as TranslationKey)}
+                  </RmButton>
+                )}
+              </For>
+              <RmButton
+                size="sm"
+                variant="secondary"
+                icon={themeV4.phase() === "day" ? "eye-off" : "eye"}
+                onClick={() => themeV4.togglePhase()}
+              >
+                {t("theme.daynight.toggle")}
+              </RmButton>
+            </div>
+          </RmFieldRow>
+          <Show when={themeV4.dayNight().mode === "schedule"}>
+            <RmFieldRow label={t("theme.daynight.range")}>
+              <div class="btn-row">
+                <input
+                  type="time"
+                  value={themeV4.dayNight().dayStart}
+                  onInput={(event) => themeV4.setDayNight({ dayStart: event.currentTarget.value })}
+                />
+                <span class="muted-line">—</span>
+                <input
+                  type="time"
+                  value={themeV4.dayNight().dayEnd}
+                  onInput={(event) => themeV4.setDayNight({ dayEnd: event.currentTarget.value })}
+                />
+              </div>
+            </RmFieldRow>
+          </Show>
+        </Show>
+
+        <Show when={themeV4.themeId() === "custom"}>
+          <RmFieldRow
+            label={t("theme.custom.title")}
+            hint={<span class="muted-line">{t("theme.custom.hint")}</span>}
+          >
+            <div class="btn-row">
+              <label class="color-field">
+                <span>{t("theme.custom.accent")}</span>
+                <input
+                  type="color"
+                  value={themeV4.custom().accent}
+                  onInput={(event) => themeV4.setCustom({ accent: event.currentTarget.value })}
+                />
+              </label>
+              <label class="color-field">
+                <span>{t("theme.custom.background")}</span>
+                <input
+                  type="color"
+                  value={themeV4.custom().background}
+                  onInput={(event) => themeV4.setCustom({ background: event.currentTarget.value })}
+                />
+              </label>
+              <label class="color-field">
+                <span>{t("theme.custom.text")}</span>
+                <input
+                  type="color"
+                  value={themeV4.custom().text}
+                  onInput={(event) => themeV4.setCustom({ text: event.currentTarget.value })}
+                />
+              </label>
+            </div>
+          </RmFieldRow>
+        </Show>
         <Show when={adaptiveEnabled()}>
           <div
             class={`adaptive-detail${
@@ -882,7 +889,7 @@ function Appearance(): JSX.Element {
               <RmButton
                 size="sm"
                 variant="ghost"
-                onClick={() => void disableAdaptive()}
+                onClick={() => themeV4.setThemeId("stellar")}
               >
                 {t("settings.appearance.adaptive.disable")}
               </RmButton>
@@ -976,46 +983,6 @@ function Appearance(): JSX.Element {
           />
         </RmFieldRow>
       </RmCard>
-    </div>
-  );
-}
-
-/** Miniature three-color scene preview; decorative palette is host-derived. */
-function ThemeSwatch(props: { key_: string }): JSX.Element {
-  const [tokens, setTokens] = createSignal<ThemeTokens | null>(null);
-  createEffect(() => {
-    void import("../ipc/api").then(({ dashboard }) =>
-      dashboard.getThemeTokens(props.key_).then((res) => {
-        if (res.ok) setTokens(res.data);
-      })
-    );
-  });
-  const palette = () => {
-    const value = tokens();
-    return value ? visualPaletteFor(props.key_, value) : null;
-  };
-  return (
-    <div class="theme-swatch">
-      <Show when={tokens() && palette()}>
-        <div
-          class="theme-swatch-scene"
-          style={{
-            background: tokens()!.background,
-            "border-color": tokens()!.border,
-          }}
-        >
-          <i class="theme-swatch-orb is-a" style={{ background: palette()!.primary }} />
-          <i class="theme-swatch-orb is-b" style={{ background: palette()!.secondary }} />
-          <i class="theme-swatch-orb is-c" style={{ background: palette()!.tertiary }} />
-          <i class="theme-swatch-cube" style={{ background: palette()!.primary }} />
-          <span class="theme-swatch-panel" style={{ background: tokens()!.surfaceElevated }} />
-        </div>
-        <div class="theme-swatch-colors">
-          <span style={{ background: palette()!.primary }} />
-          <span style={{ background: palette()!.secondary }} />
-          <span style={{ background: palette()!.tertiary }} />
-        </div>
-      </Show>
     </div>
   );
 }
@@ -1248,6 +1215,54 @@ function AiSection(): JSX.Element {
             <RmTag tone="success">✅ {t("settings.ai.configured")}</RmTag>
           </Show>
         </div>
+      </RmCard>
+
+      <RmCard title={t("settings.ai.behavior")}>
+        <RmFieldRow
+          label={t("settings.ai.detail")}
+          hint={<span class="muted-line">{t("settings.ai.detailHint")}</span>}
+        >
+          <RmSegmented
+            value={aiStore.analysisDetail()}
+            label={t("settings.ai.detail")}
+            onChange={(value) => {
+              if (value === "brief" || value === "balanced" || value === "detailed") {
+                aiStore.setAnalysisDetail(value);
+              }
+            }}
+            options={[
+              { value: "brief", label: t("settings.ai.detail.brief") },
+              { value: "balanced", label: t("settings.ai.detail.balanced") },
+              { value: "detailed", label: t("settings.ai.detail.detailed") },
+            ]}
+          />
+        </RmFieldRow>
+        <RmFieldRow
+          label={t("settings.ai.logMode")}
+          hint={<span class="muted-line">{t("settings.ai.logModeHint")}</span>}
+        >
+          <RmSegmented
+            value={aiStore.logMode()}
+            label={t("settings.ai.logMode")}
+            onChange={(value) => {
+              if (value === "standard" || value === "aggressive") aiStore.setLogMode(value);
+            }}
+            options={[
+              { value: "standard", label: t("settings.ai.logMode.standard") },
+              { value: "aggressive", label: t("settings.ai.logMode.aggressive") },
+            ]}
+          />
+        </RmFieldRow>
+        <RmFieldRow
+          label={t("settings.ai.autoCrash")}
+          hint={<span class="muted-line">{t("settings.ai.autoCrashHint")}</span>}
+        >
+          <RmSwitch
+            checked={aiStore.autoAnalyzeOnCrash()}
+            label={t("settings.ai.autoCrash")}
+            onChange={(enabled) => aiStore.setAutoAnalyzeOnCrash(enabled)}
+          />
+        </RmFieldRow>
       </RmCard>
       </div>
 
@@ -1510,6 +1525,10 @@ function PluginsHost(): JSX.Element {
 function Advanced(): JSX.Element {
   const [repo, setRepo] = createSignal<InstanceDetail[] | null>(null);
   const [error, setError] = createSignal<string | null>(null);
+  const [logLines, setLogLines] = createSignal<string[]>([]);
+  const [javas, setJavas] = createSignal<JavaInfo[]>([]);
+  const [onboardingQueued, setOnboardingQueued] = createSignal(hasOnboardingForce());
+  const config = () => settingsStore.config();
 
   async function refresh(): Promise<void> {
     const res = await instances.list();
@@ -1519,7 +1538,11 @@ function Advanced(): JSX.Element {
     } else setError(res.error.message);
   }
 
-  onMount(() => void refresh());
+  onMount(() => {
+    void refresh();
+    void logs.get(200).then((res) => res.ok && setLogLines(res.data));
+    void settingsApi.detectJava().then((res) => res.ok && setJavas(res.data));
+  });
 
   async function rename(instance: InstanceDetail): Promise<void> {
     const next = await promptText({
@@ -1600,6 +1623,85 @@ function Advanced(): JSX.Element {
           <RmEmptyState icon="alert" title={error()!} />
         </Show>
       </RmCard>
+
+      <RmCard title={t("settings.advanced.onboarding.title")}>
+        <div class="muted-line" style={{ "margin-bottom": "10px" }}>
+          {t("settings.advanced.onboarding.desc")}
+        </div>
+        <RmButton
+          size="sm"
+          icon="refresh"
+          disabled={onboardingQueued()}
+          onClick={() => {
+            requestOnboardingOnNextLaunch();
+            setOnboardingQueued(true);
+            toast({ message: t("settings.advanced.onboarding.queued"), tone: "success" });
+          }}
+        >
+          {onboardingQueued()
+            ? t("settings.advanced.onboarding.queuedShort")
+            : t("settings.advanced.onboarding.action")}
+        </RmButton>
+      </RmCard>
+
+      <RmCard title={t("settings.general.debug.title")}>
+        <RmFieldRow
+          label={t("settings.general.debug.toggle")}
+          hint={<span class="muted-line">{t("settings.general.debug.hint")}</span>}
+        >
+          <RmSwitch checked={settingsStore.debugMode()} onChange={(v) => settingsStore.setDebugMode(v)} />
+        </RmFieldRow>
+        <Show when={settingsStore.debugMode()}>
+          <RmAdvancedSection title={t("settings.general.debug.infoTitle")}>
+            <div class="kv-grid">
+              <span>{t("settings.about.version")}</span><span>{launcherVersionLabel(__APP_VERSION__)}</span>
+              <span>{t("settings.game.rootDir")}</span><span>{config()?.game_root_dir ?? "-"}</span>
+              <span>{t("settings.download.mirror")}</span><span>{config()?.mirror_url || "-"}</span>
+              <span>{t("settings.download.concurrency")}</span><span>{config()?.download_concurrency ?? "-"}</span>
+              <span>{t("settings.debug.isolation")}</span><span>{config()?.default_isolation ?? "-"}</span>
+              <span>{t("settings.debug.java")}</span>
+              <span>
+                <For each={javas()}>{(j) => <div class="rm-input-mono" style={{ "font-size": "11px" }}>{`Java ${j.major_version} · ${j.path}`}</div>}</For>
+              </span>
+            </div>
+          </RmAdvancedSection>
+        </Show>
+      </RmCard>
+
+      <RmCard title={t("settings.general.log.title")}>
+        <div class="btn-row">
+          <RmButton size="sm" icon="refresh" onClick={async () => {
+            const res = await logs.get(200);
+            if (res.ok) setLogLines(res.data);
+          }}>
+            {t("common.refresh")}
+          </RmButton>
+          <RmButton size="sm" icon="copy" onClick={() => { void navigator.clipboard.writeText(logLines().join("\n")); toast({ message: t("logs.copied"), tone: "success" }); }}>
+            {t("common.copy")}
+          </RmButton>
+          <RmButton
+            size="sm"
+            variant="danger"
+            icon="trash"
+            onClick={async () => {
+              const allowed = await confirmDanger({
+                title: t("settings.general.log.clear.title"),
+                body: t("settings.general.log.clear.body"),
+                confirmLabel: t("common.delete"),
+              });
+              if (allowed) {
+                await logs.clear();
+                setLogLines([]);
+              }
+            }}
+          >
+            {t("settings.general.log.clear.title")}
+          </RmButton>
+        </div>
+        <pre class="log-viewer">
+          <For each={logLines()}>{(line) => <div class={`log-line log-${line.includes("ERROR") ? "error" : line.includes("WARN") ? "warn" : "info"}`}>{line}</div>}</For>
+        </pre>
+      </RmCard>
     </div>
   );
 }
@@ -1608,6 +1710,7 @@ function Advanced(): JSX.Element {
 
 function About(): JSX.Element {
   const [info, setInfo] = createSignal<AppInfoView | null>(null);
+  const [changelogOpen, setChangelogOpen] = createSignal(false);
   onMount(async () => {
     const res = await settingsApi.appInfo();
     if (res.ok) setInfo(res.data);
@@ -1618,10 +1721,9 @@ function About(): JSX.Element {
         <div class="muted-line" style={{ "margin-bottom": "10px" }}>{t("settings.about.desc")}</div>
         <div class="kv-grid">
           <span>{t("settings.about.launcherVersion")}</span>
-          <span>{info()?.launcher_version ?? __APP_VERSION__}</span>
+          <span>{launcherVersionLabel(info()?.launcher_version ?? __APP_VERSION__)}</span>
           <span>{t("settings.about.coreVersion")}</span>
-          <span>{info()?.core_version ?? "-"}</span>
-          <span>{t("settings.about.size")}</span><span>{t("settings.about.sizeValue")}</span>
+          <span>{coreVersionLabel(info()?.core_version)}</span>
         </div>
         <div class="btn-row">
           <RmButton
@@ -1630,6 +1732,9 @@ function About(): JSX.Element {
             onClick={() => void external.openUrl("https://github.com/chensinuo/RMCL")}
           >
             {t("settings.about.repo")}
+          </RmButton>
+          <RmButton size="sm" icon="refresh" onClick={() => setChangelogOpen(true)}>
+            {t("settings.about.changelog")}
           </RmButton>
         </div>
         <div class="about-credits">
@@ -1660,6 +1765,37 @@ function About(): JSX.Element {
           </div>
         </div>
       </RmCard>
+
+      <RmDialog
+        open={changelogOpen()}
+        title={t("settings.about.changelogTitle")}
+        onClose={() => setChangelogOpen(false)}
+      >
+          <div class="changelog-list">
+            <For each={recentChangelog(10)}>
+              {(entry) => (
+                <article class="changelog-entry">
+                  <header class="changelog-entry-head">
+                    <Show when={entry.type}>
+                      <span class="changelog-version">
+                        {entry.type}
+                        <Show when={entry.scope}> · {entry.scope}</Show>
+                      </span>
+                    </Show>
+                    <time class="changelog-date">{entry.date}</time>
+                    <span class="changelog-hash">#{entry.hash}</span>
+                  </header>
+                  <h4 class="changelog-title">{entry.title}</h4>
+                  <Show when={entry.notes.length > 0}>
+                    <ul class="changelog-notes">
+                      <For each={entry.notes}>{(note) => <li>{note}</li>}</For>
+                    </ul>
+                  </Show>
+                </article>
+              )}
+            </For>
+          </div>
+      </RmDialog>
     </div>
   );
 }
