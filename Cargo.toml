@@ -87,8 +87,9 @@ tracing-appender = "0.2"
 # Type bridge (P2-15)：serde-json-impl + chrono-impl 用于 IPC 类型自动导出到前端 types.ts
 ts-rs = { version = "10", features = ["serde-json-impl", "chrono-impl"] }
 
-# Tauri
-tauri = { version = "2", features = ["tray-icon", "macos-private-api", "protocol-asset"] }
+# Tauri (no tray-icon: the launcher has no tray; dropping the feature trims
+# muda/tray-icon from the release link).
+tauri = { version = "2", features = ["macos-private-api", "protocol-asset"] }
 tauri-build = { version = "2" }
 tauri-plugin-updater = "2"
 tauri-plugin-process = "2"
@@ -117,15 +118,14 @@ rmccc-agent = { path = "crates/rmccc-agent" }
 rmccc-llm = { path = "crates/rmccc-llm" }
 
 [profile.release]
-opt-level = "s"
+# Fat LTO keeps the previous size floor; raising codegen-units from 1 to 16
+# lets the final LLVM codegen run in parallel. Thin LTO was measured at
+# +4.8 MB (+45%) on this binary, far outside the size budget, so it is out.
 lto = true
-codegen-units = 1
+codegen-units = 16
+opt-level = "s"
 strip = true
 panic = "abort"
-
-[profile.release.package."*"]
-opt-level = "s"
-strip = true
 
 # Perf audit B1: the kernel's CPU hot paths (SHA1 over hundreds of MB of
 # downloads, serde_json parsing of version manifests/asset indexes, zip

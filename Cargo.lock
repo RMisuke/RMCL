@@ -3631,7 +3631,7 @@ dependencies = [
 
 [[package]]
 name = "rmccc"
-version = "0.1.0"
+version = "0.3.3"
 dependencies = [
  "base64 0.22.1",
  "chrono",
@@ -3834,6 +3834,7 @@ version = "0.1.0"
 dependencies = [
  "chrono",
  "dirs",
+ "encoding_rs",
  "rmccc-config",
  "rmccc-error",
  "rmccc-platform",
@@ -3843,6 +3844,7 @@ dependencies = [
  "tracing",
  "ts-rs",
  "uuid",
+ "winreg",
 ]
 
 [[package]]
