@@ -17,12 +17,12 @@ import {
 } from "solid-js";
 import { useNavigate } from "@solidjs/router";
 import { Icon, type IconName } from "./icons";
-import { RmButton, RmIconButton, RmProgress, RmTag } from "./rm/controls";
+import { RmButton, RmIconButton, RmProgress } from "./rm/controls";
 import { tasksStore } from "../stores/tasks";
 import { launchStore } from "../stores/launch";
 import { instancesStore } from "../stores/instances";
 import { mcpStore } from "../stores/mcp";
-import { uiStore, toast, confirmDanger } from "../stores/ui";
+import { uiStore, confirmDanger } from "../stores/ui";
 import { t } from "../i18n";
 import { formatBytes, groupDigits, relativeTime } from "../lib/format";
 import type {

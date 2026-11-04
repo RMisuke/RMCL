@@ -6,7 +6,7 @@
 import type { JSX } from "solid-js";
 import { Show, For, createMemo, createSignal, createEffect, onCleanup } from "solid-js";
 import { Icon } from "./icons";
-import { RmButton, RmIconButton, RmInput, RmTag } from "./rm/controls";
+import { RmButton, RmIconButton, RmInput } from "./rm/controls";
 import { launchStore } from "../stores/launch";
 import { instancesStore } from "../stores/instances";
 import { aiStore } from "../stores/ai";
