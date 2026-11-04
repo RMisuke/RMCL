@@ -9,9 +9,9 @@ import { useNavigate, useSearchParams } from "@solidjs/router";
 import { PageHeader } from "../components/PageHeader";
 import { RmButton, RmIconButton, RmInput, RmSelect, RmTag, RmProgress } from "../components/rm/controls";
 import { RmDialog } from "../components/rm/overlays";
-import { RmSideTabs, RmListRow, RmEmptyState, RmErrorState, RmCard, RmFieldRow, RmSkeleton } from "../components/rm/surfaces";
+import { RmSideTabs, RmListRow, RmEmptyState, RmErrorState, RmCard, RmSkeleton } from "../components/rm/surfaces";
 import { VirtualList } from "../components/rm/VirtualList";
-import { versions, instances, gameDirectories, modLoader, mods, external } from "../ipc/api";
+import { instances, gameDirectories, mods, external } from "../ipc/api";
 import type {
   VersionInfo,
   ReleaseType,
@@ -31,7 +31,7 @@ import { t } from "../i18n";
 import type { TranslationKey } from "../i18n/locales/messages";
 import { abbreviateCount, formatBytes, formatDate, initialOf } from "../lib/format";
 import { versionTypeIcon, loaderIcon } from "../lib/mcIcons";
-import { LOADER_CARDS, loaderLabel, normalizeLoaderId } from "../lib/loaders";
+import { loaderLabel, normalizeLoaderId } from "../lib/loaders";
 import { useHashTab } from "../lib/useHashTab";
 import { Icon } from "../components/icons";
 import {
@@ -336,39 +336,6 @@ function InstallWizard(): JSX.Element {
     setInstalling(false);
     setStep(5);
     void instancesStore.refresh(true);
-  }
-
-  /** 从 Modrinth 拉取与游戏版本匹配的 Fabric API 并装入实例（附加选项）。 */
-  async function installFabricApi(key: string, gameVersion: string): Promise<void> {
-    const loader = loaderType();
-    if (loader !== "fabric" && loader !== "quilt") {
-      toast({ message: t("download.wizard.fabricApi.skipped"), tone: "info" });
-      return;
-    }
-    const search = await mods.search("fabric-api", gameVersion, "fabric", 1, 10);
-    const hit = search.ok
-      ? (search.data.hits.find((h) => h.slug === "fabric-api") ?? search.data.hits[0])
-      : null;
-    if (!hit) {
-      toast({ message: t("download.wizard.fabricApi.notFound"), tone: "error" });
-      return;
-    }
-    const vers = await mods.getVersions(hit.id);
-    const list = vers.ok ? vers.data : [];
-    const mv =
-      list.find((v) => v.game_versions.includes(gameVersion) && v.loaders.includes("fabric")) ??
-      list[0];
-    if (!mv) {
-      toast({ message: t("download.wizard.fabricApi.notFound"), tone: "error" });
-      return;
-    }
-    const inst = await mods.install(key, mv);
-    toast({
-      message: inst.ok
-        ? t("download.wizard.fabricApi.installed", { version: mv.version_number })
-        : inst.error.message,
-      tone: inst.ok ? "success" : "error",
-    });
   }
 
   const defaultName = createMemo(() => {
