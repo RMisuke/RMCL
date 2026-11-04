@@ -271,11 +271,18 @@ fn main() {
                 });
             },
         )
+        // Single-instance must be registered before every other plugin: a second
+        // launch forwards its argv/cwd here and exits instead of opening another
+        // window on the same data root.
+        .plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| {
+            if let Some(window) = app.get_webview_window("main") {
+                let _ = window.show();
+                let _ = window.set_focus();
+            }
+        }))
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
-        // P2-25：启用自动更新（需 release CI 生成 latest.json + 签名密钥）
-        .plugin(tauri_plugin_updater::Builder::new().build())
         .setup(|app| {
             let data_dir = paths::default_data_dir();
             let app_handle = app.handle().clone();

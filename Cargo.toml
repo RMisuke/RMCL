@@ -35,7 +35,7 @@ tokio-util = { version = "0.7", features = ["rt"] }
 async-trait = "0.1"
 
 # HTTP
-reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json", "stream", "gzip", "brotli"] }
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json", "stream", "gzip"] }
 # MCP 服务器（ADR-013 S4/S5）：复用 reqwest 依赖树中的 hyper 1.x，启用 server 端，
 # 不引入 axum/tower 全家桶（体积红线 ADR-011）。
 hyper = { version = "1", default-features = false, features = ["http1", "server"] }
@@ -90,8 +90,8 @@ ts-rs = { version = "10", features = ["serde-json-impl", "chrono-impl"] }
 # muda/tray-icon from the release link).
 tauri = { version = "2", features = ["macos-private-api", "protocol-asset"] }
 tauri-build = { version = "2" }
-tauri-plugin-updater = "2"
 tauri-plugin-process = "2"
+tauri-plugin-single-instance = "2"
 tauri-plugin-opener = "2"
 tauri-plugin-dialog = "2"
 

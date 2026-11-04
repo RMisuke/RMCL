@@ -29,6 +29,7 @@
     ],
     "macOSPrivateApi": true,
     "security": {
+      "csp": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' asset: http://asset.localhost rmcccplugin: http://rmcccplugin.localhost data: blob:; media-src 'self' asset: http://asset.localhost rmcccplugin: http://rmcccplugin.localhost blob:; font-src 'self' data: asset: http://asset.localhost rmcccplugin: http://rmcccplugin.localhost; connect-src 'self' ipc: http://ipc.localhost; frame-src rmcccplugin: http://rmcccplugin.localhost",
       "assetProtocol": {
         "enable": true,
         "scope": []
@@ -53,16 +54,5 @@
       "icons/icon.icns",
       "icons/icon.ico"
     ]
-  },
-  "plugins": {
-    "updater": {
-      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDU5OEEwODEyQjJDMUQxQ0MKUldUTTBjR3lFZ2lLV1hlbUFsOFR2cGRqOXdqSE9Mb3h3WGtJbjNrR00vZXcyWGV6RWhkVXlhNmsK",
-      "endpoints": [
-        "https://github.com/<owner>/<repo>/releases/latest/download/latest.json"
-      ],
-      "windows": {
-        "installMode": "passive"
-      }
-    }
   }
 }

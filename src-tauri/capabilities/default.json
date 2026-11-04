@@ -17,9 +17,6 @@
     "core:window:allow-close",
     "core:event:default",
     "core:event:allow-listen",
-    "core:event:allow-emit",
-    "process:default",
-    "dialog:allow-open",
-    "updater:default"
+    "core:event:allow-emit"
   ]
 }
