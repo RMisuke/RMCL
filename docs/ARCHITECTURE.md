@@ -1737,6 +1737,7 @@ strategy:
 ```
 `SNGL` is resolved before `settings.json` is read, so the portable switch cannot live in the settings file it is trying to locate. Legacy `config/launcher-settings.json`, `state/launcher-state.json` and `user-settings.json` are merged into `settings.json` and archived under `backup/pre-sngl/` on first launch. macOS keeps WKWebView's own cache in the OS location; Windows WebView2 is redirected into `cache/webview2`.
 
+```
 {game_dir}/                          # Any registered game root (managed or external)
 ├── versions/
 │   └── 1.20.4-fabric/
@@ -1877,20 +1878,22 @@ async fn test_install_pipeline_calls_download() {
 
 ### 17.1 Type Generation (ts-rs)
 
-All IPC-related Rust structs derive `TS`, build script auto-generates TypeScript types：
+All IPC-related Rust structs derive `TS`；类型由 `src-tauri/src/bindings.rs` 集中导出（不是 build.rs）：
 
 ```rust
 // Every IPC type derives TS
 #[derive(Debug, Serialize, Deserialize, TS)]
 #[ts(export)]
-pub struct Profile { ... }
+pub struct InstanceKey { ... }        // ADR-016：实例即版本目录，无 Profile UUID
 
 #[derive(Debug, Serialize, Deserialize, TS)]
 #[ts(export)]
 pub struct IpcError { ... }
 
-// build.rs in src-tauri triggers ts-rs export
-// Output: src/ipc/types.ts (auto-generated, gitignored)
+// bindings.rs::generate_types() 逐个调用 ts::<T>() 拼接（实测 172 处），
+// write_types_file()（debug 构建启动时由 main.rs:235 调用）写入
+// src/ipc/types.ts —— 该文件入库跟踪，不是 gitignored；
+// CI 用 `git diff --exit-code src/ipc/types.ts` 断言其与后端一致。
 ```
 
 ### 17.2 Event & Error Constants
