@@ -372,6 +372,7 @@ pub struct JavaRequirement {
 // 1.17        → Java 16
 // 1.18 – 1.20.4 → Java 17
 // 1.20.5+     → Java 21
+```
 
 #### 版本继承合并与规则求值的统一语义（2026-10-25 审计批次 3 定版）
 
@@ -411,6 +412,30 @@ pub struct JavaRequirement {
 - `compatibility::applies_to_environment`（清单可见性过滤）语义不同且保留：
   任一规则命中即视为当前平台可见（用于索引里隐藏不支持平台的快照）。
 
+**已折叠版本（HMCL / PCL / MultiMC 形态）与 natives 归类（2026-11-05 定版）**
+
+第三方启动器安装出来的整合包版本 JSON 常是**已折叠的独立版本**：没有 `inheritsFrom`，
+顶层 `mainClass` / `libraries` / `arguments` 已是合并结果，`patches` 只为编辑与回写保留。
+`DefaultGameRepository` 用 `is_folded_standalone(manifest)` 识别这种形态（无 `inheritsFrom`
+且 `main_class`、`libraries` 非空，且有 `arguments` 或 `minecraft_arguments`）：
+
+- 折叠版本的 `patches` **只进入 `standalone` 视图**（供 loader 检测/回写），
+  **不参与 `launch` 合并**。否则会二次追加参数：`--add-opens` 的去重只去重值、
+  不去重可重复 flag，结果是 JVM 收到没有模块名的孤立 `--add-opens` 直接以
+  `Error: --add-opens requires modules to be specified` 退出，game args 同时整体翻倍。
+- MCBBS 整合包的额外库补丁（`crates/rmccc-core/src/modpack.rs::append_extra_libraries`）
+  在写入 patch 的**同时折叠进顶层 `libraries`**（按 `name` 去重），保证跳过 patch 后不丢 classpath 条目。
+- `libraries::collect_classpath` **按解析后的 jar 路径去重**：MultiMC 形态会把同一个库写成
+  两条（纯 artifact + 带 `classifiers` 的 natives），重复条目会让 Forge 的
+  `BootstrapLauncher` / `UnionFileSystem` 以 `Duplicate key …` 崩溃。
+- natives 的 JAR 选择只有一个入口 `libraries::native_classifier_for(lib, platform, libs_dir)`，
+  classpath 组装与 `rmccc-launch::natives::decompress_natives` 共用：先按
+  `PlatformDescriptor::native_classifier_candidates()` 优先选取**已下载到本地的 arch 变体**
+  （如 `natives-macos-arm64`），否则退回清单声明的第一个本平台 classifier。
+  该 JAR 同时进 classpath——LWJGL 3 只从 classpath 用 `SharedLibraryLoader` 解出本地库，
+  不读 `java.library.path`；只解压到 natives 目录不足以让 arm64 JVM 加载成功。
+
+```rust
 /// Mod metadata
 pub struct ModInfo {
     pub id: String,
