@@ -139,8 +139,8 @@ RMCL/
 │   ├── tauri.conf.json
 │   ├── capabilities/default.json
 │   └── src/
-│       ├── main.rs               # Entry + generate_handler! (133 commands)
-│       ├── bindings.rs           # ts-rs export of 19 types → src/ipc/types.ts
+│       ├── main.rs               # Entry + generate_handler! (135 commands)
+│       ├── bindings.rs           # ts-rs export of 172 types → src/ipc/types.ts
 │       ├── state.rs              # AppState (Tokio-backed)
 │       ├── events.rs             # Event constants + ThrottledEmitter
 │       └── commands/             # IPC command handlers
@@ -1412,13 +1412,13 @@ User clicks "Launch" on a profile
 
 ## 11. IPC Command Table
 
-133 commands, all defined in `src-tauri/src/commands/` and registered via
+135 commands, all defined in `src-tauri/src/commands/` and registered via
 `IPC_COMMANDS` + `generate_handler!` in `src-tauri/src/handlers.rs`
-（**2026-11-04 实测**：`#[tauri::command]` 133 = `IPC_COMMANDS` 133 = `generate_handler!` 133 =
-`src/ipc/api.ts` 的 133 处 `safeInvoke`；数量由 `src-tauri/src/ipc_tests.rs:168` 的计数断言守护。
+（**2026-11-05 实测**：`#[tauri::command]` 135 = `IPC_COMMANDS` 135 = `generate_handler!` 135 =
+`src/ipc/api.ts` 的 135 处 `safeInvoke`；数量由 `src-tauri/src/ipc_tests.rs:170` 的计数断言守护。
 ADR-013 迁移后 agent_* 9 条已由 ai_* 5 条 + mods 纯逻辑 2 条取代，S4/S5 再加 mcp_* 9 条；
 其后的实例管理 v2、整合包安装、统一任务中心、Background 壁纸库与 SNGL 数据根又净增到 132，
-新增 `auth_set_offline_uuid` 后为 133。
+加 `auth_set_offline_uuid` 为 133，初次启动引导 `onboarding_probe` / `onboarding_complete` 为 135。
 下表按 2026-10-23 基线列出，新增命令的分组清单见 [`ui-design/11_IPC_COVERAGE.md`](ui-design/11_IPC_COVERAGE.md)）。
 
 | Command | Handler | Description |
