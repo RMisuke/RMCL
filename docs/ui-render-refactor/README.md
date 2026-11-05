@@ -49,7 +49,7 @@
 
 ## 边界（本次不动）
 
-页面/业务组件、路由、stores、IPC（132 条）契约、主题 JSON schema、插件 manifest、
+页面/业务组件、路由、stores、IPC（135 条）契约、主题 JSON schema、插件 manifest、
 Rust 后端、视频转码代理、skinview3d——**全部不动**。重构严格限定在特效/渲染底层。
 
 ## 与仓库其它文档的关系

@@ -16,7 +16,7 @@
 | 事实 | 证据（2026-11-03 本机实测） |
 |---|---|
 | 逻辑运行时与插件 crate 仍在 workspace | `Cargo.toml:16,18,23`（`crates/rmccc-plugin`、`crates/rmccc-logic`、`src-logic-host`） |
-| 插件 IPC 全量注册并被契约测试锁死 | `src-tauri/src/handlers.rs:110-124`（15 条 `plugin_*`）；总数 132 由 `src-tauri/src/ipc_tests.rs:168` 断言 |
+| 插件 IPC 全量注册并被契约测试锁死 | `src-tauri/src/handlers.rs:113-130`（18 条 `plugin_*`，2026-11-05 实测）；总数 135 由 `src-tauri/src/ipc_tests.rs:170` 断言 |
 | 隔离 UI scheme 仍在应用入口生效 | `src-tauri/src/main.rs` 的 `UI_SCHEME` 注册 |
 | 第三方 SDK 与样例插件在增长 | `plugin-sdk/packages/{plugin-api,plugin-ui}`；`examples/plugins/` 实有 **4** 个（`server-dashboard`、`theme-midnight`、`theme-aurora`、`theme-grass`） |
 | 插件卡片契约在收缩提案**之后**被设计并实施 | [`../ui-design/14_CARD_SYSTEM.md`](../ui-design/14_CARD_SYSTEM.md)（2026-10-31），manifest `maxSize` + Host Bridge `tasks.list` / `launch.status` / `server.status` |
@@ -40,7 +40,7 @@ Windows 侧隔离 UI 与 helper 原生化验收——仍 `deferred / release-blo
 - 优点：与 `ARCHITECTURE.md`、插件平台指南、`roadmap/04–07` 的 ✅ 结论一致；不销毁已实施的卡片契约与 SDK；
   逻辑插件继续走独立 helper 进程（ADR-007），主可执行不被 wasmi 污染。
 - 缺点：保留 helper 的打包链路（`bundle.externalBin` + `pnpm prep:host`）与攻击面；Windows 需要
-  `SNGL-logic-host.exe` 原生验收；插件 IPC 占 132 条中的 15 条，维护面大。
+  `SNGL-logic-host.exe` 原生验收；插件 IPC 占 135 条中的 18 条（度量：`IPC_COMMANDS` 里 `plugin_` 前缀计数），维护面大。
 
 **B. 收缩到「主题 + iframe 卡片」（10-28 方案 B）。**
 - 优点：删掉 wasmi/ABI/supervisor 与 SDK 协议面。

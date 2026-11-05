@@ -169,7 +169,7 @@ watchdog + 帧回调 + focus/visibility 恢复逻辑长期持有定时器与回�
 
 ## 6. 审计边界（本次不动的东西）
 
-- 页面/业务组件、路由、stores、IPC（132 条）契约：**不动**
+- 页面/业务组件、路由、stores、IPC（135 条）契约：**不动**
 - 主题 JSON schema（`schemas/theme.schema.json`）与插件 manifest 契约：**不动**（见 [06](06_THEME_EFFECTS.md)）
 - skinview3d 皮肤查看器：仅沿用已有的 `IntersectionObserver` + `visibilitychange` 暂停，不重写
 - Rust 后端、视频转码代理（后端已做 H.264 hardware-safe 转换）：**不动**

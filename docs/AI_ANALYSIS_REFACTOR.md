@@ -285,7 +285,8 @@ pub fn digest_log(raw: &str, budget_chars: usize) -> Digest;
 | `LlmEvent` | 增 `Cancelled` 变体（crate 内部） | 无 |
 | `AppState` | `ai_cancels`→`ai_analyses`（含 profile/run）；新增 `runs` | 无 |
 
-> **IPC 命令总数保持 133**（`ipc_tests.rs:168` 断言不变）；仅 payload/类型字段扩展，均为 additive。
+> **本轮 IPC 命令总数不变**（重构当时为 133 条；2026-11-05 现为 **135**，断言在
+> `src-tauri/src/ipc_tests.rs:170`）；仅 payload/类型字段扩展，均为 additive。
 
 ---
 
