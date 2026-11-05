@@ -1,6 +1,9 @@
-# RMCCC 项目现状与继续开发交接（2026-11-04 更新）
+# RMCCC 项目现状与继续开发交接（2026-11-05 更新）
 
 > 本文档是**变更记录与交接入口**，按轮次记录"这轮改了什么"。
+> **读法**：想知道"现在到底什么样"→ 先看 §1 结论速览（2026-11-05 实测刷新），
+> 再往下看 §0 最新几轮；§2–§9 是 2026-10-22/23 的实测快照，**仅作问题溯源**，
+> 其中的数字与"未修复"措辞均已过期。
 > **完整架构说明 + 功能矩阵 + 技术债台账**见 [`audits/AUDIT_2026-10-20.md`](audits/AUDIT_2026-10-20.md)（横切全景，不按轮次组织）。
 > 历史审计与整改台账仍然有效作为**问题溯源**（见 §6），但其"当前状态"结论已过期；
 > §6–§9 为早期交接快照，现状一律以上方轮次记录为准。
@@ -9,6 +12,72 @@
 ---
 
 ## 0. 更新记录
+
+**2026-11-05（文档口径对齐 + 现状速览重测）**：
+
+1. **背景**：连续四轮修复（CSP 头像、Windows DWM 直角、产物命名 SNGL、折叠版本
+   classpath/natives）之后，仓库里多处数量仍停在 2026-11-03/11-04 的口径（IPC 写作
+   132 或 133、helper 名写作 `rmccc-logic-host.exe`、crate 分层里还挂着已删除的
+   `rmccc-profile`）。本轮只动文档，不改行为。
+2. **实测口径**（度量方式随数字写入文档，全部本机命令得出）：
+   - IPC **135 条**：`#[tauri::command]`、`handlers::IPC_COMMANDS`、`generate_handler!`、
+     `src/ipc/api.ts` 的 `safeInvoke` 四个来源各 135，计数断言在 `src-tauri/src/ipc_tests.rs:170`。
+   - 事件：Rust `events.rs` 15 个常量 = 前端 `src/ipc/events.ts` 15 项（早期"缺 1 个"已闭合）。
+   - ts-rs：`src-tauri/src/bindings.rs` 有 **172** 处 `ts::<T>()`，导出的
+     `src/ipc/types.ts` 有 **172** 个 `export interface/type/enum`（两数相等即"无孤儿类型"）；
+     该文件**入 git 跟踪**，由 `main.rs:235` 的 `write_types_file()` 在 debug 构建写盘、
+     CI `.github/workflows/ci.yml:82-88` 用 `git diff --exit-code` 断言新鲜度
+     （旧文档写"24 类型/439 行"、`ARCHITECTURE.md` §17 还写成"gitignored + build.rs 触发"，均已更正）。
+   - 规模：Rust 249 文件 / 79,342 行（workspace 21 成员）；前端 `src/` 104 个 `.ts/.tsx` / 25,907 行。
+   - 产物：`SNGL.app` 13M，`Contents/MacOS/SNGL` **10,683,824 B（10.19 MiB）**，
+     `SNGL-logic-host` 1,116,304 B（ADR-011 红线 20 MiB，余量约 9.4 MiB）。
+3. **数量回填**：`AGENTS.md`、`docs/README.md`（含 `ui-design` 份数 16 → 18、IPC 权威行号）、
+   `docs/ARCHITECTURE.md` §11 与目录树注释、
+   `docs/ui-design/{README,00_OVERVIEW,11_IPC_COVERAGE}`、`docs/ui-render-refactor/{README,00_CURRENT_AUDIT}`、
+   `docs/audits/AUDIT_2026-10-23.md`、`docs/AI_ANALYSIS_REFACTOR.md`、
+   `docs/adr/ADR-022`（插件 IPC 改为"135 条中的 18 条"，`handlers.rs:113-130`，
+   度量：`IPC_COMMANDS` 里 `plugin_` 前缀计数）。
+   `docs/audits/AUDIT_2026-10-20.md` 的口径校正横幅补三条：P2-7（`strip` 失效）已在 10-23 台账销账、
+   release 产物路径改名 `target/release/SNGL`、updater 插件已下线。
+4. **roadmap 锚点重测**：`docs/roadmap/00_ROADMAP_OVERVIEW.md` §4 的 workspace（19 → **21** 成员，
+   `cargo metadata` packages 计数）、测试（654 → **765**；前端 32 → **80**）、
+   IPC（97 → **135**）、体积（新增行）、发布与环境回归两行按实况改写；
+   `docs/roadmap/09_phase7_distribution.md` 的 updater / strip 两行、
+   `docs/DEVELOPMENT_PLAN.md` Phase 5 引言同步"updater 已下线"更正。
+5. **设计回写**（AGENTS.md 核心约束 1「代码实现必须与设计文档一致」）：
+   `ARCHITECTURE.md` 的「版本继承合并与规则求值的统一语义」新增
+   **「已折叠版本（HMCL / PCL / MultiMC 形态）与 natives 归类（2026-11-05 定版）」**小节，
+   把上一轮的两处修复固化为口径：折叠版本 `patches` 只进 `standalone` 视图、MCBBS 额外库
+   同时折叠进顶层 `libraries`、`collect_classpath` 按 jar 路径去重、
+   `native_classifier_for` 单入口优先 arch 变体且 natives JAR 必须进 classpath
+   （LWJGL 3 不读 `java.library.path`）。
+6. **本文自我整理**：§1 结论速览按 2026-11-05 重测整表替换；§5.1 crate 分层按
+   `find | xargs wc -l` 重测（补齐 tasks/modpack/instance/platform/plugin/dashboard/logic/llm/agent
+   与 `src-logic-host`，删除已不存在的 `rmccc-profile`）；§5.3 IPC 面实测重写；
+   §2 起加过期横幅并在文首声明读法（现状 = §1 + §0 顶部轮次；§2–§9 仅溯源）；
+   标题日期改 2026-11-05。
+7. **渲染缺陷修复（`ARCHITECTURE.md`）**：§15.1 的 `{game_dir}/` 目录树**漏了开栏围栏**，
+   导致其后从「### 15.2 Instance Settings Schema」到文末（§16 测试、§17 工程规范、§18 阶段、
+   §19 决策、§25 AI/MCP、§26 壁纸引擎）整体被吞进一个代码块渲染。补开栏后全文围栏数
+   105 → **106（配平）**，`awk` 复扫不再有 markdown 标题落在围栏内。
+   同轮把 §3.3 里一段被误包进 `rust` 代码块的散文（2026-10-25「版本继承合并与规则求值的统一语义」
+   定版说明，含本轮新增的折叠版本/natives 小节）拆回 fenced code + prose 两段。
+8. **门禁**（本轮实测）：`cargo fmt --all -- --check` ✅、
+   `cargo clippy --workspace --all-targets -- -D warnings` ✅、
+   `cargo test --workspace` ✅ **765 passed / 0 failed / 3 ignored**、
+   `pnpm typecheck` ✅、`pnpm test` ✅ **80 passed**（11 文件）、`pnpm sdk:test` ✅ **14 passed**。
+9. **仍待办（未新增能力，仅登记）**：
+   - `ui-design/11_IPC_COVERAGE.md` 的 **39 条**未补矩阵行（清单见该文文首）；
+   - `ARCHITECTURE.md` §11 的命令表体仍是 2026-10-23 基线（表头已标注，逐命令回填未做）；
+   - `docs/audits/AUDIT_2026-10-20.md` 的 §1/§15 正文保留 2026-10-22 数值（按"冻结快照 + 顶部横幅"处理，不逐处改写）；
+   - `.github/workflows/release.yml` 仍在注入 `TAURI_SIGNING_PRIVATE_KEY` 并期望 tauri-action 产出
+     `latest.json`，但 updater 插件已下线 → 残留配置，待"是否恢复自动更新"决策后一并清理
+     （本轮未动 CI）；
+   - Windows 原生验收 **9 项** release-blocked
+     （[`audits/AUDIT_2026-11-01_WINDOWS.md`](audits/AUDIT_2026-11-01_WINDOWS.md) §5）；
+   - 前端组件测试仍为 **0**（只有 lib/store 级单测）；
+   - `DEVELOPMENT_PLAN.md` 的 Phase 完成态回填停在 2026-10-20（AGENTS.md 已声明不作为进度依据）；
+   - `../plans/` 三份 HMCL 对标计划全仓零引用，归档去向待决（`docs/README.md` 已登记）。
 
 **2026-11-04（HMCL/PCL 折叠版本启动回归）**：
 
@@ -1821,29 +1890,40 @@ Game repository refreshed game_dir=.../instances instances=1        ← 修复 1
 
 ---
 
-## 1. 结论速览
+## 1. 结论速览（2026-11-05 实测刷新）
 
 | 维度 | 实测结论 |
 |------|----------|
-| 编译 | `cargo check --workspace --all-targets` **通过**；clippy 无 warning |
-| 前端类型 | `pnpm typecheck` **通过** |
-| CI lint 三门禁 | `cargo fmt --check` / `clippy --all-targets -D warnings` / `clippy --lib --bins -D clippy::panic -D clippy::unwrap_used` **全部本地通过** |
-| 测试 | **617 passed / 0 failed**（2026-10-22 全量复跑；插件 106 项 + Dashboard 17 项 + 逻辑运行时 8 单测与 9 项 helper spawn 集成 + Agent 63 项 + bundle 6 项）；`pnpm sdk:test` **14 项**全过 |
-| 版本控制 | HEAD = `a7a4f57`；工作树干净（Phase 0–5 均已按主题提交） |
-| 发布体积 | GUI 未剥离 12,139,832 B（11.58 MiB）/ 手动 strip **8,346,816 B（7.96 MiB）**；CLI 未剥离 6,523,016 B / 手动 strip 4,701,256 B（4.48 MiB）；逻辑 helper（独立）**2.25 MiB**（ADR-011：主可执行 stripped < 10 MiB ✅；`strip = true` 仍失效，P2-7） |
-| 代码规模 | Rust **200 文件 / 50,872 行**（含 `rmccc-logic`、`src-logic-host` 与 `rmccc-agent`）；前端 22 文件 / 7,171 行；SDK 19 文件 / 1,306 行（详见 [`audits/AUDIT_2026-10-20.md`](audits/AUDIT_2026-10-20.md)） |
-| 文档同步 | `ARCHITECTURE.md` 新增 §25（Agent 平台）；ADR-002–007/009/010/011 accepted，ADR-001/012 仍 proposed |
-| 阶段判断 | **Phase 0–5 完成；Phase 6 进行中**（6.1 LLM adapter / 6.2 凭据 / 6.3 会话事件流 / 6.6 只读工具完成；6.5 loop+审批 与 6.7 隐私待做）；Phase 7 未开始 |
+| 分支 / HEAD | `ui/home-dock-concept`，HEAD `04587be`（MultiMC classpath + natives）；§0 顶部两轮已推 GitHub |
+| Rust 测试 | `cargo test --workspace` **765 passed / 0 failed / 3 ignored**（46 个 test binary；度量：`grep -E "^test result:"` 累加） |
+| 前端测试 | `pnpm test` **80 passed**（11 文件；`vitest run` 汇总行） |
+| 格式门禁 | `cargo fmt --all -- --check` ✅ |
+| IPC 面 | **135 条**（`#[tauri::command]` = `IPC_COMMANDS` = `generate_handler!` = `src/ipc/api.ts` 的 `safeInvoke` 各 135；断言 `src-tauri/src/ipc_tests.rs:170`）。详见 §5.3 |
+| 产物命名 | 主可执行 `SNGL`（macOS `Contents/MacOS/SNGL`、Windows `SNGL.exe`）；helper `SNGL-logic-host`；crate/包名仍是 `rmccc` / `rmccc-logic-host` |
+| 发布体积 | `SNGL.app` 13M；`Contents/MacOS/SNGL` **10,683,824 B（10.19 MiB）**，`stat -f %z` 实测，低于 ADR-011 的 20 MiB 红线；helper 1,116,304 B（`externalBin`，不计入主可执行） |
+| 代码规模 | Rust **249 文件 / 79,342 行**（`crates/` + `src-tauri` + `src-logic-host` + `src-cli`）；前端 `src/` **104 个 `.ts/.tsx` / 25,907 行**（`find … \| xargs wc -l`） |
+| 本机实例 | `/Volumes/APPLE 1TB/Game/MC/.minecraft/versions` **14 个**；全部 dry-run 无孤立 flag、classpath/module path 无重复，`java @args -version` 退出 0（2026-11-04 实测） |
+| 阶段判断 | Phase 0–5 交付；Phase 6（AI/MCP）按 ADR-013 收敛为「轻量 AI + 外部 Agent 经 MCP」，`ai_*` 5 + `mcp_*` 9 已落地；Phase 7（签名/公证/分发）未开始 |
 
 **最重要的三个判断**：
 
-1. **结构债已清偿**：pipeline 单一编排、平台适配层、loader 单体系、`context.rs` 93 行、IPC 契约测试、ADR-002 生效值单一来源——Phase 1 全部验收项完成。
-2. **插件平台第一阶段已交付**：Manifest v1 + `.rmcpkg` 事务 + 生命周期 + 权限/审计 + 配置 schema + CLI + `/plugins` 页面；损坏插件隔离、安装失败回滚、升级不扩张权限均有测试。
-3. **剩余缺口是"生态与分发"而非地基**：Agent 平台（Phase 6）、签名/目录/公证（Phase 7），以及前端组件测试（当前 0）。Dashboard 布局/主题（Phase 3）、隔离 UI（Phase 4）、逻辑运行时（Phase 5）均已交付。
+1. **地基与结构债已清偿**：pipeline 单一编排、平台适配层、loader 单体系、IPC 契约测试、
+   版本合并单权威实现（`rmccc-version::merge`）均在；本轮把 HMCL/PCL/MultiMC 形态的
+   **第三方整合包**纳入同一条解析链（折叠版本不二次套用 patches + classpath 按 jar 路径去重
+   + natives JAR 进 classpath 且优先 arch 变体），设计口径已回写 `ARCHITECTURE.md`。
+2. **插件平台已定案保留**（ADR-022）：隔离 UI + 逻辑 helper（ADR-007）双进程形态不变；
+   `SNGL-logic-host` 缺席只影响逻辑插件，主程序与不装插件的场景不受影响。
+3. **真正的欠账是"验收"而非"功能"**：Windows 原生验收 9 项仍是 release-blocked
+   （[`audits/AUDIT_2026-11-01_WINDOWS.md`](audits/AUDIT_2026-11-01_WINDOWS.md) §5，
+   含窗口 DWM 圆角/边框、`icon.ico`、`icacls`、Java 探测、日志编码、壁纸 H.264、
+   进程树清理、长路径与中文空格路径），macOS 视觉走查与前端组件测试（当前 0）同样待补。
 
 ---
 
 ## 2. 本次实测验证结果
+
+> ⚠️ **快照（2026-10-22）**：本节与 §3–§9 是当时的实测记录，数字已被 §1 与 §0 轮次覆盖，
+> 保留只为问题溯源（例如"文档自述全绿但实际为红"的成因）。
 
 执行环境（本机 macOS / Apple Silicon，Homebrew rustup，工具链 rustc 1.98.1）：
 
@@ -1949,21 +2029,33 @@ $ rmcli -o plain --version      # -o 也被忽略
 
 ## 5. 架构现状（as-built）
 
-### 5.1 crate 分层（严格 DAG，无环）
+### 5.1 crate 分层（严格 DAG，无环；2026-11-05 按 `find … -name "*.rs" | xargs wc -l` 重测）
+
+workspace 成员 **21 个**（18 个 `crates/*` + `src-tauri` + `src-cli` + `src-logic-host`），
+Rust 共 **249 文件 / 79,342 行**：
 
 ```
 rmccc-core（编排 + DI 容器 CoreContext）
-├── rmccc-error        0.2k 行  统一错误 + ErrorCode（snake_case，ts-rs 导出）
-├── rmccc-config       2.3k 行  $schema 版本化 / AppConfig·UserSettings / FileSaver 防抖 / paths
-├── rmccc-auth         2.9k 行  AccountID + Account/AccountFactory + AccountRepository + TokenVault
-├── rmccc-download     1.2k 行  并发下载 / Range 续传 / SHA1 / CacheRepository / DownloadProvider
-├── rmccc-version      4.4k 行  GameRepository（本地索引 + resolve 双视图）+ manifest/assets/libraries
-├── rmccc-launch       4.0k 行  DefaultLauncher（HMCL 同构命令行）+ natives/log4j/ProcessListener
-├── rmccc-modloader    5.6k 行  8 种 loader（Fabric/Forge/NeoForge/Quilt/LiteLoader/OptiFine/Cleanroom/LegacyFabric）
-├── rmccc-mods         0.5k 行  ModSource trait + Modrinth 实现
-└── rmccc-profile      0.6k 行  Profile JSON 存储（原子写）+ 继承/覆盖模型
-src-tauri  2.7k 行  46 个 IPC 命令 + AppState + 事件常量 + ts-rs 绑定导出（24 类型）
-src-cli    5.3k 行  clap 命令面 + CliContext 门面 + registry（帮助/补全）+ 统一输出信封
+├── rmccc-error        1 文件 /    273 行  统一错误 + ErrorCode（snake_case，ts-rs 导出）
+├── rmccc-tasks        1 文件 /  1,188 行  统一任务中心（TaskState/进度/历史）
+├── rmccc-config       7 文件 /  3,090 行  $schema 版本化 / AppConfig·UserSettings / FileSaver 防抖 / paths
+├── rmccc-auth        10 文件 /  2,956 行  AccountID + Account/AccountFactory + AccountRepository + TokenVault
+├── rmccc-download     2 文件 /  1,614 行  并发下载 / Range 续传 / SHA1 / CacheRepository / DownloadProvider
+├── rmccc-version     18 文件 /  5,973 行  GameRepository（本地索引 + resolve 双视图）+ merge/manifest/assets/libraries
+├── rmccc-launch      11 文件 /  4,087 行  DefaultLauncher（HMCL 同构命令行）+ natives/log4j/ProcessListener
+├── rmccc-modloader   42 文件 /  6,542 行  8 种 loader（Fabric/Forge/NeoForge/Quilt/LiteLoader/OptiFine/Cleanroom/LegacyFabric）
+├── rmccc-mods         2 文件 /    717 行  ModSource trait + Modrinth/CurseForge 实现
+├── rmccc-modpack     13 文件 /  3,469 行  整合包归档/清单后端 + 覆盖目录提取（ADR-019）
+├── rmccc-instance    10 文件 /  6,176 行  实例与目录生命周期（ADR-016，取代旧 rmccc-profile）
+├── rmccc-platform    16 文件 /  3,708 行  PlatformDescriptor：native classifier、编码、进程与路径差异
+├── rmccc-plugin      18 文件 /  9,278 行  插件 manifest/事务/权限/生命周期（ADR-022 保留）
+├── rmccc-dashboard    6 文件 /  1,944 行  布局引擎 + 主题皮肤
+├── rmccc-logic        6 文件 /  1,186 行  逻辑插件 supervisor + runner（ADR-007）
+├── rmccc-llm          4 文件 /  1,861 行  LLM adapter + 凭据
+└── rmccc-agent        4 文件 /  1,133 行  ADR-013 瘦身后的内部 AI 辅助（不做内建 Agent）
+src-tauri       37 文件 / 13,965 行  135 个 IPC 命令 + AppState + 事件常量 + ts-rs 绑定导出
+src-cli         35 文件 /  6,050 行  clap 命令面 + CliContext 门面 + registry + 统一输出信封
+src-logic-host   1 文件 /    397 行  唯一链接 wasmi 的二进制（产物 `SNGL-logic-host`）
 ```
 
 ### 5.2 关键设计（与 ARCHITECTURE.md 一致且已落地）
@@ -1971,22 +2063,25 @@ src-cli    5.3k 行  clap 命令面 + CliContext 门面 + registry（帮助/补�
 - **单一编排层**：`CoreContext` 持有全部 `dyn` provider（download / version / auth / modloader / mod source / account repo / file saver），命令层只做参数适配与输出。
   ⚠ 但 `pipeline` 的 `launch_game` / `repair_resources` / `resolve_version` **零调用方**，Tauri 侧自行复刻了安装/修复/启动——详见审计文档 §5.3、P1-3。
 - **本地磁盘为中心**：`DefaultGameRepository` 扫描 `versions/` 建索引，离线 `resolve` 出 `launch` / `standalone` 双视图；网络 `MojangVersionProvider` 只在安装时取元数据。
-- **启动链路 HMCL 同构**：`DefaultLauncher` 负责命令行生成、`natives-{platform}` 解压、log4j 提取、`.abnormal` 崩溃标记、环境变量注入、启动脚本生成。
+  折叠版本（HMCL/PCL/MultiMC 形态）不再二次套用 `patches`，见 [`ARCHITECTURE.md`](ARCHITECTURE.md) §「已折叠版本与 natives 归类」。
+- **启动链路 HMCL 同构**：`DefaultLauncher` 负责命令行生成、natives 解压、log4j 提取、`.abnormal` 崩溃标记、环境变量注入、启动脚本生成。
 - **持久化收口两条通路**：账户走 `AccountRepository`（明文 metadata + 加密 private 分离），配置/状态走 `FileSaver`（200ms 防抖）。
-- **安全**：AES-256-GCM + 本地 `.key`（Windows `icacls`）；token 经 response file 传递且**延迟**删除（JVM 解析完参数后）；capability 禁通用 `fs`/`shell`。
-- **类型桥**：ts-rs 自动生成 24 个类型到 `src/ipc/types.ts`（439 行），CI 用 `git diff` 断言其最新。
+- **安全**：AES-256-GCM + 本地 `.key`（Windows `icacls`）；token 经 response file 传递且**延迟**删除（JVM 解析完参数后）；capability 禁通用 `fs`/`shell`；主窗口 CSP（2026-11-04 补齐 `rmcccicon:` 与皮肤/图标域名）。
+- **类型桥**：ts-rs 由 `src-tauri/src/bindings.rs` 生成 `src/ipc/types.ts`（2026-11-05 实测 **172** 个 `export interface/type/enum`），CI 用 `git diff` 断言其最新。
 
-### 5.3 IPC 面实测
+### 5.3 IPC 面实测（2026-11-05 重测）
 
-- 定义 46 个 `#[tauri::command]`，注册 46 个（`src-tauri/src/main.rs`），**差集为空**。
-- **UI 可直达 27 个**（Dashboard 11 / InstanceSettings 8 / Login 3 / Settings 5）。
-- 15 个仅有 `api.ts` wrapper、无页面调用：`mod_search/get_versions/get_download_url/install`、
-  `download_pause/resume`、`auth_list_accounts/switch_account/remove_account/refresh_token`、
-  `log_get/clear`、`instance_check_completion/repair/refresh`。
-- 4 个连 wrapper 都没有：`instance_list/duplicate/rename/remove`——它们操作的是"版本 id"
-  而非 profile，属概念未收敛（审计文档 §7.4）。
-- 事件常量 Rust 侧 12 个、前端 11 个，缺 `INSTANCES_REFRESHED = "instances://refreshed"`（`src-tauri/src/events.rs:34`）。
-- `src/ipc/api.ts` 已不再手写 `SettingsUpdate` / `ProfileUpdateOpts`，改为 `Partial<ts-rs 生成类型>`（第 6 轮修复）。
+- **注册表面**：`#[tauri::command]` 135 = `handlers::IPC_COMMANDS` 135 = `generate_handler!` 135 =
+  `src/ipc/api.ts` 的 `safeInvoke` 135；由 `src-tauri/src/ipc_tests.rs:170` 的计数断言与
+  「清单 ↔ 宏注册」契约测试双重守护（度量：逐来源 `grep`/`awk` 去重计数）。
+- **界面归属**：权威矩阵见 [`ui-design/11_IPC_COVERAGE.md`](ui-design/11_IPC_COVERAGE.md)；
+  其中 **39 条**尚未在该矩阵 §1 表补行（Background 4 / 数据根 2 / 图标缓存 4 / 游戏目录 9 /
+  实例 v2 8 / 存储 2 / 整合包 3 / 单条 4 / 初次引导 2 / 离线 UUID 1）。
+  这不代表"无 UI 入口"——多数已由 `src/pages/` 七页与 stores 接线，只是矩阵行未回填。
+- **事件**：Rust 侧 `events.rs` 15 个常量 = 前端 `src/ipc/events.ts` 15 项（含
+  `INSTANCES_REFRESHED`），早期"缺 1 个"的差集已闭合。
+- 旧的 46 条口径（Dashboard 11 / InstanceSettings 8 / Login 3 / Settings 5）来自 2026-10-22 的
+  单页时代，已随实例 v2 / 整合包 / 任务中心 / 引导页重构失效，不再作为依据。
 
 ---
 
