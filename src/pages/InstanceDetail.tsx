@@ -4,7 +4,7 @@
  * field-level inherit locks, dependency scan + one-click apply (pure logic).
  */
 import type { JSX } from "solid-js";
-import { Show, For, createMemo, createSignal, createEffect, onMount, onCleanup, Switch, Match, on } from "solid-js";
+import { Show, For, createMemo, createSignal, createEffect, onMount, Switch, Match, on } from "solid-js";
 import { useParams, useNavigate } from "@solidjs/router";
 import { PageHeader } from "../components/PageHeader";
 import { DeleteInstanceDialog } from "../components/DeleteInstanceDialog";
@@ -62,7 +62,7 @@ export default function InstanceDetail(): JSX.Element {
     }
   };
   const [loaded, setLoaded] = createSignal<InstanceDetailData | null>(null);
-  const [loadError, setLoadError] = createSignal<string | null>(null);
+  const [, setLoadError] = createSignal<string | null>(null);
   const detail = createMemo(
     () => instancesStore.get(profileId()) ?? loaded()
   );

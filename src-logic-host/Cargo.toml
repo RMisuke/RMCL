@@ -3,6 +3,11 @@ name = "rmccc-logic-host"
 version = "0.1.0"
 edition = "2021"
 
+# 交付物随产品命名（Windows 上为 SNGL-logic-host.exe）。
+[[bin]]
+name = "SNGL-logic-host"
+path = "src/main.rs"
+
 # 独立 helper 进程（ADR-007）。它**不被 Tauri 主程序链接**，因此 wasmi 的体积
 # 不会计入 ADR-011 的主可执行文件门禁。
 [dependencies]

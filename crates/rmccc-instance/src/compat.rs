@@ -7,8 +7,14 @@
 //! the per-instance overlay:
 //!
 //! - RMCCC: `{data_dir}/config/game-directories.json` + `.rmccc/instance.json`;
-//! - HMCL: `config/game-directories.json` + `.hmcl/config/instance-game-settings.json`;
-//! - PCL: `PCL/Setup.ini` (`LaunchFolders`) + `versions/{id}/PCL/Setup.ini`.
+//! - HMCL 3.16+: `<hmcl-home>/config/game-directories.json` and
+//!   `user-game-directories.json`; `launcher-settings.json` holds the selected
+//!   directory ID. Pre-3.16 `hmcl.json` / `.hmcl.json` are legacy inputs
+//!   (`configurations` map + `last`).
+//! - PCL: `<exe>/PCL/Setup.ini` holds `LaunchFolderSelect`; the custom folder
+//!   list (`LaunchFolders`) lives in `HKCU\Software\PCL` (or `PCLDebug`), with
+//!   `Name>Path|…` entries. `PCL.ini` inside each game folder is a per-folder
+//!   marker, not a folder registry.
 //!
 //! This module reads the two public/other-launcher registries so users do not
 //! have to re-add their folders by hand, and inspects a folder to tell the UI
@@ -30,7 +36,7 @@ pub enum DirectorySource {
     Mojang,
     /// HMCL's `game-directories.json` (or legacy `hmcl.json`).
     Hmcl,
-    /// PCL's `PCL/Setup.ini` `LaunchFolders`.
+    /// PCL's folder registry (`HKCU\Software\PCL`) or `PCL/Setup.ini`.
     Pcl,
     /// A folder the user picked manually that is not registered yet.
     Manual,
@@ -307,7 +313,10 @@ fn mojang_locations(home: &Path, cwd: &Path) -> Vec<PathBuf> {
 
 // ── HMCL ────────────────────────────────────────────────────────────
 
-/// HMCL's config homes (new JSON stores + legacy `hmcl.json`).
+/// HMCL config homes: workspace-local (`.hmcl`) and per-user locations.
+///
+/// HMCL 3.16+ keeps the directory registry in `<home>/config/`; the legacy
+/// `hmcl.json` / `.hmcl.json` files are read only as migration inputs.
 fn hmcl_homes(home: &Path, cwd: &Path) -> Vec<PathBuf> {
     let mut out = Vec::new();
     for key in ["HMCL_USER_HOME", "HMCL_LOCAL_HOME"] {
@@ -320,46 +329,43 @@ fn hmcl_homes(home: &Path, cwd: &Path) -> Vec<PathBuf> {
     if cfg!(target_os = "macos") {
         out.push(home.join("Library/Application Support/hmcl"));
     }
+    // Windows HMCL stores its user home under %APPDATA%\.hmcl.
+    #[cfg(windows)]
+    if let Some(data) = dirs::data_dir() {
+        out.push(data.join(".hmcl"));
+    }
     out.push(home.join(".hmcl"));
     out.push(home.join(".local/share/hmcl"));
     out.push(cwd.join(".hmcl"));
     out
 }
 
-/// Read HMCL directory registries.
-///
-/// Returns `(path, name, preferred)` where `preferred` marks HMCL's currently
-/// selected directory (from `config/launcher-settings.json`).
 fn hmcl_directories(home: &Path, cwd: &Path) -> Vec<(PathBuf, String, bool)> {
-    let mut out: Vec<(PathBuf, String, bool)> = Vec::new();
+    let mut out = Vec::new();
     for hmcl_home in hmcl_homes(home, cwd) {
-        let selected = hmcl_selected_directory(&hmcl_home);
-        for relative in [
-            "config/game-directories.json",
-            "config/user-game-directories.json",
-        ] {
-            out.extend(read_hmcl_store(
-                &hmcl_home.join(relative),
-                selected.as_deref(),
-            ));
+        for hit in hmcl_hits_in_home(&hmcl_home, cwd) {
+            push_hmcl_tuple(&mut out, hit);
         }
-        // HMCL < 3.6 wrote a single `hmcl.json` with `gameDir`.
-        let legacy = hmcl_home.join("hmcl.json");
-        if let Ok(text) = std::fs::read_to_string(&legacy) {
-            if let Ok(value) = serde_json::from_str::<serde_json::Value>(&text) {
-                if let Some(path) = value.get("gameDir").and_then(|v| v.as_str()) {
-                    if !path.trim().is_empty() {
-                        out.push((PathBuf::from(path), folder_name(Path::new(path)), true));
-                    }
-                }
-            }
+    }
+    // `locateLegacyConfig()` also checks the working directory itself.
+    for filename in ["hmcl.json", ".hmcl.json"] {
+        for hit in hmcl_legacy_hits(&cwd.join(filename), cwd) {
+            push_hmcl_tuple(&mut out, hit);
         }
     }
     out
 }
 
+fn push_hmcl_tuple(out: &mut Vec<(PathBuf, String, bool)>, hit: LauncherConfigHit) {
+    let Some(path) = hit.game_dir else {
+        return;
+    };
+    let name = hit.name.unwrap_or_else(|| folder_name(path.as_path()));
+    out.push((path, name, hit.selected));
+}
+
 fn hmcl_selected_directory(hmcl_home: &Path) -> Option<String> {
-    let text = std::fs::read_to_string(hmcl_home.join("config/launcher-settings.json")).ok()?;
+    let text = read_text(&hmcl_home.join("config/launcher-settings.json"))?;
     let value: serde_json::Value = serde_json::from_str(&text).ok()?;
     value
         .get("selectedGameDirectory")
@@ -367,8 +373,32 @@ fn hmcl_selected_directory(hmcl_home: &Path) -> Option<String> {
         .map(str::to_string)
 }
 
-fn read_hmcl_store(path: &Path, selected: Option<&str>) -> Vec<(PathBuf, String, bool)> {
-    let Ok(text) = std::fs::read_to_string(path) else {
+/// Read both HMCL 3.16+ stores plus the legacy `hmcl.json` in one HMCL home.
+fn hmcl_hits_in_home(hmcl_home: &Path, resolve_base: &Path) -> Vec<LauncherConfigHit> {
+    let selected = hmcl_selected_directory(hmcl_home);
+    let mut out = Vec::new();
+    for relative in [
+        "config/game-directories.json",
+        "config/user-game-directories.json",
+    ] {
+        out.extend(read_hmcl_store(
+            &hmcl_home.join(relative),
+            resolve_base,
+            selected.as_deref(),
+        ));
+    }
+    if out.is_empty() {
+        out = hmcl_legacy_hits(&hmcl_home.join("hmcl.json"), resolve_base);
+    }
+    out
+}
+
+fn read_hmcl_store(
+    path: &Path,
+    resolve_base: &Path,
+    selected: Option<&str>,
+) -> Vec<LauncherConfigHit> {
+    let Some(text) = read_text(path) else {
         return Vec::new();
     };
     let Ok(value) = serde_json::from_str::<serde_json::Value>(&text) else {
@@ -382,26 +412,106 @@ fn read_hmcl_store(path: &Path, selected: Option<&str>) -> Vec<(PathBuf, String,
 
     list.iter()
         .filter_map(|entry| {
-            let raw_path = entry.get("path")?.as_str()?.trim();
-            if raw_path.is_empty() {
-                return None;
-            }
-            let path = PathBuf::from(raw_path);
+            let raw_path = entry.get("path")?.as_str()?;
+            let game_dir = resolve_launcher_path(raw_path, resolve_base)?;
             let id = entry.get("id").and_then(|v| v.as_str());
-            let preferred = match (id, selected) {
-                (Some(id), Some(selected)) => id == selected,
-                _ => false,
-            };
             let name = entry
                 .get("name")
                 .and_then(localized_text)
-                .unwrap_or_else(|| folder_name(&path));
-            Some((path, name, preferred))
+                .filter(|name| !name.trim().is_empty());
+            Some(LauncherConfigHit {
+                launcher: DirectorySource::Hmcl,
+                config_path: path.to_path_buf(),
+                name,
+                instance_count: count_instances(&game_dir),
+                game_dir: Some(game_dir),
+                selected: matches!((id, selected), (Some(id), Some(selected)) if id == selected),
+            })
         })
         .collect()
 }
 
-/// HMCL `LocalizedText` serializes either as a plain string or a locale map.
+/// Pre-3.16 `hmcl.json` / `.hmcl.json`:
+/// `configurations` is a map keyed by profile name; `last` selects one.
+fn hmcl_legacy_hits(path: &Path, resolve_base: &Path) -> Vec<LauncherConfigHit> {
+    if !path.is_file() {
+        return Vec::new();
+    }
+    let Some(text) = read_text(path) else {
+        return Vec::new();
+    };
+    let Ok(value) = serde_json::from_str::<serde_json::Value>(&text) else {
+        return Vec::new();
+    };
+    let selected = value.get("last").and_then(|v| v.as_str());
+    let mut out = Vec::new();
+
+    if let Some(configurations) = value.get("configurations").and_then(|v| v.as_object()) {
+        for (profile_name, profile) in configurations {
+            let Some(profile) = profile.as_object() else {
+                continue;
+            };
+            let raw_path = profile
+                .get("gameDir")
+                .or_else(|| profile.get("path"))
+                .and_then(|v| v.as_str());
+            let Some(game_dir) = raw_path.and_then(|raw| resolve_launcher_path(raw, resolve_base))
+            else {
+                continue;
+            };
+            let name = if matches!(profile_name.as_str(), "Default" | "Home") {
+                None
+            } else {
+                Some(profile_name.clone())
+            };
+            out.push(LauncherConfigHit {
+                launcher: DirectorySource::Hmcl,
+                config_path: path.to_path_buf(),
+                name,
+                instance_count: count_instances(&game_dir),
+                game_dir: Some(game_dir),
+                selected: selected == Some(profile_name.as_str()),
+            });
+        }
+    }
+
+    // Very old configs stored a single `gameDir` at the top level.
+    if out.is_empty() {
+        if let Some(game_dir) = value
+            .get("gameDir")
+            .and_then(|v| v.as_str())
+            .and_then(|raw| resolve_launcher_path(raw, resolve_base))
+        {
+            out.push(LauncherConfigHit {
+                launcher: DirectorySource::Hmcl,
+                config_path: path.to_path_buf(),
+                name: None,
+                instance_count: count_instances(&game_dir),
+                game_dir: Some(game_dir),
+                selected: false,
+            });
+        }
+    }
+
+    out
+}
+
+/// HMCL home(s) that belong to a portable install rooted at `base`.
+fn hmcl_configs_for_base(base: &Path) -> Vec<LauncherConfigHit> {
+    let mut out = hmcl_hits_in_home(&base.join(".hmcl"), base);
+    if out.is_empty() {
+        for filename in ["hmcl.json", ".hmcl.json"] {
+            let legacy = base.join(filename);
+            out = hmcl_legacy_hits(&legacy, base);
+            if !out.is_empty() {
+                break;
+            }
+        }
+    }
+    dedupe_game_dirs(out)
+}
+
+/// HMCL's `LocalizedText` serializes either as a plain string or a locale map.
 fn localized_text(value: &serde_json::Value) -> Option<String> {
     if let Some(text) = value.as_str() {
         return Some(text.to_string());
@@ -413,6 +523,63 @@ fn localized_text(value: &serde_json::Value) -> Option<String> {
         }
     }
     map.values().find_map(|v| v.as_str()).map(str::to_string)
+}
+
+fn resolve_launcher_path(raw: &str, base: &Path) -> Option<PathBuf> {
+    let raw = raw.trim();
+    if raw.is_empty() {
+        return None;
+    }
+    let path = PathBuf::from(raw);
+    Some(if is_absolute_like(raw) {
+        path
+    } else {
+        base.join(path)
+    })
+}
+
+/// `Path::is_absolute` does not recognize `C:\…` when inspecting a Windows
+/// config on another platform.
+fn is_absolute_like(raw: &str) -> bool {
+    raw.starts_with(['/', '\\']) || raw.as_bytes().get(1) == Some(&b':')
+}
+
+fn path_key(path: &Path) -> String {
+    let mut key = path.to_string_lossy().replace('\\', "/");
+    while key.ends_with('/') {
+        key.pop();
+    }
+    if cfg!(windows) {
+        key.to_lowercase()
+    } else {
+        key
+    }
+}
+
+/// Merge entries that point at the same folder, keeping the first config path.
+fn dedupe_game_dirs(hits: Vec<LauncherConfigHit>) -> Vec<LauncherConfigHit> {
+    let mut out: Vec<LauncherConfigHit> = Vec::new();
+    for hit in hits {
+        let Some(path) = hit.game_dir.as_deref() else {
+            out.push(hit);
+            continue;
+        };
+        let key = path_key(path);
+        if let Some(existing) = out.iter_mut().find(|entry| {
+            entry
+                .game_dir
+                .as_deref()
+                .is_some_and(|p| path_key(p) == key)
+        }) {
+            existing.selected |= hit.selected;
+            if existing.name.is_none() {
+                existing.name = hit.name;
+            }
+        } else {
+            out.push(hit);
+        }
+    }
+    out
 }
 
 // ── PCL ─────────────────────────────────────────────────────────────
@@ -431,61 +598,203 @@ fn pcl_bases(home: &Path, cwd: &Path) -> Vec<PathBuf> {
     out
 }
 
-fn pcl_directories(home: &Path, cwd: &Path) -> Vec<(PathBuf, String, bool)> {
+fn pcl_setup_path(base: &Path) -> PathBuf {
+    base.join("PCL").join("Setup.ini")
+}
+
+/// PCL's custom folder list lives in `HKCU\Software\PCL` (official builds) or
+/// `HKCU\Software\PCLDebug` (the open-source build). `Setup.ini` only carries
+/// `LaunchFolderSelect`; older/patched builds may still have `LaunchFolders`.
+#[cfg(windows)]
+fn pcl_registry_launch_folders() -> Vec<String> {
+    use winreg::enums::HKEY_CURRENT_USER;
+    use winreg::RegKey;
+
+    let hkcu = RegKey::predef(HKEY_CURRENT_USER);
     let mut out = Vec::new();
-    for base in pcl_bases(home, cwd) {
-        let ini = base.join("PCL/Setup.ini");
-        if !ini.is_file() {
-            continue;
-        }
-        let settings = read_pcl_ini(&ini);
-        let selected = settings
-            .get("LaunchFolderSelect")
-            .map(|value| pcl_expand_path(value, &base));
-        let Some(folders) = settings.get("LaunchFolders") else {
+    for path in ["Software\\PCL", "Software\\PCLDebug"] {
+        let Ok(key) = hkcu.open_subkey(path) else {
             continue;
         };
-        for entry in folders.split('|') {
-            let entry = entry.trim();
-            if entry.is_empty() {
-                continue;
-            }
-            let Some((name, raw_path)) = entry.split_once('>') else {
-                continue;
-            };
-            let raw_path = pcl_expand_path(raw_path, &base);
-            let preferred = selected
-                .as_ref()
-                .is_some_and(|selected| paths_equal(selected, &raw_path));
-            out.push((
-                raw_path,
-                if name.trim().is_empty() {
-                    "PCL".to_string()
-                } else {
-                    name.trim().to_string()
-                },
-                preferred,
-            ));
+        let Ok(value) = key.get_value::<String, _>("LaunchFolders") else {
+            continue;
+        };
+        if !value.trim().is_empty() {
+            out.push(value);
         }
     }
     out
 }
 
-/// PCL stores selected folders relative to the PCL root as `$...`.
-fn pcl_expand_path(raw: &str, base: &Path) -> PathBuf {
-    let raw = raw.trim();
-    let normalized = raw.trim_end_matches(['\\', '/']);
-    if let Some(relative) = normalized.strip_prefix('$') {
-        let relative = relative.trim_start_matches(['\\', '/']);
-        return base.join(relative);
+#[cfg(not(windows))]
+fn pcl_registry_launch_folders() -> Vec<String> {
+    Vec::new()
+}
+
+#[derive(Debug, Clone)]
+struct PclEntry {
+    path: PathBuf,
+    name: Option<String>,
+    selected: bool,
+}
+
+fn pcl_directories(home: &Path, cwd: &Path) -> Vec<(PathBuf, String, bool)> {
+    let registry = pcl_registry_launch_folders();
+    let mut entries = Vec::new();
+    for list in &registry {
+        for (path, name) in pcl_parse_folder_list(list) {
+            merge_pcl_entry(&mut entries, path, name, false);
+        }
     }
-    PathBuf::from(normalized)
+
+    let mut selected_paths = Vec::new();
+    let mut has_setup = false;
+    for base in pcl_bases(home, cwd) {
+        let ini = pcl_setup_path(&base);
+        if !ini.is_file() {
+            continue;
+        }
+        has_setup = true;
+        let settings = read_pcl_ini(&ini);
+        if let Some(selected) = settings.get("LaunchFolderSelect") {
+            let path = pcl_expand_path(selected, &base);
+            if !path.as_os_str().is_empty() {
+                selected_paths.push(path);
+            }
+        }
+        if let Some(folders) = settings.get("LaunchFolders") {
+            for (path, name) in pcl_parse_folder_list(folders) {
+                merge_pcl_entry(&mut entries, path, name, false);
+            }
+        }
+    }
+    // PCL also lists the exe folder and its immediate child worlds, but only
+    // when there is an actual PCL installation to import from.
+    if has_setup || registry.iter().any(|value| !value.trim().is_empty()) {
+        for (path, name) in pcl_default_folders(cwd) {
+            merge_pcl_entry(&mut entries, path, name, false);
+        }
+    }
+
+    for path in &selected_paths {
+        merge_pcl_entry(&mut entries, path.clone(), None, true);
+    }
+    if entries.is_empty() {
+        return Vec::new();
+    }
+    for entry in &mut entries {
+        entry.selected = selected_paths
+            .iter()
+            .any(|selected| pcl_paths_equal(selected, &entry.path));
+    }
+    if entries.iter().all(|entry| !entry.selected) {
+        if let Some(first) = entries.first_mut() {
+            first.selected = true;
+        }
+    }
+    entries
+        .into_iter()
+        .map(|entry| {
+            let name = entry.name.unwrap_or_else(|| "PCL".to_string());
+            (entry.path, name, entry.selected)
+        })
+        .collect()
+}
+
+/// PCL `LaunchFolders` entries: `Name>Path|Name>Path`. PCL requires a trailing
+/// separator; tolerate configs written without one.
+fn pcl_parse_folder_list(list: &str) -> Vec<(PathBuf, Option<String>)> {
+    list.split('|')
+        .filter_map(|entry| {
+            let entry = entry.trim();
+            if entry.is_empty() {
+                return None;
+            }
+            let (name, raw_path) = entry.split_once('>')?;
+            let raw_path = raw_path.trim();
+            if raw_path.is_empty() {
+                return None;
+            }
+            let name = name.trim();
+            Some((
+                PathBuf::from(raw_path.trim_end_matches(['\\', '/'])),
+                (!name.is_empty()).then(|| name.to_string()),
+            ))
+        })
+        .collect()
+}
+
+fn merge_pcl_entry(
+    entries: &mut Vec<PclEntry>,
+    path: PathBuf,
+    name: Option<String>,
+    selected: bool,
+) {
+    let key = path_key(&path);
+    if let Some(existing) = entries
+        .iter_mut()
+        .find(|entry| path_key(&entry.path) == key)
+    {
+        if existing.name.is_none() {
+            existing.name = name;
+        }
+        existing.selected |= selected;
+    } else {
+        entries.push(PclEntry {
+            path,
+            name,
+            selected,
+        });
+    }
+}
+
+/// PCL's own default discovery: the exe folder, its immediate children with
+/// `versions/` (or named `.minecraft`), and `%APPDATA%\.minecraft` on Windows.
+fn pcl_default_folders(base: &Path) -> Vec<(PathBuf, Option<String>)> {
+    let mut out = Vec::new();
+    if base.join("versions").is_dir() {
+        out.push((base.to_path_buf(), None));
+    }
+    if let Ok(entries) = std::fs::read_dir(base) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if !path.is_dir() {
+                continue;
+            }
+            let is_world = path.join("versions").is_dir()
+                || entry
+                    .file_name()
+                    .to_string_lossy()
+                    .eq_ignore_ascii_case(".minecraft");
+            if is_world {
+                out.push((path, None));
+            }
+        }
+    }
+    #[cfg(windows)]
+    if let Some(appdata) = dirs::data_dir() {
+        let official = appdata.join(".minecraft");
+        if official.join("versions").is_dir() {
+            out.push((official, None));
+        }
+    }
+    out
+}
+
+/// PCL's selected folder uses `$` for the exe directory (`$.minecraft\`).
+fn pcl_expand_path(raw: &str, base: &Path) -> PathBuf {
+    let expanded = raw.trim().replace('$', &base.to_string_lossy());
+    PathBuf::from(expanded.trim_end_matches(['\\', '/']))
+}
+
+fn pcl_paths_equal(a: &Path, b: &Path) -> bool {
+    path_key(a) == path_key(b)
 }
 
 /// PCL's INI dialect: one `Key:Value` pair per line, no sections.
 fn read_pcl_ini(path: &Path) -> BTreeMap<String, String> {
     let mut out = BTreeMap::new();
-    let Ok(text) = std::fs::read_to_string(path) else {
+    let Some(text) = read_text(path) else {
         return out;
     };
     for line in text.lines() {
@@ -503,8 +812,154 @@ fn read_pcl_ini(path: &Path) -> BTreeMap<String, String> {
     out
 }
 
-fn paths_equal(a: &Path, b: &Path) -> bool {
-    canonical(a) == canonical(b)
+/// PCL rewrites INI files in their detected encoding: UTF-8 (with or without
+/// BOM), UTF-16, or the system ANSI code page. Decode what we can.
+fn read_text(path: &Path) -> Option<String> {
+    let bytes = std::fs::read(path).ok()?;
+    Some(decode_text(&bytes))
+}
+
+fn decode_text(bytes: &[u8]) -> String {
+    if let Some(rest) = bytes.strip_prefix(&[0xEF, 0xBB, 0xBF]) {
+        return String::from_utf8_lossy(rest).into_owned();
+    }
+    if let Some(rest) = bytes.strip_prefix(&[0xFF, 0xFE]) {
+        return decode_utf16(rest, true);
+    }
+    if let Some(rest) = bytes.strip_prefix(&[0xFE, 0xFF]) {
+        return decode_utf16(rest, false);
+    }
+    match std::str::from_utf8(bytes) {
+        Ok(text) => text.to_string(),
+        Err(_) => encoding_rs::GB18030.decode(bytes).0.into_owned(),
+    }
+}
+
+fn decode_utf16(bytes: &[u8], little_endian: bool) -> String {
+    let units: Vec<u16> = bytes
+        .as_chunks::<2>()
+        .0
+        .iter()
+        .map(|chunk| {
+            if little_endian {
+                u16::from_le_bytes([chunk[0], chunk[1]])
+            } else {
+                u16::from_be_bytes([chunk[0], chunk[1]])
+            }
+        })
+        .collect();
+    String::from_utf16_lossy(&units)
+}
+
+/// One HMCL/PCL configuration found beside the launcher or inside `.minecraft`.
+#[derive(Debug, Clone)]
+pub struct LauncherConfigHit {
+    pub launcher: DirectorySource,
+    pub config_path: PathBuf,
+    /// Custom name from the other launcher's config, if any.
+    pub name: Option<String>,
+    pub game_dir: Option<PathBuf>,
+    pub instance_count: usize,
+    /// The other launcher currently has this directory selected.
+    pub selected: bool,
+}
+
+/// Detect HMCL/PCL configs in `root` and `root/.minecraft`.
+///
+/// Used by the first-run wizard, which only cares about the portable layout
+/// (the standard layout keeps its data under the per-user directory).
+pub fn detect_launcher_configs(root: &Path, minecraft: &Path) -> Vec<LauncherConfigHit> {
+    let mut hmcl = Vec::new();
+    for base in [root, minecraft] {
+        hmcl.extend(hmcl_configs_for_base(base));
+    }
+    let mut out = dedupe_game_dirs(hmcl);
+    out.extend(pcl_configs_for_base(root, minecraft));
+    out
+}
+
+/// PCL configs scoped to a portable install: the exe folder (normal) or
+/// `.minecraft` itself (PCL unpacked inside it). Never descends into
+/// `versions/{id}/PCL`.
+fn pcl_configs_for_base(root: &Path, minecraft: &Path) -> Vec<LauncherConfigHit> {
+    let root_setup = pcl_setup_path(root);
+    let mc_setup = pcl_setup_path(minecraft);
+    let (base, setup) = if root_setup.is_file() {
+        (root.to_path_buf(), root_setup)
+    } else if mc_setup.is_file() {
+        (minecraft.to_path_buf(), mc_setup)
+    } else {
+        (root.to_path_buf(), root_setup)
+    };
+
+    let registry = pcl_registry_launch_folders();
+    let settings = read_pcl_ini(&setup);
+    let defaults = pcl_default_folders(&base);
+    let has_setup = setup.is_file();
+    let has_registry = registry.iter().any(|value| !value.trim().is_empty());
+    let has_pcl_ini = minecraft.join("PCL.ini").is_file()
+        || defaults
+            .iter()
+            .any(|(path, _)| path.join("PCL.ini").is_file());
+    if !has_setup && !has_registry && !has_pcl_ini {
+        return Vec::new();
+    }
+
+    let mut entries = Vec::new();
+    for list in &registry {
+        for (path, name) in pcl_parse_folder_list(list) {
+            merge_pcl_entry(&mut entries, path, name, false);
+        }
+    }
+    if let Some(folders) = settings.get("LaunchFolders") {
+        for (path, name) in pcl_parse_folder_list(folders) {
+            merge_pcl_entry(&mut entries, path, name, false);
+        }
+    }
+    for (path, name) in defaults {
+        merge_pcl_entry(&mut entries, path, name, false);
+    }
+    if minecraft.join("PCL.ini").is_file() {
+        merge_pcl_entry(&mut entries, minecraft.to_path_buf(), None, false);
+    }
+
+    let selected = settings
+        .get("LaunchFolderSelect")
+        .map(|value| pcl_expand_path(value, &base))
+        .filter(|path| !path.as_os_str().is_empty());
+    if let Some(path) = &selected {
+        merge_pcl_entry(&mut entries, path.clone(), None, true);
+    }
+    for entry in &mut entries {
+        entry.selected |= selected
+            .as_ref()
+            .is_some_and(|path| pcl_paths_equal(path, &entry.path));
+    }
+    if entries.iter().all(|entry| !entry.selected) {
+        if let Some(first) = entries.first_mut() {
+            first.selected = true;
+        }
+    }
+
+    let config_path = if has_setup {
+        setup
+    } else if minecraft.join("PCL.ini").is_file() {
+        minecraft.join("PCL.ini")
+    } else {
+        setup
+    };
+
+    entries
+        .into_iter()
+        .map(|entry| LauncherConfigHit {
+            launcher: DirectorySource::Pcl,
+            config_path: config_path.clone(),
+            name: entry.name,
+            instance_count: count_instances(&entry.path),
+            game_dir: Some(entry.path),
+            selected: entry.selected,
+        })
+        .collect()
 }
 
 #[cfg(test)]
@@ -595,6 +1050,7 @@ mod tests {
         let home = temp("pcl-home");
         let cwd = temp("pcl-cwd");
         let game = temp("pcl-game");
+        let second = temp("pcl-game-2");
         std::fs::create_dir_all(game.join("versions")).unwrap();
         let pcl = cwd.join("PCL");
         std::fs::create_dir_all(&pcl).unwrap();
@@ -603,7 +1059,7 @@ mod tests {
             format!(
                 "LaunchFolders:我的世界>{}|第二目录>{}\nLaunchFolderSelect:{}\n",
                 game.display(),
-                game.display(),
+                second.display(),
                 game.display()
             ),
         )
@@ -611,15 +1067,19 @@ mod tests {
 
         let dirs: Vec<_> = pcl_directories(&home, &cwd)
             .into_iter()
-            .filter(|(path, _, _)| canonical(path) == canonical(&game))
+            .filter(|(path, _, _)| {
+                canonical(path) == canonical(&game) || canonical(path) == canonical(&second)
+            })
             .collect();
         assert_eq!(dirs.len(), 2);
         assert_eq!(dirs[0].1, "我的世界");
         assert!(dirs[0].2, "PCL selected folder should be preferred");
+        assert!(!dirs[1].2);
 
         let _ = std::fs::remove_dir_all(&home);
         let _ = std::fs::remove_dir_all(&cwd);
         let _ = std::fs::remove_dir_all(&game);
+        let _ = std::fs::remove_dir_all(&second);
     }
 
     #[test]
@@ -655,6 +1115,175 @@ mod tests {
         let _ = std::fs::remove_dir_all(&home);
         let _ = std::fs::remove_dir_all(&cwd);
         let _ = std::fs::remove_dir_all(&game);
+    }
+
+    #[test]
+    fn onboarding_detects_hmcl_and_pcl_configs_beside_the_app() {
+        let root = temp("onboarding-root");
+        let minecraft = root.join(".minecraft");
+        // Per-version metadata is not a directory registry: the importer must
+        // not recurse into `versions/*` for it.
+        std::fs::create_dir_all(minecraft.join("versions/1.20.4/.hmcl")).unwrap();
+        std::fs::create_dir_all(minecraft.join("versions/1.20.4/PCL")).unwrap();
+        std::fs::write(minecraft.join("versions/1.20.4/1.20.4.json"), "{}").unwrap();
+        std::fs::create_dir_all(root.join(".hmcl/config")).unwrap();
+        std::fs::write(
+            root.join(".hmcl/config/game-directories.json"),
+            format!(
+                "{{\"directories\":[{{\"id\":\"a\",\"name\":\"Main\",\"path\":\"{}\"}}]}}",
+                minecraft.display()
+            ),
+        )
+        .unwrap();
+        std::fs::create_dir_all(root.join("PCL")).unwrap();
+        std::fs::write(
+            root.join("PCL/Setup.ini"),
+            format!("LaunchFolders:PCL 目录>{}\\\n", minecraft.display()),
+        )
+        .unwrap();
+
+        let hits = detect_launcher_configs(&root, &minecraft);
+        assert_eq!(
+            hits.iter()
+                .filter(|h| h.launcher == DirectorySource::Hmcl)
+                .count(),
+            1,
+            "only the registry produces an HMCL card"
+        );
+        assert!(hits
+            .iter()
+            .any(|h| h.launcher == DirectorySource::Pcl && h.game_dir.is_some()));
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn hmcl_new_store_resolves_relative_paths_and_selection() {
+        let root = temp("hmcl-new-store");
+        let minecraft = root.join(".minecraft");
+        std::fs::create_dir_all(minecraft.join("versions/1.20.4")).unwrap();
+        std::fs::write(minecraft.join("versions/1.20.4/1.20.4.json"), "{}").unwrap();
+        std::fs::create_dir_all(root.join(".hmcl/config")).unwrap();
+        std::fs::write(
+            root.join(".hmcl/config/game-directories.json"),
+            r#"{"directories":[{"id":"game-directory:1","path":".minecraft"}]}"#,
+        )
+        .unwrap();
+        std::fs::write(
+            root.join(".hmcl/config/launcher-settings.json"),
+            r#"{"selectedGameDirectory":"game-directory:1"}"#,
+        )
+        .unwrap();
+
+        let hits = detect_launcher_configs(&root, &minecraft);
+        let hmcl: Vec<_> = hits
+            .iter()
+            .filter(|hit| hit.launcher == DirectorySource::Hmcl)
+            .collect();
+        assert_eq!(hmcl.len(), 1);
+        assert_eq!(hmcl[0].game_dir.as_deref(), Some(minecraft.as_path()));
+        assert!(hmcl[0].selected);
+        assert_eq!(hmcl[0].instance_count, 1);
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn hmcl_legacy_configurations_are_imported() {
+        let root = temp("hmcl-legacy");
+        let minecraft = root.join(".minecraft");
+        std::fs::create_dir_all(minecraft.join("versions")).unwrap();
+        std::fs::create_dir_all(root.join("instances/dev")).unwrap();
+        std::fs::write(
+            root.join(".hmcl.json"),
+            r#"{
+              "configurations": {
+                "Default": { "gameDir": ".minecraft" },
+                "Dev": { "gameDir": "instances/dev" }
+              },
+              "last": "Dev"
+            }"#,
+        )
+        .unwrap();
+
+        let hits = detect_launcher_configs(&root, &minecraft);
+        let dev = hits
+            .iter()
+            .find(|hit| hit.name.as_deref() == Some("Dev"))
+            .expect("custom profile");
+        assert_eq!(
+            dev.game_dir.as_deref(),
+            Some(root.join("instances/dev").as_path())
+        );
+        assert!(dev.selected);
+        let default = hits
+            .iter()
+            .find(|hit| hit.game_dir.as_deref() == Some(minecraft.as_path()))
+            .expect("built-in profile");
+        assert!(default.name.is_none());
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn pcl_dollar_selection_expands_to_the_pcl_base() {
+        let root = temp("pcl-dollar");
+        let minecraft = root.join(".minecraft");
+        std::fs::create_dir_all(minecraft.join("versions/1.20.4")).unwrap();
+        std::fs::create_dir_all(root.join("PCL")).unwrap();
+        std::fs::write(
+            root.join("PCL/Setup.ini"),
+            "LaunchFolderSelect:$\\.minecraft\\\n",
+        )
+        .unwrap();
+
+        let hits = detect_launcher_configs(&root, &minecraft);
+        let pcl = hits
+            .iter()
+            .find(|hit| hit.launcher == DirectorySource::Pcl)
+            .expect("PCL card");
+        assert_eq!(pcl.game_dir.as_deref(), Some(minecraft.as_path()));
+        assert!(pcl.selected);
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn pcl_minecraft_root_marker_is_enough_evidence() {
+        let root = temp("pcl-marker");
+        let minecraft = root.join(".minecraft");
+        std::fs::create_dir_all(&minecraft).unwrap();
+        std::fs::write(minecraft.join("PCL.ini"), "Version:1.20.4\n").unwrap();
+
+        let hits = detect_launcher_configs(&root, &minecraft);
+        let pcl = hits
+            .iter()
+            .find(|hit| hit.launcher == DirectorySource::Pcl)
+            .expect("PCL card from PCL.ini");
+        assert_eq!(pcl.game_dir.as_deref(), Some(minecraft.as_path()));
+        assert_eq!(pcl.config_path, minecraft.join("PCL.ini"));
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn onboarding_ignores_version_subdirectory_metadata() {
+        let root = temp("onboarding-no-recursion");
+        let minecraft = root.join(".minecraft");
+        std::fs::create_dir_all(minecraft.join("versions/1.20.4/.hmcl")).unwrap();
+        std::fs::create_dir_all(minecraft.join("versions/1.20.4/PCL")).unwrap();
+
+        assert!(detect_launcher_configs(&root, &minecraft).is_empty());
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn onboarding_skips_missing_configs() {
+        let root = temp("onboarding-empty");
+        let hits = detect_launcher_configs(&root, &root.join(".minecraft"));
+        assert!(hits.is_empty());
+        let _ = std::fs::remove_dir_all(&root);
     }
 }
 

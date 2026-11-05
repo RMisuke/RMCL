@@ -1,6 +1,7 @@
 # RMCCC 总体执行路线（细化版）
 
-> **基准日期**：2026-10-20，Phase 5 完成后回填至 2026-10-22。**当前状态来源**：[`AUDIT_2026-10-20.md`](../audits/AUDIT_2026-10-20.md) + 本机实测（`cargo metadata` / `cargo test --workspace` / `IPC_COMMANDS` / strip 后产物）。
+> **基准日期**：2026-10-20，Phase 5 完成后回填至 2026-10-22；§1/§4 的数字于 **2026-11-05** 本机重测。
+> **当前状态来源**：[`AUDIT_2026-10-20.md`](../audits/AUDIT_2026-10-20.md) + 本机实测（`cargo metadata` / `cargo test --workspace` / `IPC_COMMANDS` / strip 后产物）。
 > **目标架构来源**：[`RMCCC_PLUGIN_PLATFORM_ARCHITECTURE_GUIDE.md`](../RMCCC_PLUGIN_PLATFORM_ARCHITECTURE_GUIDE.md) Phase 0–7。
 > **执行约束**：本机 macOS Apple Silicon 单环境开发；不在本机跨平台编译或 Windows/Linux 实测（指南 §1.4）。
 
@@ -8,9 +9,10 @@
 
 ## 1. 当前起点一句话
 
-引擎层（安装→索引→启动）已贯通并实机验证；**654 项 Rust 测试**（2026-10-26 复测；含插件 106 项 + Dashboard 17 项 +
-逻辑运行时 8 项单测与 9 项 helper spawn 集成测试 + Agent 63 项 + 6 项嵌入资源校验）
-+ `pnpm sdk:test` **14 项**（含 5 项跨工件契约：schema ↔ Rust ↔ SDK）、前端 `pnpm test` **32 项**，CI 三门禁本地全绿。
+引擎层（安装→索引→启动）已贯通并实机验证；**765 项 Rust 测试 / 0 失败 / 3 ignored**（2026-11-05
+`cargo test --workspace`；含插件、Dashboard、逻辑运行时单测与 helper spawn 集成、Agent 迁移后的
+AI/MCP、整合包、实例 v2、平台适配与嵌入资源校验）
++ `pnpm sdk:test` **14 项**（含 5 项跨工件契约：schema ↔ Rust ↔ SDK）、前端 `pnpm test` **80 项**（11 文件），CI 三门禁本地全绿。
 **Phase 0–5 全部完成**：结构债清偿（0/0.5/1）、声明式插件系统（2）、Dashboard 布局与主题（3）、
 隔离 UI + SDK（4）、逻辑运行时 helper 进程 + `logic.invoke` 只读扩展（5）。
 **Phase 6 已达 M7，随后方向调整（2026-10-23，ADR-013 accepted）**：ADR-009/010 落定，
@@ -63,13 +65,14 @@ Phase 7  插件目录 / 签名 / 生产分发（registry / 签名 / updater / �
 - **Phase 2–7** 是 DEVELOPMENT_PLAN 之外的**插件平台 + Agent + 发布**方向（指南 Phase 2–7）。
 - DEVELOPMENT_PLAN Phase 5 的"E2E / 体积 / 公证"等并入本路线 Phase 0（基线）与 Phase 7（分发）。
 
-## 4. 当前状态锚点（审计快照）
+## 4. 当前状态锚点（2026-11-05 本机重测）
 
 | 维度 | 当前事实 | 来源 |
 |------|---------|------|
-| Workspace | **19 成员**（16 crates + `src-tauri` + `src-cli` + `src-logic-host`），含 `rmccc-agent`（ADR-013 瘦身）与 `rmccc-llm` | `Cargo.toml` / `cargo metadata --no-deps` |
-| 测试 | **654 passed / 0 failed**（2026-10-26 本机复跑）；插件 106 项 + Dashboard 17 项 + 逻辑运行时 8 单测 + 9 项 helper spawn 集成 + Agent 63 项 + bundle 6 项；另 `pnpm sdk:test` **14 项**、前端 `pnpm test` **32 项** | `cargo test --workspace` + `pnpm test` + `pnpm sdk:test` |
-| IPC | **97 定义 = 97 注册**；`IPC_COMMANDS` 与 `generate_handler!` 由 `ipc_tests` 交叉校验；前端 `api.ts` 全覆盖（除显式白名单） | `handlers.rs` / `ipc_tests` |
+| Workspace | **21 成员**（18 crates + `src-tauri` + `src-cli` + `src-logic-host`），含 `rmccc-agent`（ADR-013 瘦身）与 `rmccc-llm` | `Cargo.toml` / `cargo metadata --no-deps`（packages 数） |
+| 测试 | **765 passed / 0 failed / 3 ignored**（2026-11-05 `cargo test --workspace`，46 个 test binary）；前端 `pnpm test` **80 passed**（11 文件）；`pnpm sdk:test` **14 passed**；`pnpm typecheck` / `cargo fmt --check` / `cargo clippy --workspace --all-targets -D warnings` 全绿 | `cargo test --workspace` + `pnpm test` + `pnpm sdk:test` |
+| IPC | **135 定义 = 135 注册**（`#[tauri::command]` = `IPC_COMMANDS` = `generate_handler!` = `src/ipc/api.ts` 的 `safeInvoke`）；由 `ipc_tests.rs:170` 计数断言与「清单 ↔ 宏注册」契约测试双重守护 | `handlers.rs` / `ipc_tests` |
+| 体积 | 主可执行 `Contents/MacOS/SNGL` **10,683,824 B（10.19 MiB）**，`SNGL.app` 13M；helper `SNGL-logic-host` 1,116,304 B（ADR-011 红线 20 MiB） | `stat -f %z`（2026-11-05） |
 | 结构债 | ✅ pipeline 收口（P1-3）；✅ 平台适配层 + 领域零 `cfg`（1.1）；✅ loader 单体系（P1-4）；✅ context.rs 93 行（P2-1）；✅ 修 P2-12 | 审计 §5.3、§15.1/§15.2 |
 | 插件系统 | ✅ Phase 2：Manifest v1 / `.rmcpkg` 事务 / 状态机 / 权限 / 配置 / CLI / UI | ADR-003、ADR-004 |
 | Dashboard | ✅ Phase 3.1–3.5 主题引擎与 widget 注册表；12 列拖放布局已被 hero 双栏主页取代（2026-10-26 起 `dashboard_*_layout` 三条命令下线，ADR-005 主题体系不变） | ADR-005、`rmccc-dashboard` |
@@ -77,9 +80,9 @@ Phase 7  插件目录 / 签名 / 生产分发（registry / 签名 / updater / �
 | 逻辑运行时 | ✅ Phase 5.1–5.5：PoC 实测 → 独立 helper 进程 + wasmi、fuel/内存/超时 kill、`logic.invoke` 只读扩展；单版本 5.6 打包分发并入 Phase 7 | ADR-007、`rmccc-logic` / `src-logic-host` |
 | 安全缺口 | ✅ natives zip-slip（P1.5）；✅ 插件包 zip-slip/zip bomb/路径/类型限制（2.2） | 审计 §15.4 |
 | 平台执行散落 | ✅ 领域 crate 无平台 `#[cfg]`；插件原子替换经 `PlatformFs` | PLATFORM_ADAPTATION.md |
-| 环境回归 | Homebrew rustup 路径失效、`~/.cargo` 缺失；**`strip = true` 已于 2026-10-26 生效**（SNGL.app 主可执行 8.94 MiB） | 审计 §15.5、P2-7 |
+| 环境回归 | Homebrew rustup 路径失效、`~/.cargo` 缺失；**`strip = true` 已于 2026-10-26 生效**（出厂即剥离，无需手动后处理；当前主可执行见上「体积」行 10.19 MiB） | 审计 §15.5、P2-7（已销账） |
 | Agent | 📌 M7 完成（2026-10-24，`crates/rmccc-agent`，63 测试）；**2026-10-23 起方向调整为 ADR-013**：内建 Agent 退役，改为内部 AI 服务 + 外部 MCP 控制（`../AI_AND_MCP_ARCHITECTURE.md` S1–S7）；ADR-009/010 accepted（010 部分修订） | `docs/AI_AND_MCP_ARCHITECTURE.md`、`docs/roadmap/08_phase6_agent.md`（历史） |
-| 发布 | release.yml 齐备但缺证书/Secret，updater `endpoints` 仍是 `<owner>/<repo>` 占位；无 `cargo bloat` 审计；E2E 未实跑；ADR-008 草案已立（proposed） | 审计 §13.7、`09_phase7_distribution.md` |
+| 发布 | release.yml 齐备但缺证书/Secret；**`tauri-plugin-updater` 已于 2026-11-04 下线**（`release.yml` 仍注入 `TAURI_SIGNING_PRIVATE_KEY` 并期望产出 `latest.json`，属残留配置，待与"是否恢复自动更新"一并决）；无 `cargo bloat` 审计；macOS E2E 未实跑（Windows E2E 已转为合并门禁）；ADR-008 草案已立（proposed） | 审计 §13.7、`09_phase7_distribution.md` |
 
 ## 5. 并行与串行
 

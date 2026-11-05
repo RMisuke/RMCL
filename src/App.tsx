@@ -1,30 +1,35 @@
 /**
- * Application shell (ui/soft-skeuo-dashboard 试验分支): 底部浮动 Dock 导航
- * + content area + global overlays (task center, log drawer, launch bubble,
- * toasts, confirm host) + optional local image/video wallpaper. 左侧 Rail 已移除。
+ * Application shell: left floating dock + content area + window controls +
+ * global overlays (task center, log drawer, launch bubble, toasts, confirm
+ * hosts) + optional local image/video wallpaper. The launch capsule is
+ * Home-only; every other page fills the area right of the dock.
  *
  * The window is borderless/hidden at creation; this shell owns the reveal
  * handshake (unchanged from the previous design).
  */
 import { ParentComponent, Show, createSignal, onCleanup, onMount } from "solid-js";
+import { useLocation } from "@solidjs/router";
 import { availableMonitors, getCurrentWindow } from "@tauri-apps/api/window";
-import TitleBar from "./components/TitleBar";
-import { AccountDock } from "./components/AccountDock";
+import WindowControls from "./components/WindowControls";
+import { LeftDock } from "./components/LeftDock";
 import { LaunchDock } from "./components/LaunchDock";
 import { ToastContainer } from "./components/Toast";
 import { TaskCenterPanel } from "./components/TaskCenter";
 import { LogDrawer } from "./components/LogDrawer";
 import { LaunchBubble } from "./components/LaunchBubble";
 import { RmConfirmHost, RmPromptHost } from "./components/rm/overlays";
+import { Onboarding } from "./components/Onboarding";
 import { initStores } from "./stores/init";
 import { initI18n } from "./i18n";
 import { initTheme } from "./theme";
+import { initThemeV4 } from "./theme/v4/store";
 import { initAdaptiveTheme } from "./lib/adaptiveTheme";
 import { initBackgroundLibrary } from "./lib/backgroundLibrary";
 import { reportFrontendMessage } from "./ipc/api";
-import { ThemeBackdrop } from "./components/ThemeSurface";
-import { BackgroundVideo } from "./components/BackgroundVideo";
-import { BackgroundImage } from "./components/BackgroundImage";
+import { BackdropLayer } from "./backdrop/BackdropLayer";
+import { DecorLayer } from "./backdrop/DecorLayer";
+import { initRenderTier } from "./render/tier";
+import { installCompositingGuard } from "./render/compositing";
 import { ModpackInstallDialog } from "./components/ModpackInstallDialog";
 import { modpacksStore } from "./stores/modpacks";
 import { toast } from "./stores/ui";
@@ -54,9 +59,17 @@ async function ensureReachable(win: AppWindow): Promise<void> {
 }
 
 const App: ParentComponent = (props) => {
+  const location = useLocation();
+  const onHome = () => location.pathname === "/";
   const [dragActive, setDragActive] = createSignal(false);
   let unlistenDragDrop: (() => void) | undefined;
-  onCleanup(() => unlistenDragDrop?.());
+  let disposeTier: (() => void) | undefined;
+  let disposeGuard: (() => void) | undefined;
+  onCleanup(() => {
+    unlistenDragDrop?.();
+    disposeTier?.();
+    disposeGuard?.();
+  });
 
   /** Native Tauri drag-drop is the only reliable source of absolute paths on
    *  Windows/WebView2. HTML5 `File.path` is non-standard and undefined there. */
@@ -94,11 +107,14 @@ const App: ParentComponent = (props) => {
     document.documentElement.dataset.platform = /Windows/i.test(navigator.userAgent)
       ? "windows"
       : "other";
+    disposeTier = initRenderTier();
+    disposeGuard = installCompositingGuard();
     try {
       const win = getCurrentWindow();
       // Theme and locale both gate the first visible paint; load them in
       // parallel instead of paying two serial IPC round-trips.
       await Promise.all([initI18n(), initTheme()]);
+      initThemeV4();
       await initAdaptiveTheme();
       initStores();
       void initBackgroundLibrary();
@@ -114,14 +130,14 @@ const App: ParentComponent = (props) => {
 
   return (
     <div class="app-root">
-      <ThemeBackdrop />
-      <BackgroundVideo />
-      {/* The still image is the top wallpaper layer; the video stays beneath. */}
-      <BackgroundImage />
+      <BackdropLayer />
+      <DecorLayer />
       <div class="window-drag-strip" data-tauri-drag-region="deep" />
-      <TitleBar />
-      <AccountDock />
-      <LaunchDock />
+      <LeftDock />
+      <Show when={onHome()}>
+        <LaunchDock />
+      </Show>
+      <WindowControls />
       <div class="app-body">
         {/* 导航在窗口底部浮动 Dock 中，左侧不再有 Rail */}
         <main class="app-content">{props.children}</main>
@@ -131,6 +147,7 @@ const App: ParentComponent = (props) => {
       <LaunchBubble />
       <RmConfirmHost />
       <RmPromptHost />
+      <Onboarding />
       <ModpackInstallDialog />
       <Show when={dragActive()}>
         <div class="modpack-drop-overlay" aria-hidden="true">

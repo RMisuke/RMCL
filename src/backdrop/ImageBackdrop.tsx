@@ -1,10 +1,8 @@
 /**
- * One persistent still-image wallpaper.
+ * Still-image wallpaper backdrop (ui-render-refactor S3).
  *
- * The layer sits directly above the theme/video backdrop and below every
- * foreground surface. Decoding is delegated to the system WebView; the image is
- * never copied, preprocessed or uploaded. Motion settings do not hide it because
- * a still image does not animate.
+ * One static layer; decoding and scaling stay in the system WebView. No canvas,
+ * no animation, no resident work. The dim scrim is a static `::after` overlay.
  */
 import type { JSX } from "solid-js";
 import { Show, createEffect, createSignal, onCleanup } from "solid-js";
@@ -15,7 +13,7 @@ import {
 } from "../lib/backgroundImage";
 import { scheduleAdaptiveSample } from "../lib/adaptiveTheme";
 
-export function BackgroundImage(): JSX.Element {
+export function ImageBackdrop(): JSX.Element {
   const [src, setSrc] = createSignal<string | null>(null);
   let generation = 0;
   let renderedPath: string | null = null;
@@ -45,15 +43,8 @@ export function BackgroundImage(): JSX.Element {
     });
   });
 
-  createEffect(() => {
-    const root = document.documentElement;
-    if (src() && backgroundImage().enabled) root.dataset.imageWallpaper = "on";
-    else delete root.dataset.imageWallpaper;
-  });
-
   onCleanup(() => {
     generation++;
-    delete document.documentElement.dataset.imageWallpaper;
   });
 
   return (

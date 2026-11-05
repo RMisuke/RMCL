@@ -1,0 +1,72 @@
+/* ==========================================================================
+   Surface primitives + render-tier enforcement (ui-render-refactor S4).
+
+   Three surface levels replace bespoke per-component glass:
+     .surface-glass   — real backdrop-filter (only the `full` tier)
+     .surface-acrylic — tinted translucent fill, never samples the backdrop
+     .surface-solid   — opaque fill (static tier)
+
+   `data-render-tier` is the single switch. Outside `full` no element is allowed
+   to run a real backdrop-filter: this removes the per-frame backdrop-blur cost
+   on macOS and over any video wallpaper, without touching each component.
+   ========================================================================== */
+
+.surface {
+  border: 1px solid var(--rmccc-border);
+}
+
+/* Tier enforcement — the single backdrop-filter budget switch. */
+html:not([data-render-tier="full"]) .app-root,
+html:not([data-render-tier="full"]) .app-root * {
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+}
+
+/* The exception the blanket rule above used to swallow: card surfaces are
+   card-sized, so they honour the user's blur slider (and wallpaper halving)
+   on every tier. Without this the Settings slider had no effect on macOS,
+   where the tier is always `acrylic`. */
+html:not([data-render-tier="full"]) .soft-card,
+html:not([data-render-tier="full"]) .soft-launch-card,
+html:not([data-render-tier="full"]) .rm-card,
+html:not([data-render-tier="full"]) .instance-card,
+html:not([data-render-tier="full"]) .loader-card,
+html:not([data-render-tier="full"]) .skin-panel {
+  backdrop-filter: blur(var(--rmccc-home-card-blur, var(--rmccc-card-blur, 16px))) saturate(120%) !important;
+  -webkit-backdrop-filter: blur(var(--rmccc-home-card-blur, var(--rmccc-card-blur, 16px))) saturate(120%) !important;
+}
+
+/* 0 % card opacity still has to kill the blur and the rim. */
+html[data-cards-transparent="on"] .soft-card,
+html[data-cards-transparent="on"] .soft-launch-card,
+html[data-cards-transparent="on"] .rm-card,
+html[data-cards-transparent="on"] .instance-card,
+html[data-cards-transparent="on"] .loader-card,
+html[data-cards-transparent="on"] .skin-panel {
+  border-color: transparent !important;
+  box-shadow: none !important;
+  background: transparent !important;
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+}
+
+/* Central motion gate — the single declaration for ambient/decor animation.
+   Components must not repeat their own `prefers-reduced-motion` blocks. */
+html[data-motion="off"] .ambient-stage *,
+html[data-motion="off"] .theme-effects * {
+  animation: none !important;
+}
+html[data-motion="off"] .theme-media-video { display: none; }
+
+@media (prefers-reduced-motion: reduce) {
+  .ambient-stage *,
+  .theme-effects * {
+    animation: none !important;
+  }
+  .theme-media-video { display: none; }
+  *,
+  *::before,
+  *::after {
+    transition-duration: .01ms !important;
+  }
+}

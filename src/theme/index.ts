@@ -1,9 +1,10 @@
 /**
  * Theme token application (Phase 3, ADR-005).
  *
- * The backend owns token validation; this module maps tokens to CSS variables
- * and bridges them to the legacy `--surface-*` / `--text-*` variables so the
- * existing stylesheet keeps working while new widgets use `--rmccc-*`.
+ * The backend owns token validation; this module maps tokens to the single
+ * `--rmccc-*` CSS variable namespace plus the decorative `--scene-*` scene
+ * tokens. Legacy `--surface-*` / `--text-*` bridges were removed in the
+ * render-layer refactor (ui-render-refactor S4).
  */
 
 import { createSignal } from "solid-js";
@@ -100,19 +101,6 @@ export function applyThemeTokens(tokens: ThemeTokens): ThemeMode {
   root.dataset.visualTheme = currentPreference?.replace("builtin:", "") ?? mode;
   root.dataset.themeKey = currentPreference ?? (mode === "dark" ? "builtin:dark" : "builtin:light");
   root.dataset.atmosphere = scene.atmosphere;
-
-  // Bridge to the legacy variables used by app.css.
-  setVar("--surface-bg", tokens.background);
-  setVar("--surface-card", tokens.surface);
-  setVar("--surface-raised", tokens.surfaceElevated);
-  setVar("--surface-input", tokens.surfaceElevated);
-  setVar("--surface-hover", tokens.surfaceElevated);
-  setVar("--text-primary", tokens.text);
-  setVar("--text-secondary", tokens.textMuted);
-  setVar("--text-on-input", tokens.text);
-  setVar("--color-blue", tokens.accent);
-  setVar("--border-default", tokens.border);
-  setVar("--border-subtle", tokens.border);
 
   // Host-owned safety colors — never taken from the theme JSON.
   if (mode === "dark") {
@@ -377,6 +365,12 @@ async function refreshThemeSkin(preference: string | null) {
 
 export function getThemePreference(): string | null {
   return currentPreference;
+}
+
+/** Let a higher-level theme system (v4 registry) own the scene key without
+ *  triggering a backend token fetch. */
+export function setScenePreference(preference: string | null): void {
+  currentPreference = preference;
 }
 
 /** The tokens currently applied to the shell (null before the first apply). */

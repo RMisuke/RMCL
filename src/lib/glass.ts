@@ -4,17 +4,14 @@
  * Three independent, per-machine preferences persisted in localStorage (visual
  * preferences, not launcher config) and applied as CSS variables on <html>:
  *
- *  - `panelOpacity`: the shell behind non-home pages (`--rmccc-panel-alpha`);
- *    0 % means the wallpaper/video shows through completely.
+ *  - `panelOpacity`: the shell behind non-home pages (`--rmccc-panel-alpha`)
+ *    plus the always-visible dock chrome (`--rmccc-dock-alpha`); 0 % means the
+ *    wallpaper/video shows through completely.
  *  - `cardOpacity`: the background of cards (`--rmccc-card-alpha`); 0 % makes
  *    cards genuinely transparent, including their border/shadow/blur.
  *  - `cardBlur`: the backdrop-filter radius for cards (`--rmccc-card-blur`).
  *    Home cards use half of it while an image/video wallpaper is active, so the
  *    wallpaper stays readable without turning every surface into a solid slab.
- *
- * The legacy `--soft-*` variables are still published for third-party skin CSS
- * written against the previous dashboard, but the host consumes the
- * `--rmccc-*` variables exclusively.
  */
 import { createRoot, createSignal } from "solid-js";
 
@@ -64,11 +61,51 @@ const [opacity, setOpacitySignal] = createRoot(() => createSignal(readPercent(PA
 const [cardOpacity, setCardOpacitySignal] = createRoot(() => createSignal(readPercent(CARD_KEY, DEFAULT_CARD)));
 const [cardBlur, setCardBlurSignal] = createRoot(() => createSignal(readBlur()));
 
+// Drag-time smoothness: applying the CSS variable and writing localStorage on
+// every `input` event did heavy full-window glass repaints and a synchronous
+// storage write per pixel of travel, so the slider visibly chased the thumb in
+// steps. Coalesce the CSS write to one per animation frame (always reading the
+// latest value) and debounce persistence; the slider/output still update
+// synchronously, only the expensive side is throttled.
+const rafHandles = new Map<string, number>();
+const persistTimers = new Map<string, ReturnType<typeof setTimeout>>();
+
+function scheduleApply(key: string, apply: () => void): void {
+  if (typeof requestAnimationFrame === "undefined") {
+    apply();
+    return;
+  }
+  if (rafHandles.has(key)) return;
+  const handle = requestAnimationFrame(() => {
+    rafHandles.delete(key);
+    apply();
+  });
+  rafHandles.set(key, handle);
+}
+
+function schedulePersist(key: string, value: number): void {
+  const existing = persistTimers.get(key);
+  if (existing) clearTimeout(existing);
+  persistTimers.set(
+    key,
+    setTimeout(() => {
+      persistTimers.delete(key);
+      try {
+        localStorage.setItem(key, String(value));
+      } catch {
+        // The live preview still works when persistent storage is unavailable.
+      }
+    }, 200)
+  );
+}
+
 function applyPanelOpacity(value: number): void {
   if (typeof document === "undefined") return;
   const root = document.documentElement;
   root.style.setProperty("--rmccc-panel-alpha", `${value}%`);
-  root.style.setProperty("--soft-frame-opacity", String(value / 100));
+  // The docks share this slider instead of owning a fixed white fill. The
+  // scale keeps 100 % at a light 0.20 alpha, so even the maximum stays glass.
+  root.style.setProperty("--rmccc-dock-alpha", (value / 500).toFixed(3));
   // 0 % must be genuinely transparent: drop the 1 px border, shadow and
   // backdrop blur instead of leaving a faint frame around the content.
   if (value === 0) root.dataset.panelTransparent = "on";
@@ -79,7 +116,6 @@ function applyCardOpacity(value: number): void {
   if (typeof document === "undefined") return;
   const root = document.documentElement;
   root.style.setProperty("--rmccc-card-alpha", `${value}%`);
-  root.style.setProperty("--soft-card-opacity", String(value / 100));
   if (value === 0) root.dataset.cardsTransparent = "on";
   else delete root.dataset.cardsTransparent;
 }
@@ -96,12 +132,8 @@ export function panelOpacity(): number {
 export function setPanelOpacity(value: number): void {
   const next = clampPercent(value);
   setOpacitySignal(next);
-  applyPanelOpacity(next);
-  try {
-    localStorage.setItem(PANEL_KEY, String(next));
-  } catch {
-    // The live preview still works when persistent storage is unavailable.
-  }
+  scheduleApply("panel", () => applyPanelOpacity(opacity()));
+  schedulePersist(PANEL_KEY, next);
 }
 
 export function homeCardOpacity(): number {
@@ -111,12 +143,8 @@ export function homeCardOpacity(): number {
 export function setHomeCardOpacity(value: number): void {
   const next = clampPercent(value);
   setCardOpacitySignal(next);
-  applyCardOpacity(next);
-  try {
-    localStorage.setItem(CARD_KEY, String(next));
-  } catch {
-    // Same as above.
-  }
+  scheduleApply("card", () => applyCardOpacity(cardOpacity()));
+  schedulePersist(CARD_KEY, next);
 }
 
 export function homeCardBlur(): number {
@@ -126,12 +154,8 @@ export function homeCardBlur(): number {
 export function setHomeCardBlur(value: number): void {
   const next = clampBlur(value);
   setCardBlurSignal(next);
-  applyCardBlur(next);
-  try {
-    localStorage.setItem(CARD_BLUR_KEY, String(next));
-  } catch {
-    // Same as above.
-  }
+  scheduleApply("blur", () => applyCardBlur(cardBlur()));
+  schedulePersist(CARD_BLUR_KEY, next);
 }
 
 applyPanelOpacity(opacity());

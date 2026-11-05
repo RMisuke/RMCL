@@ -8,7 +8,7 @@
  */
 import { For, Match, Show, Switch } from "solid-js";
 import { themeSkin } from "../theme";
-import { AmbientStage } from "./AmbientStage";
+import { renderTier } from "../render/tier";
 import type { SkinBackground, SkinEffect } from "../ipc/types";
 
 /** Deterministic pseudo-random so a re-render never reshuffles positions. */
@@ -17,7 +17,7 @@ function seeded(index: number, salt: number): number {
   return value - Math.floor(value);
 }
 
-function BackgroundMedia(props: {
+export function BackgroundMedia(props: {
   background: SkinBackground;
   class?: string;
 }) {
@@ -73,17 +73,21 @@ function BackgroundMedia(props: {
 function Aurora(props: { effect: SkinEffect }) {
   const intensity = () => props.effect.intensity ?? 0.5;
   const speed = () => props.effect.speed ?? 22;
+  // Full tier keeps the single animated layer; every other tier is static.
+  const staticLayer = () => renderTier() !== "full";
   return (
     <div
-      class="theme-aurora"
+      class={`theme-aurora ${staticLayer() ? "is-static" : ""}`}
       style={{
         "--aurora-intensity": String(intensity()),
         "--aurora-speed": `${speed()}s`,
       }}
     >
       <i />
-      <i />
-      <i />
+      <Show when={!staticLayer()}>
+        <i />
+        <i />
+      </Show>
     </div>
   );
 }
@@ -94,20 +98,23 @@ function RotatingBlocks(props: { effect: SkinEffect }) {
   const size = () => props.effect.size ?? 56;
   const speed = () => props.effect.speed ?? 18;
   const opacity = () => props.effect.opacity ?? 0.55;
+  // Non-full tiers render one static face instead of spinning 3D cubes.
+  const staticLayer = () => renderTier() !== "full";
+  const total = () => (staticLayer() ? 1 : count());
   return (
     <Show when={texture()}>
       {(src) => (
-        <For each={Array.from({ length: count() })}>
+        <For each={Array.from({ length: total() })}>
           {(_, index) => {
             const i = index();
-            const left = 42 + seeded(i, 1) * 40;
-            const top = 6 + seeded(i, 2) * 72;
+            const left = staticLayer() ? 58 : 42 + seeded(i, 1) * 40;
+            const top = staticLayer() ? 32 : 6 + seeded(i, 2) * 72;
             const delay = -(seeded(i, 3) * 20);
             const duration = speed() + seeded(i, 4) * 8;
             const blockOpacity = opacity() * (0.55 + seeded(i, 5) * 0.45);
             return (
               <span
-                class="theme-block"
+                class={`theme-block ${staticLayer() ? "is-static" : ""}`}
                 style={{
                   left: `${left}%`,
                   top: `${top}%`,
@@ -117,28 +124,38 @@ function RotatingBlocks(props: { effect: SkinEffect }) {
                   opacity: String(blockOpacity),
                 }}
               >
-                <span class="theme-block-spin">
-                  <i
-                    class="face front"
-                    style={{ "background-image": `url("${src()}")` }}
-                  />
-                  <i
-                    class="face back"
-                    style={{ "background-image": `url("${src()}")` }}
-                  />
-                  <i
-                    class="face left"
-                    style={{ "background-image": `url("${src()}")` }}
-                  />
-                  <i
-                    class="face right"
-                    style={{ "background-image": `url("${src()}")` }}
-                  />
-                  <i
-                    class="face top"
-                    style={{ "background-image": `url("${src()}")` }}
-                  />
-                </span>
+                <Show
+                  when={!staticLayer()}
+                  fallback={
+                    <i
+                      class="face front"
+                      style={{ "background-image": `url("${src()}")` }}
+                    />
+                  }
+                >
+                  <span class="theme-block-spin">
+                    <i
+                      class="face front"
+                      style={{ "background-image": `url("${src()}")` }}
+                    />
+                    <i
+                      class="face back"
+                      style={{ "background-image": `url("${src()}")` }}
+                    />
+                    <i
+                      class="face left"
+                      style={{ "background-image": `url("${src()}")` }}
+                    />
+                    <i
+                      class="face right"
+                      style={{ "background-image": `url("${src()}")` }}
+                    />
+                    <i
+                      class="face top"
+                      style={{ "background-image": `url("${src()}")` }}
+                    />
+                  </span>
+                </Show>
               </span>
             );
           }}
@@ -153,13 +170,16 @@ function Particles(props: { effect: SkinEffect }) {
   const color = () => props.effect.color ?? "var(--rmccc-accent)";
   const speed = () => props.effect.speed ?? 18;
   const shape = () => props.effect.shape ?? "dot";
+  // Non-full tiers keep a sparse static texture; no drift animation.
+  const staticLayer = () => renderTier() !== "full";
+  const total = () => (staticLayer() ? Math.min(count(), 12) : count());
   return (
-    <For each={Array.from({ length: count() })}>
+    <For each={Array.from({ length: total() })}>
       {(_, index) => {
         const i = index();
         return (
           <span
-            class={`theme-particle is-${shape()}`}
+            class={`theme-particle is-${shape()} ${staticLayer() ? "is-static" : ""}`}
             style={{
               left: `${seeded(i, 11) * 100}%`,
               top: `${seeded(i, 12) * 100}%`,
@@ -192,7 +212,7 @@ function EffectView(props: { effect: SkinEffect }) {
   );
 }
 
-function ThemeEffects(props: { area: "app" | "hero" }) {
+export function ThemeEffects(props: { area: "app" | "hero" }) {
   const effects = () =>
     (themeSkin()?.effects ?? []).filter(
       (effect) => effect.area === props.area || effect.area === "both"
@@ -206,46 +226,9 @@ function ThemeEffects(props: { area: "app" | "hero" }) {
   );
 }
 
-/** Full-window wallpaper + app-scope effects (rendered by the app shell). */
-export function ThemeBackdrop() {
-  const background = () => {
-    const skin = themeSkin();
-    if (!skin?.background) return null;
-    const scope = skin.background.scope;
-    return scope === "app" || scope === "both" ? skin.background : null;
-  };
-  const hostAmbient = () => !background();
-  return (
-    <div class="theme-backdrop" aria-hidden="true">
-      <Show when={hostAmbient()}>
-        <AmbientStage />
-      </Show>
-      <Show when={background()} keyed>
-        {(bg) => <BackgroundMedia background={bg} />}
-      </Show>
-      <ThemeEffects area="app" />
-    </div>
-  );
-}
+/**
+ * App-scope wallpaper is owned by `src/backdrop/BackdropLayer.tsx` (one backdrop
+ * for the whole shell). This module only renders theme-scoped effects; the
+ * hero-scoped layer was removed together with the card-based home page.
+ */
 
-/** Hero-scope wallpaper + effects (rendered inside Home's `.hero`). */
-export function ThemeHeroLayer() {
-  const background = () => {
-    const skin = themeSkin();
-    if (!skin?.background) return null;
-    // `both` is served by the single app-level layer; the hero becomes
-    // transparent (see theme-skin.css) so the video is decoded only once.
-    const scope = skin.background.scope;
-    return scope === "hero" ? skin.background : null;
-  };
-  return (
-    <Show when={background() || themeSkin()?.effects?.length}>
-      <div class="theme-hero-layer" aria-hidden="true">
-        <Show when={background()} keyed>
-          {(bg) => <BackgroundMedia background={bg} />}
-        </Show>
-        <ThemeEffects area="hero" />
-      </div>
-    </Show>
-  );
-}

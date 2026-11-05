@@ -1,7 +1,13 @@
 [package]
 name = "rmccc"
-version = "0.1.0"
+version = "0.3.3"
 edition = "2021"
+
+# 可执行文件按产品名输出（Windows 上即 SNGL.exe）；crate 名保留 rmccc，
+# 避免改动 workspace 里所有 `-p rmccc` 的引用。
+[[bin]]
+name = "SNGL"
+path = "src/main.rs"
 
 [build-dependencies]
 tauri-build = { workspace = true }
@@ -14,7 +20,6 @@ rmccc-instance = { workspace = true }
 rmccc-error = { workspace = true }
 rmccc-auth = { workspace = true }
 rmccc-config = { workspace = true }
-rmccc-download = { workspace = true }
 rmccc-launch = { workspace = true }
 rmccc-version = { workspace = true }
 rmccc-modloader = { workspace = true }
@@ -45,7 +50,7 @@ tauri = { workspace = true }
 tauri-plugin-process = { workspace = true }
 tauri-plugin-opener = { workspace = true }
 tauri-plugin-dialog = { workspace = true }
-tauri-plugin-updater = { workspace = true }
+tauri-plugin-single-instance = { workspace = true }
 
 # 平台系统调用（killpg / setpriority）已收归 `rmccc-platform`，
 # 应用层不再直接依赖 libc（指南 §5.7）。

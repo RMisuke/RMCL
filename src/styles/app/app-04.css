@@ -1,0 +1,283 @@
+/* app.css part 4/6 — split from app.css; order is significant. */
+/* ── Settings ──────────────────────────────────────────────── */
+
+.theme-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: var(--rmccc-space-3); }
+
+/* “跟随系统”主题卡：左深右浅的示意双色块 */
+.theme-swatch.is-system {
+  display: flex;
+  overflow: hidden;
+}
+.theme-swatch.is-system span:nth-child(1) { flex: 1; background: #0b1020; }
+.theme-swatch.is-system span:nth-child(2) { flex: 1; background: #141a2e; }
+.theme-swatch.is-system span:nth-child(3) { flex: 1; background: #f2f2f4; }
+.theme-swatch.is-system span:nth-child(4) { flex: 1; background: #ffffff; }
+.theme-card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--rmccc-space-2);
+  padding: var(--rmccc-space-3);
+  border: 1px solid var(--rmccc-border);
+  border-radius: var(--rmccc-radius-card);
+  font-size: 13px;
+  text-align: left;
+}
+.theme-card:hover { border-color: var(--rmccc-accent); }
+.theme-card.is-active { border-color: var(--rmccc-accent); box-shadow: 0 0 0 1px var(--rmccc-accent); }
+
+.perm-group { display: flex; flex-direction: column; gap: var(--rmccc-space-1); }
+.perm-group-title { font-size: 12px; font-weight: 600; color: var(--rmccc-text-muted); padding: var(--rmccc-space-2) 0; }
+.token-display { flex: 1; overflow: hidden; text-overflow: ellipsis; display: inline-flex; align-items: center; height: 32px; padding: 0 10px; background: var(--rmccc-surface-sunken); border: 1px solid var(--rmccc-border); border-radius: var(--rmccc-radius-control); font-size: 12.5px; }
+.plugin-settings-frame iframe { width: 100%; height: 400px; border: 1px solid var(--rmccc-border); border-radius: var(--rmccc-radius-control); background: #fff; }
+
+/* ── Hero home（ui/home-hero-dock 试验分支，仅主页）──────────
+   全部颜色走主题令牌 + color-mix，深浅主题自动适配。 */
+
+.hero {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  overflow: hidden;
+  background:
+    radial-gradient(1100px 560px at 78% 16%, color-mix(in srgb, var(--rmccc-accent) 26%, transparent), transparent 62%),
+    radial-gradient(900px 520px at 12% 88%, color-mix(in srgb, var(--rmccc-accent) 14%, transparent), transparent 60%),
+    linear-gradient(135deg,
+      color-mix(in srgb, var(--rmccc-background) 92%, #000000) 0%,
+      var(--rmccc-background) 48%,
+      color-mix(in srgb, var(--rmccc-accent) 12%, var(--rmccc-background)) 100%);
+}
+/* 未来可替换为壁纸：.hero 上设 --hero-image 即可覆盖渐变与流动层 */
+.hero::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: var(--hero-image, none) center / cover no-repeat;
+  pointer-events: none;
+}
+
+.hero-flow-blob.is-a {
+  width: 62%;
+  aspect-ratio: 1;
+  left: 2%;
+  top: -10%;
+  background: radial-gradient(circle,
+    color-mix(in srgb, var(--rmccc-accent) 62%, transparent) 0%,
+    color-mix(in srgb, var(--rmccc-accent) 26%, transparent) 45%,
+    transparent 72%);
+  animation: hero-flow-a 11s ease-in-out infinite alternate;
+}
+.hero-flow-blob.is-b {
+  width: 50%;
+  aspect-ratio: 1;
+  right: 0%;
+  top: 14%;
+  /* 反色光斑：深色主题近白、浅色主题近墨蓝——保证蓝白对比在两个主题下都成立 */
+  background: radial-gradient(circle,
+    color-mix(in srgb, var(--rmccc-accent-contrast) 38%, transparent) 0%,
+    color-mix(in srgb, var(--rmccc-accent-contrast) 15%, transparent) 46%,
+    transparent 74%);
+  animation: hero-flow-b 15s ease-in-out infinite alternate;
+}
+.hero-flow-blob.is-c {
+  width: 56%;
+  aspect-ratio: 1;
+  left: 28%;
+  bottom: -18%;
+  background: radial-gradient(circle,
+    color-mix(in srgb, var(--rmccc-accent) 34%, transparent) 0%,
+    color-mix(in srgb, var(--rmccc-surface-elevated) 20%, transparent) 48%,
+    transparent 76%);
+  animation: hero-flow-c 13s ease-in-out infinite alternate;
+}
+@keyframes hero-flow-a {
+  0%   { transform: translate3d(0, 0, 0) scale(1); }
+  50%  { transform: translate3d(26%, 20%, 0) scale(1.26); }
+  100% { transform: translate3d(-10%, 38%, 0) scale(0.9); }
+}
+@keyframes hero-flow-b {
+  0%   { transform: translate3d(0, 0, 0) scale(1) rotate(0deg); }
+  50%  { transform: translate3d(-22%, 26%, 0) scale(0.84) rotate(16deg); }
+  100% { transform: translate3d(10%, -18%, 0) scale(1.22) rotate(-10deg); }
+}
+@keyframes hero-flow-c {
+  0%   { transform: translate3d(0, 0, 0) scale(1); }
+  50%  { transform: translate3d(26%, -16%, 0) scale(1.2); }
+  100% { transform: translate3d(-18%, 10%, 0) scale(0.86); }
+}
+
+/* 下落（叶 / 花瓣）：左右摇摆 + 旋转 */
+@keyframes p-fall-kf {
+  0%   { transform: translate(0, -8vh) rotate(0deg); }
+  50%  { transform: translate(var(--sway, 40px), 48vh) rotate(calc(var(--spin, 300deg) / 2)); }
+  100% { transform: translate(calc(var(--sway, 40px) * -0.4), 108vh) rotate(var(--spin, 300deg)); }
+}
+/* 上升（气泡 / 火星）：小幅蛇形 */
+@keyframes p-rise-kf {
+  0%   { transform: translate(0, 0) scale(1); }
+  50%  { transform: translate(var(--sway, 30px), -52vh) scale(1.06); }
+  100% { transform: translate(calc(var(--sway, 30px) * -0.5), -110vh) scale(0.9); }
+}
+/* 闪烁（星辰）：透明度呼吸 + 轻微缩放 */
+@keyframes p-twinkle-kf {
+  0%, 100% { opacity: 0.12; transform: scale(0.85); }
+  50%      { opacity: 0.95; transform: scale(1.15); }
+}
+/* 漂移（纸墨浮尘）：极慢往返 */
+@keyframes p-drift-kf {
+  0%   { transform: translate(0, 0); }
+  50%  { transform: translate(var(--sway, 26px), calc(var(--sway, 26px) * -0.6)); }
+  100% { transform: translate(0, 0); }
+}
+/* 横移（晴空流云） */
+@keyframes p-cloud-kf {
+  0%   { transform: translateX(-30vw); }
+  100% { transform: translateX(130vw); }
+}
+
+/* ── 林间：叶形（对角圆角），三种绿色 ── */
+.p-leaf {
+  border-radius: 4% 100% 4% 100%;
+  animation-name: p-fall-kf;
+}
+.p-forest .p-leaf:nth-child(3n + 1) { background: #3f9e6b; opacity: 0.5; }
+.p-forest .p-leaf:nth-child(3n + 2) { background: #6cc794; opacity: 0.42; }
+.p-forest .p-leaf:nth-child(3n)     { background: #2a7a52; opacity: 0.46; }
+
+/* ── 樱吹雪：花瓣（缺口圆），三种粉 ── */
+.p-petal {
+  border-radius: 100% 0 100% 0;
+  background: #f6aec6;
+  opacity: 0.55;
+  animation-name: p-fall-kf;
+  animation-timing-function: ease-in-out;
+}
+.p-sakura .p-petal:nth-child(3n + 2) { background: #fbd7e3; }
+.p-sakura .p-petal:nth-child(3n)     { background: #ef8fb0; opacity: 0.5; }
+
+/* ── 深海：描边气泡，上浮中渐显渐隐 ── */
+.p-bubble {
+  border-radius: 50%;
+  border: 1.5px solid rgba(127, 178, 214, 0.4);
+  background: radial-gradient(circle at 32% 30%, rgba(160, 210, 240, 0.22), transparent 62%);
+  animation-name: p-rise-kf;
+}
+.p-ocean .p-bubble:nth-child(2n) { border-color: rgba(96, 158, 200, 0.32); }
+
+/* ── 熔岩：发光火星，上浮渐隐（末段透明度由 scale 收缩暗示）── */
+.p-ember-dot {
+  border-radius: 50%;
+  background: radial-gradient(circle, #ffc27a 0%, #ef7d3a 55%, rgba(239, 125, 58, 0) 78%);
+  box-shadow: 0 0 10px 2px rgba(239, 125, 58, 0.35);
+  animation-name: p-rise-kf;
+  animation-timing-function: ease-in;
+}
+.p-ember .p-ember-dot:nth-child(3n + 2) {
+  background: radial-gradient(circle, #ffe0b0 0%, #f09b4e 55%, rgba(240, 155, 78, 0) 78%);
+  box-shadow: 0 0 8px 2px rgba(240, 155, 78, 0.3);
+}
+
+/* ── 靛夜：星辰（白点闪烁，偶有蓝白）── */
+.p-star {
+  border-radius: 50%;
+  background: #dfe7ff;
+  animation-name: p-twinkle-kf;
+  animation-timing-function: ease-in-out;
+  box-shadow: 0 0 6px 1px rgba(190, 205, 255, 0.35);
+}
+.p-dark .p-star:nth-child(4n + 3) {
+  background: #ffd9a0;
+  box-shadow: 0 0 6px 1px rgba(255, 217, 160, 0.3);
+}
+
+/* ── 晴空：流云（大椭圆柔边，双层叠出体积感）── */
+.p-cloud {
+  border-radius: 50%;
+  background: radial-gradient(ellipse at 42% 48%,
+    rgba(255, 255, 255, 0.85) 0%,
+    rgba(255, 255, 255, 0.5) 52%,
+    rgba(255, 255, 255, 0) 78%);
+  filter: blur(6px);
+  animation-name: p-cloud-kf;
+  animation-timing-function: linear;
+}
+
+/* ── 纸墨：淡墨尘点 ── */
+.p-dust {
+  border-radius: 50%;
+  background: rgba(96, 84, 52, 0.16);
+  animation-name: p-drift-kf;
+  animation-timing-function: ease-in-out;
+}
+
+@media (prefers-reduced-motion: reduce) 
+
+/* 共享关键帧：呼吸 / 摆动光柱 / 横移 / 上升光柱 */
+@keyframes g-breathe-kf {
+  0%, 100% { opacity: 0.55; transform: scale(1); }
+  50%      { opacity: 0.95; transform: scale(1.12); }
+}
+@keyframes g-beam-kf {
+  0%, 100% { opacity: 0.4; transform: rotate(var(--tilt, 20deg)) translateX(0); }
+  50%      { opacity: 0.85; transform: rotate(var(--tilt, 20deg)) translateX(2.5vw); }
+}
+@keyframes g-drift-x-kf {
+  0%, 100% { transform: translateX(-3vw); }
+  50%      { transform: translateX(6vw); }
+}
+@keyframes g-shaft-kf {
+  0%   { opacity: 0.1; transform: translateY(9vh); }
+  55%  { opacity: 0.5; transform: translateY(-3vh); }
+  100% { opacity: 0.05; transform: translateY(-16vh); }
+}
+.g-forest .g-beam.is-a { left: 14%; --tilt: 22deg; }
+.g-forest .g-beam.is-b { left: 52%; --tilt: -16deg; animation-duration: 17s; animation-delay: -6s; }
+.g-ocean .g-shaft.is-a { left: 22%; }
+.g-ocean .g-shaft.is-b { left: 63%; animation-duration: 18s; animation-delay: -8s; }
+.g-ember .g-magma.is-a {
+  left: 2%;
+  background: radial-gradient(ellipse at 50% 74%,
+    rgba(239, 125, 58, 0.34) 0%,
+    rgba(239, 125, 58, 0.14) 50%,
+    transparent 76%);
+}
+.g-ember .g-magma.is-b {
+  right: -8%;
+  background: radial-gradient(ellipse at 50% 78%,
+    rgba(194, 54, 22, 0.3) 0%,
+    rgba(194, 54, 22, 0.12) 50%,
+    transparent 76%);
+  animation-duration: 13s;
+  animation-delay: -6s;
+}
+.g-sky .g-band.is-a { top: 24%; }
+.g-sky .g-band.is-b { top: 58%; animation-duration: 85s; animation-delay: -30s; }
+
+@media (prefers-reduced-motion: reduce) 
+@media (prefers-reduced-motion: reduce) 
+/* 含下拉菜单的 hero 卡必须放开裁切：WKWebView 把 .rm-menu 渲染在页面层，
+   overflow:hidden 会把向上弹出的菜单裁掉（主页快速启动的版本选择器被切，
+   2026-10-25）。含菜单的卡片子元素均有内边距/圆角，不会出现直角溢出。 */
+.hero-card:has(.rm-menu-root),
+.hero-module:has(.rm-menu-root) {
+  overflow: visible;
+}
+.hero-empty { padding: var(--rmccc-space-4); color: var(--rmccc-text-muted); font-size: 13px; text-align: center; }
+.hero-row.is-selected {
+  background: color-mix(in srgb, var(--rmccc-accent) 16%, transparent);
+  outline: 1px solid color-mix(in srgb, var(--rmccc-accent) 55%, transparent);
+}
+.hero-row.is-static { cursor: default; }
+.hero-row.is-selected .hero-row-icon { color: var(--rmccc-accent); }
+.hero-row .rm-progress { min-width: 90px; flex-basis: 90px; }
+.hero-launch-main .rm-btn-lg { flex-shrink: 0; }
+
+/* ── Hero：左侧三块服务器卡片 + 账号卡加宽（演示版）────────── */
+
+/* 账号卡与启动卡同宽：RmMenu 容器撑满 hero-corner */
+.hero-corner .rm-menu-root { width: 100%; display: flex; }
+.hero-corner .rm-menu-root > * { flex: 1; }
+.hero-server .rm-input { height: 32px; font-size: 13px; }
+.hero-empty.is-error { color: var(--color-red); }
+.hero-account .account-avatar, .hero-account .account-avatar-face { width: 52px; height: 52px; }
+.hero-account .account-card-body .account-avatar { width: 52px; height: 52px; }

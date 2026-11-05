@@ -46,10 +46,7 @@ function readPrefs(): BackgroundImagePrefs {
 
 const [prefs, setPrefsSignal] = createRoot(() => createSignal<BackgroundImagePrefs>(readPrefs()));
 const [issue, setIssueSignal] = createRoot(() => createSignal(""));
-const [preparing, setPreparingSignal] = createRoot(() => createSignal(false));
-const [asset, setAssetSignal] = createRoot(() =>
-  createSignal<ResolvedBackgroundImage | null>(null)
-);
+const [, setPreparingSignal] = createRoot(() => createSignal(false));
 
 let generation = 0;
 const completed = new Map<string, ResolvedBackgroundImage>();
@@ -66,7 +63,6 @@ function persist(next: BackgroundImagePrefs): void {
 
 function invalidatePreparation(): void {
   generation++;
-  setAssetSignal(null);
   setPreparingSignal(false);
 }
 
@@ -82,49 +78,11 @@ export function setBackgroundImageIssue(message: string): void {
   setIssueSignal(message);
 }
 
-export function backgroundImagePreparing(): boolean {
-  return preparing();
-}
-
-export function backgroundImageAsset(): ResolvedBackgroundImage | null {
-  return asset();
-}
-
-export function setBackgroundImageEnabled(enabled: boolean): void {
-  if (!enabled) invalidatePreparation();
-  persist({ ...prefs(), enabled });
-}
-
 /** Apply a file selected from the centralized Background catalog. */
 export function applyBackgroundImage(path: string, enabled: boolean, dim: number): void {
   invalidatePreparation();
   setIssueSignal("");
   persist({ path, enabled, dim: clampDim(dim) });
-}
-
-export function setBackgroundImageDim(dim: number): void {
-  persist({ ...prefs(), dim: clampDim(dim) });
-}
-
-export function clearBackgroundImage(): void {
-  invalidatePreparation();
-  setIssueSignal("");
-  persist({ ...prefs(), path: "", enabled: false });
-}
-
-/** Open the native picker. Cancelling leaves the current choice untouched. */
-export async function pickBackgroundImage(): Promise<{
-  ok: boolean;
-  message?: string;
-  selected?: boolean;
-}> {
-  const res = await backgroundMedia.pickImage();
-  if (!res.ok) return { ok: false, message: res.error.message };
-  if (!res.data) return { ok: true, selected: false };
-  invalidatePreparation();
-  setIssueSignal("");
-  persist({ ...prefs(), path: res.data, enabled: true });
-  return { ok: true, selected: true };
 }
 
 /**
@@ -138,7 +96,6 @@ export function primeBackgroundImage(): Promise<ResolvedBackgroundImage | null> 
 
   const cached = completed.get(current.path);
   if (cached) {
-    setAssetSignal(cached);
     return Promise.resolve(cached);
   }
   const existing = pending.get(current.path);
@@ -158,7 +115,6 @@ export function primeBackgroundImage(): Promise<ResolvedBackgroundImage | null> 
       const resolved = { path: res.data, url: convertFileSrc(res.data) };
       completed.set(path, resolved);
       if (ticket === generation) {
-        setAssetSignal(resolved);
         setIssueSignal("");
       }
       return resolved;

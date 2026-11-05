@@ -9,6 +9,7 @@ import type { LaunchProgressPayload } from "../ipc/types";
 import { listen } from "@tauri-apps/api/event";
 import { instancesStore } from "./instances";
 import { uiStore } from "./ui";
+import { aiStore } from "./ai";
 import { t } from "../i18n";
 
 const MAX_LINES = 1000;
@@ -67,6 +68,8 @@ export type LaunchProgress = LaunchProgressPayload;
 export const launchStore = createRoot(() => {
   const [running, setRunning] = createSignal<Map<string, RunningGame>>(new Map());
   const [buffers, setBuffers] = createSignal<Map<string, string[]>>(new Map());
+  /** profileId → 本轮运行的 run_id（日志分析按 run 绑定/隔离）。 */
+  const [runIds, setRunIds] = createSignal<Map<string, string>>(new Map());
   const [lastExit, setLastExit] = createSignal<LaunchExit | null>(null);
   const [starting, setStarting] = createSignal<Set<string>>(new Set());
   /** Cleared when its drawer closes (ui-design 10 §4). */
@@ -91,6 +94,11 @@ export const launchStore = createRoot(() => {
 
   function isStarting(profileId: string): boolean {
     return starting().has(profileId);
+  }
+
+  /** 当前（或最近一次）运行的 id；抽屉据此只展示属于本轮的分析。 */
+  function currentRunId(profileId: string): string | null {
+    return runIds().get(profileId) ?? null;
   }
 
   function appendLines(profileId: string, lines: string[]): void {
@@ -307,9 +315,19 @@ export const launchStore = createRoot(() => {
   }
 
   function attachEvents(): void {
-    void listen<{ profile_id: string; pid: number }>(EVENTS.LAUNCH_STARTED, (event) => {
-      const { profile_id, pid } = event.payload;
+    void listen<{ profile_id: string; pid: number; run_id?: string }>(EVENTS.LAUNCH_STARTED, (event) => {
+      const { profile_id, pid, run_id } = event.payload;
       userKilled.delete(profile_id); // a fresh run clears any stale kill marker
+      if (run_id) {
+        setRunIds((map) => {
+          const next = new Map(map);
+          next.set(profile_id, run_id);
+          return next;
+        });
+      }
+      // 新运行开始：上一轮的分析结果与退出信息即失效。
+      aiStore.resetAnalysis();
+      setLastExit(null);
       markProcessStarted(profile_id);
       setRunning((map) => {
         const next = new Map(map);
@@ -325,7 +343,7 @@ export const launchStore = createRoot(() => {
     void listen<{ profile_id: string; lines: string[] }>(EVENTS.LAUNCH_OUTPUT, (event) => {
       appendLines(event.payload.profile_id, event.payload.lines);
     });
-    void listen<{ profile_id: string; exit_code: number; exit_type: string }>(
+    void listen<{ profile_id: string; exit_code: number; exit_type: string; run_id?: string }>(
       EVENTS.LAUNCH_EXITED,
       (event) => {
         const { profile_id, exit_code, exit_type } = event.payload;
@@ -371,6 +389,8 @@ export const launchStore = createRoot(() => {
     starting,
     buffers,
     lastExit,
+    runIds,
+    currentRunId,
     clearLastExit: () => setLastExit(null),
     flow,
     progress,

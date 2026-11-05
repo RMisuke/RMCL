@@ -1,9 +1,9 @@
 /**
- * Bottom-right launch dock (soft-skeuo dashboard).
+ * Bottom-right launch capsule.
  *
- * HMCL-style split button: the main area launches the current instance and the
- * arrow opens a glass version list. Styled with the same frosted dock shell as
- * the navigation bar; the primary area keeps the launcher's blue glass accent.
+ * The left segment shows the instance name (truncated) above the account-wide
+ * play time; the chevron opens the instance/version list. The right segment is
+ * a fixed-width launch button whose icon + label stay optically centred.
  */
 import type { JSX } from "solid-js";
 import { For, Show, createMemo, createSignal, onCleanup, onMount } from "solid-js";
@@ -14,7 +14,9 @@ import { instancesStore } from "../stores/instances";
 import { launchStore } from "../stores/launch";
 import { launchInstance } from "../lib/launchActions";
 import { t } from "../i18n";
+import { uiStore } from "../stores/ui";
 import { loaderLabel } from "../lib/loaders";
+import { playtimeLabel } from "../lib/playtime";
 import type { InstanceDetail, InstanceIcon } from "../ipc/types";
 
 function instanceIconUrl(icon: InstanceIcon): string | null {
@@ -50,12 +52,22 @@ export function LaunchDock(): JSX.Element {
   const current = () => instancesStore.selected() ?? versions()[0] ?? null;
   const running = () => (current() ? launchStore.isRunning(current()!.summary.key) : false);
   const starting = () => (current() ? launchStore.isStarting(current()!.summary.key) : false);
+  const totalPlaytime = createMemo(() =>
+    (instancesStore.items() ?? []).reduce(
+      (sum, item) => sum + Number(item.summary.play_time_seconds ?? 0),
+      0
+    )
+  );
 
   const mainLabel = () => {
-    if (running()) return t("dock.launch.stop");
     if (starting()) return t("dock.launch.launching");
     return current() ? t("dock.launch.game") : t("home.noInstance.cta");
   };
+  const instanceName = () => current()?.summary.display_name ?? t("dock.launch.empty");
+  const playtime = () =>
+    totalPlaytime() > 0
+      ? t("playtime.cumulative", { time: playtimeLabel(totalPlaytime()) })
+      : t("playtime.none");
 
   const onDocDown = (event: MouseEvent) => {
     if (open() && root && !root.contains(event.target as Node)) setOpen(false);
@@ -78,11 +90,8 @@ export function LaunchDock(): JSX.Element {
       navigate("/download#install");
       return;
     }
-    if (starting()) return;
-    if (running()) {
-      await launchStore.stop(profile.summary.key);
-      return;
-    }
+    // A running game is stopped from the dedicated run card above the capsule.
+    if (starting() || running()) return;
     await launchInstance(profile, navigate);
   }
 
@@ -102,8 +111,8 @@ export function LaunchDock(): JSX.Element {
       ref={root}
     >
       <Show when={open()}>
-        <div class="dock-popover launch-popover" role="listbox" aria-label={t("home.pickInstance")}>
-          <div class="dock-popover-head">
+        <div class="launch-popover" role="listbox" aria-label={t("home.pickInstance")}>
+          <div class="launch-popover-head">
             <span>{t("home.pickInstance")}</span>
             <span>{versions().length}</span>
           </div>
@@ -116,7 +125,7 @@ export function LaunchDock(): JSX.Element {
                 onClick={() => void choose(item.summary.key)}
               >
                 <VersionGlyph item={item} />
-                <span class="dock-row-copy">
+                <span class="launch-version-copy">
                   <strong>{item.summary.display_name}</strong>
                   <small>
                     {item.summary.game_version}
@@ -133,54 +142,65 @@ export function LaunchDock(): JSX.Element {
             )}
           </For>
           <Show when={versions().length === 0}>
-            <div class="dock-popover-empty">{t("dock.launch.empty")}</div>
+            <div class="launch-popover-empty">{t("dock.launch.empty")}</div>
           </Show>
-          <div class="dock-popover-sep" />
-          <button class="dock-action-row" role="option" onClick={() => go("/download#install")}>
+          <div class="launch-popover-sep" />
+          <button class="launch-popover-action" role="option" onClick={() => go("/download#install")}>
             <Icon name="plus" size={15} />
             {t("home.noInstance.cta")}
           </button>
-          <button class="dock-action-row" role="option" onClick={() => go("/instances")}>
+          <button class="launch-popover-action" role="option" onClick={() => go("/instances")}>
             <Icon name="grid" size={15} />
             {t("dock.launch.manage")}
           </button>
         </div>
       </Show>
 
-      <div class="launch-dock-body">
+      <Show when={running() && current()}>
+        {(profile) => (
+          <div class="launch-run-card">
+            <button
+              class="launch-run-action"
+              onClick={() => uiStore.openLogDrawer(profile().summary.key)}
+            >
+              <Icon name="terminal" size={16} />
+              {t("home.viewLog")}
+            </button>
+            <button
+              class="launch-run-action is-danger"
+              onClick={() => void launchStore.stop(profile().summary.key)}
+            >
+              <Icon name="square" size={15} />
+              {t("dock.launch.forceStop")}
+            </button>
+          </div>
+        )}
+      </Show>
+
+      <div class="launch-capsule">
         <button
-          class="launch-dock-main"
+          class={`launch-capsule-info${open() ? " is-open" : ""}`}
+          aria-haspopup="listbox"
+          aria-expanded={open()}
+          aria-label={t("home.pickInstance")}
+          onClick={() => setOpen(!open())}
+        >
+          <span class="launch-capsule-copy">
+            <strong title={instanceName()}>{instanceName()}</strong>
+            <small>{playtime()}</small>
+          </span>
+          <Icon name="chevron-up" size={17} class="launch-capsule-arrow" />
+        </button>
+        <button
+          class="launch-capsule-start"
           disabled={starting()}
           onClick={() => void onMain()}
           title={current()?.summary.display_name ?? t("home.noInstance.hint")}
         >
-          <span class="launch-dock-icon">
-            <Show
-              when={starting()}
-              fallback={
-                <Icon
-                  name={running() ? "square" : current() ? "play" : "download"}
-                  size={19}
-                />
-              }
-            >
-              <span class="launch-dock-spinner" />
-            </Show>
-          </span>
-          <span class="launch-dock-copy">
-            <strong>{mainLabel()}</strong>
-            <small>{current()?.summary.display_name ?? t("dock.launch.choose")}</small>
-          </span>
-        </button>
-        <button
-          class={`launch-dock-arrow${open() ? " is-open" : ""}`}
-          aria-haspopup="listbox"
-          aria-expanded={open()}
-          aria-label={t("home.pickInstance")}
-          disabled={versions().length === 0}
-          onClick={() => setOpen(!open())}
-        >
-          <Icon name="chevron-up" size={16} />
+          <Show when={starting()} fallback={<Icon name={current() ? "play" : "download"} size={18} />}>
+            <span class="launch-capsule-spinner" />
+          </Show>
+          <span>{mainLabel()}</span>
         </button>
       </div>
     </div>

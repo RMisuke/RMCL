@@ -17,15 +17,16 @@
     inset 0 1px 0 color-mix(in srgb, var(--rmccc-text) 10%, transparent);
 }
 
-/* ── Backdrop / media ─────────────────────────────────────────────────── */
-
-.theme-backdrop {
+/* App-scope decor layer (L1): own stacking context so effect z-index stays
+   below `.app-body` (z-index 1). */
+.decor-layer {
   position: absolute;
   inset: 0;
   z-index: 0;
   overflow: hidden;
   border-radius: inherit;
   pointer-events: none;
+  isolation: isolate;
 }
 
 .app-root > .app-body {
@@ -37,14 +38,6 @@
 html[data-skin-background="app"] .hero,
 html[data-skin-background="both"] .hero {
   background: transparent;
-}
-
-.theme-hero-layer {
-  position: absolute;
-  inset: 0;
-  z-index: 0;
-  overflow: hidden;
-  pointer-events: none;
 }
 
 .theme-media {
@@ -97,7 +90,8 @@ html[data-skin-background="both"] .hero {
   position: absolute;
   inset: -22%;
   opacity: calc(0.25 + var(--aurora-intensity, 0.5) * 0.55);
-  filter: blur(46px) saturate(125%);
+  /* No filter: blur() — the radial gradients already read as a soft glow, and a
+     full-screen blur cannot be cached by the compositor. */
 }
 
 .theme-aurora i {
@@ -106,7 +100,6 @@ html[data-skin-background="both"] .hero {
   width: 58%;
   aspect-ratio: 1;
   border-radius: 50%;
-  mix-blend-mode: screen;
   background: radial-gradient(
     circle,
     color-mix(in srgb, var(--rmccc-accent) 62%, transparent),
@@ -271,31 +264,24 @@ html[data-skin-background="both"] .hero {
   }
 }
 
-/* ── Motion gates ─────────────────────────────────────────────────────── */
+/* ── Static (non-full tier) effect fallbacks ──────────────────────────── */
 
-html[data-motion="off"] .theme-block,
-html[data-motion="off"] .theme-block-spin,
-html[data-motion="off"] .theme-aurora i,
-html[data-motion="off"] .theme-particle {
+.theme-aurora.is-static i { animation: none; opacity: .8; }
+.theme-aurora.is-static i:nth-child(n + 2) { display: none; }
+
+.theme-block.is-static { animation: none; }
+.theme-block.is-static .face.front {
+  transform: none;
+  filter: none;
+}
+
+.theme-particle.is-static {
   animation: none;
+  opacity: .4;
 }
 
-html[data-motion="off"] .theme-media-video {
-  display: none;
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .theme-block,
-  .theme-block-spin,
-  .theme-aurora i,
-  .theme-particle {
-    animation: none;
-  }
-
-  .theme-media-video {
-    display: none;
-  }
-}
+/* ── Motion gates ─────────────────────────────────────────────────────── */
+/* Centralized in `primitives.css` (`.ambient-stage *` / `.theme-effects *`). */
 
 /* ── Navigation icons / ornaments ─────────────────────────────────────── */
 
@@ -303,16 +289,6 @@ html[data-motion="off"] .theme-media-video {
   width: 16px;
   height: 16px;
   object-fit: contain;
-}
-
-.titlebar-ornament {
-  position: absolute;
-  top: 50%;
-  z-index: 1;
-  max-height: 44px;
-  object-fit: contain;
-  transform: translateY(-50%);
-  pointer-events: none;
 }
 
 .titlebar-ornament.is-left {
@@ -353,26 +329,6 @@ h3,
 
 .rm-card-body {
   padding: var(--rmccc-skin-card-padding, var(--rmccc-space-4));
-}
-
-.hero-card,
-.hero-module {
-  border-color: var(
-    --rmccc-skin-hero-border,
-    color-mix(in srgb, var(--rmccc-text) 9%, transparent)
-  );
-  border-radius: var(--rmccc-skin-hero-radius, 18px);
-  background: var(
-    --rmccc-skin-hero-bg,
-    linear-gradient(
-      145deg,
-      color-mix(in srgb, var(--rmccc-surface-elevated) 76%, transparent),
-      color-mix(in srgb, var(--rmccc-surface) 66%, transparent)
-    )
-  );
-  box-shadow: var(--rmccc-skin-hero-shadow, var(--rmccc-shadow-card));
-  backdrop-filter: var(--rmccc-skin-hero-blur, blur(24px) saturate(135%));
-  color: var(--rmccc-skin-hero-text, var(--rmccc-text));
 }
 
 .instance-card {
@@ -458,22 +414,6 @@ html[data-skin-card-image="border"] .instance-card {
   border-color: transparent;
   border-image: var(--rmccc-skin-card-image) var(--rmccc-skin-card-slice, 8) fill /
     var(--rmccc-skin-card-slice, 8px) stretch;
-}
-
-html[data-skin-hero-image="background"] .hero-card,
-html[data-skin-hero-image="background"] .hero-module {
-  background-image: var(--rmccc-skin-hero-image);
-  background-size: 100% 100%;
-  background-repeat: no-repeat;
-}
-
-html[data-skin-hero-image="border"] .hero-card,
-html[data-skin-hero-image="border"] .hero-module {
-  border-width: var(--rmccc-skin-hero-slice, 8px);
-  border-style: solid;
-  border-color: transparent;
-  border-image: var(--rmccc-skin-hero-image) var(--rmccc-skin-hero-slice, 8) fill /
-    var(--rmccc-skin-hero-slice, 8px) stretch;
 }
 
 html[data-skin-button-image="background"] .rm-btn-primary {

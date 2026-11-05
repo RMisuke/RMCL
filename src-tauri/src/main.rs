@@ -4,6 +4,7 @@ mod bindings;
 mod bundle;
 mod commands;
 mod events;
+mod game_log;
 mod handlers;
 #[cfg(test)]
 mod ipc_tests;
@@ -90,18 +91,27 @@ fn report_broken_bundle(window: tauri::WebviewWindow, report: &bundle::BundleRep
     }
 }
 
-/// Windows 11 draws its own rounded frame and a 1px border around borderless
-/// transparent windows. The webview paints an 18px rounded surface itself, so
-/// the system frame shows through as a second edge. Turn both DWM decorations
-/// off and let CSS be the only painter; on Windows 10 these attributes are
-/// unsupported and the call fails harmlessly.
+/// Windows paints its native frame (drop shadow + 1px border) around the
+/// **rectangular** window even when `decorations` is off, because tao keeps
+/// `WS_CAPTION`/`WS_THICKFRAME` for resizing and Snap. With an 18px CSS
+/// surface the DWM frame therefore shows up as a square outline in the
+/// transparent corner notches. Disabling native non-client rendering (the
+/// frameless-transparent recipe used by Electron) removes the shadow and the
+/// border; CSS becomes the only painter. `DWMNCRP_DISABLED` works on Windows 10
+/// too; the rounded-corner and border-colour attributes are Windows 11-only and
+/// fail harmlessly on older builds.
 #[cfg(target_os = "windows")]
 fn apply_windows_window_chrome(window: &tauri::WebviewWindow) {
     use std::ffi::c_void;
     use windows::Win32::Graphics::Dwm::{
-        DwmSetWindowAttribute, DWMWA_BORDER_COLOR, DWMWA_COLOR_NONE,
-        DWMWA_WINDOW_CORNER_PREFERENCE, DWMWCP_DONOTROUND,
+        DwmSetWindowAttribute, DWMNCRP_DISABLED, DWMWA_BORDER_COLOR, DWMWA_COLOR_NONE,
+        DWMWA_NCRENDERING_POLICY, DWMWA_WINDOW_CORNER_PREFERENCE, DWMWCP_DONOTROUND,
     };
+
+    // Keep tao's own hit-test/shadow bookkeeping in sync with the DWM policy.
+    if let Err(error) = window.set_shadow(false) {
+        tracing::warn!(%error, "Could not disable the native window shadow");
+    }
 
     let hwnd = match window.hwnd() {
         Ok(hwnd) => hwnd,
@@ -110,6 +120,23 @@ fn apply_windows_window_chrome(window: &tauri::WebviewWindow) {
             return;
         }
     };
+
+    // DWMNCRP_DISABLED removes the rectangular frame pixels (shadow + border)
+    // that DWM would otherwise draw for the frame styles tao keeps.
+    let policy = DWMNCRP_DISABLED;
+    // SAFETY: `hwnd` is the live top-level window handle; the pointer is valid
+    // for the duration of the call and the size matches the attribute layout.
+    let policy_result = unsafe {
+        DwmSetWindowAttribute(
+            hwnd,
+            DWMWA_NCRENDERING_POLICY,
+            &policy as *const _ as *const c_void,
+            std::mem::size_of_val(&policy) as u32,
+        )
+    };
+    if let Err(error) = policy_result {
+        tracing::debug!(%error, "DWM non-client rendering policy is not supported");
+    }
 
     // DWMWCP_DONOTROUND = 1. Keep CSS border-radius authoritative.
     let corner = DWMWCP_DONOTROUND.0 as u32;
@@ -161,19 +188,28 @@ fn configure_webview2_cache() {
 }
 
 fn main() {
-    // Ensure data directories exist
-    paths::ensure_dirs().expect("Failed to create data directories");
+    // A genuine first run must not create the data roots before the user
+    // chooses standard/portable in the wizard. The snapshot on `AppState`
+    // remembers what existed at this point.
+    let first_run = !paths::has_any_launcher_config();
+    if !first_run {
+        paths::ensure_dirs().expect("Failed to create data directories");
+    }
 
     // Keep the WebView2 browser cache inside the SNGL data root on Windows.
     #[cfg(target_os = "windows")]
-    configure_webview2_cache();
+    if !first_run {
+        configure_webview2_cache();
+    }
 
     // Initialize logging
-    let log_dir = paths::log_dir();
-    // Logging must not take the whole app down: an unavailable log directory
-    // (sandbox / read-only mount / permission issue) degrades to stderr only.
-    if let Err(e) = init_logging(&log_dir) {
-        eprintln!("Warning: failed to initialize logging: {e}");
+    if !first_run {
+        let log_dir = paths::log_dir();
+        // Logging must not take the whole app down: an unavailable log directory
+        // (sandbox / read-only mount / permission issue) degrades to stderr only.
+        if let Err(e) = init_logging(&log_dir) {
+            eprintln!("Warning: failed to initialize logging: {e}");
+        }
     }
 
     // P3-13：崩溃上报（本地）——panic hook 将崩溃信息写入日志文件，便于排障。
@@ -261,11 +297,18 @@ fn main() {
                 });
             },
         )
+        // Single-instance must be registered before every other plugin: a second
+        // launch forwards its argv/cwd here and exits instead of opening another
+        // window on the same data root.
+        .plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| {
+            if let Some(window) = app.get_webview_window("main") {
+                let _ = window.show();
+                let _ = window.set_focus();
+            }
+        }))
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
-        // P2-25：启用自动更新（需 release CI 生成 latest.json + 签名密钥）
-        .plugin(tauri_plugin_updater::Builder::new().build())
         .setup(|app| {
             let data_dir = paths::default_data_dir();
             let app_handle = app.handle().clone();

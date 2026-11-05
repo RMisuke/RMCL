@@ -165,7 +165,9 @@ fn ipc_command_count_is_stable() {
     // → 132：data_mode_get / data_mode_switch（SNGL 标准/便携根切换与剪切迁移）、
     //        background_catalog / background_open_folder /
     //        background_settings_get / background_settings_set（Background 目录与轮播策略）。
-    assert_eq!(crate::handlers::IPC_COMMANDS.len(), 132);
+    // → 133：auth_set_offline_uuid（左 Dock 账户卡手动修改离线 UUID）。
+    // → 135：onboarding_probe / onboarding_complete（初次启动引导）。
+    assert_eq!(crate::handlers::IPC_COMMANDS.len(), 135);
 }
 
 // ────────────────────────── 2. 错误码契约 ──────────────────────────
@@ -1005,8 +1007,9 @@ const LOGIC_ECHO_WAT: &str = r#"(module
 /// Locate the helper binary built by `cargo test --workspace`.
 fn logic_helper_binary() -> Option<std::path::PathBuf> {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).parent()?;
+    let name = rmccc_logic::supervisor::helper_file_name();
     for profile in ["debug", "release"] {
-        let candidate = root.join("target").join(profile).join("rmccc-logic-host");
+        let candidate = root.join("target").join(profile).join(&name);
         if candidate.is_file() {
             return Some(candidate);
         }
@@ -1018,7 +1021,7 @@ fn logic_helper_binary() -> Option<std::path::PathBuf> {
 #[test]
 fn logic_plugin_runs_end_to_end_through_the_helper() {
     let Some(helper) = logic_helper_binary() else {
-        eprintln!("skipping: build rmccc-logic-host first");
+        eprintln!("skipping: build SNGL-logic-host first");
         return;
     };
 

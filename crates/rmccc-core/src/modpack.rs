@@ -846,6 +846,27 @@ fn append_extra_libraries(
             object.insert("patches".to_string(), serde_json::json!([patch]));
         }
     }
+
+    // 折叠版（无 inheritsFrom，顶层字段即合并结果）在 resolve() 时不会
+    // 再套用 patches；额外库必须同步写进顶层 libraries，否则不会进 classpath。
+    if object.get("inheritsFrom").is_none() {
+        let libraries_value = object
+            .entry("libraries")
+            .or_insert_with(|| serde_json::Value::Array(Vec::new()));
+        if let Some(existing) = libraries_value.as_array_mut() {
+            let names: Vec<String> = existing
+                .iter()
+                .filter_map(|l| l.get("name").and_then(|n| n.as_str()).map(str::to_string))
+                .collect();
+            for lib in libraries {
+                if !names.iter().any(|n| n == &lib.name) {
+                    if let Ok(value) = serde_json::to_value(lib) {
+                        existing.push(value);
+                    }
+                }
+            }
+        }
+    }
     std::fs::write(json_file, serde_json::to_string_pretty(&value)?)?;
     Ok(())
 }
@@ -1017,6 +1038,10 @@ mod tests {
         assert_eq!(patches.len(), 1);
         assert_eq!(patches[0]["id"], "mcbbs");
         assert_eq!(patches[0]["libraries"][0]["name"], "example:lib:1.0");
+        // 折叠版（无 inheritsFrom）顶层 libraries 同步，避免解析时跳过 patch 丢库。
+        let libraries = value["libraries"].as_array().unwrap();
+        assert_eq!(libraries.len(), 1);
+        assert_eq!(libraries[0]["name"], "example:lib:1.0");
         let _ = std::fs::remove_dir_all(dir);
     }
 

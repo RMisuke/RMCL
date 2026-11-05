@@ -6,7 +6,7 @@
 import type { JSX } from "solid-js";
 import { Show, For, createMemo, createSignal, createEffect, onCleanup } from "solid-js";
 import { Icon } from "./icons";
-import { RmButton, RmIconButton, RmInput, RmTag } from "./rm/controls";
+import { RmButton, RmIconButton, RmInput } from "./rm/controls";
 import { launchStore } from "../stores/launch";
 import { instancesStore } from "../stores/instances";
 import { aiStore } from "../stores/ai";
@@ -58,7 +58,13 @@ export function LogDrawer(): JSX.Element {
     return last && last.profileId === profileId() ? last : null;
   });
 
-  const analysis = () => aiStore.analysis();
+  // 只展示绑定到「当前 run」的分析：新运行/切换实例后旧结果不再串台。
+  const runId = () => launchStore.currentRunId(profileId() ?? "");
+  const analysis = createMemo(() => {
+    const current = aiStore.analysis();
+    if (!current) return null;
+    return current.runId === runId() ? current : null;
+  });
   const aiConfigured = () => aiStore.config()?.configured ?? false;
   const [egressPrompt, setEgressPrompt] = createSignal(false);
 
@@ -133,7 +139,12 @@ export function LogDrawer(): JSX.Element {
       setEgressPrompt(true);
       return;
     }
-    const res = await aiStore.analyzeLog(profileId());
+    const info = exit();
+    const res = await aiStore.analyzeLog(
+      profileId(),
+      runId(),
+      info ? { exitCode: info.exitCode, exitType: info.exitType } : undefined
+    );
     if (!res.ok) toast({ message: res.message ?? "", tone: "error" });
   }
 
@@ -141,10 +152,9 @@ export function LogDrawer(): JSX.Element {
     <Show when={drawer()}>
       <aside class="log-drawer" role="complementary">
         <header class="log-drawer-head">
-          <h3>
-            {t("logs.title", { name: profileName() })}
-          </h3>
-          <div class="log-drawer-actions">
+          <div class="log-drawer-title">
+            <h3>{t("logs.title", { name: profileName() })}</h3>
+            {/* AI analysis lives at the top-left of the log window. */}
             <RmButton
               size="sm"
               icon="bot"
@@ -154,6 +164,8 @@ export function LogDrawer(): JSX.Element {
             >
               {analysis()?.state === "running" ? t("logs.ai.analyzing") : t("logs.ai.analyze")}
             </RmButton>
+          </div>
+          <div class="log-drawer-actions">
             <RmIconButton
               icon={autoscroll() ? "chevron-down" : "chevron-right"}
               label={t("logs.autoscroll")}
@@ -173,6 +185,8 @@ export function LogDrawer(): JSX.Element {
               onClick={() => {
                 const id = profileId();
                 if (id && exit()) launchStore.keepBuffer(id);
+                // 关闭抽屉即中止在途分析，避免后台空转与"卡加载"。
+                if (analysis()?.state === "running") void aiStore.cancelAnalysis();
                 uiStore.closeLogDrawer();
               }}
             />
@@ -225,11 +239,18 @@ export function LogDrawer(): JSX.Element {
                     ? t("logs.ai.analyzing")
                     : state().state === "error"
                       ? t("logs.ai.failed")
-                      : t("logs.ai.doneTitle")}
+                      : state().state === "cancelled"
+                        ? t("logs.ai.cancelled")
+                        : t("logs.ai.doneTitle")}
                 </span>
-                <span class="ai-panel-meta">
+                <span class="ai-panel-meta" title={t("logs.ai.source", { source: state().source })}>
                   {t("logs.ai.sentNote", { lines: String(state().sentLines) })}
                 </span>
+                <Show when={state().omittedLines > 0}>
+                  <span class="ai-panel-meta">
+                    {t("logs.ai.omitted", { lines: String(state().omittedLines) })}
+                  </span>
+                </Show>
                 <Show when={state().state === "running"}>
                   <RmButton size="sm" variant="ghost" onClick={() => void aiStore.cancelAnalysis()}>
                     {t("common.cancel")}
@@ -258,7 +279,7 @@ export function LogDrawer(): JSX.Element {
                   </Show>
                 </div>
               </Show>
-              <Show when={!aiExpanded() && state().state === "done"}>
+              <Show when={!aiExpanded() && (state().state === "done" || state().state === "cancelled")}>
                 <div class="ai-panel-actions">
                   <RmButton
                     size="sm"
@@ -296,11 +317,18 @@ export function LogDrawer(): JSX.Element {
                       ? t("logs.ai.analyzing")
                       : s().state === "error"
                         ? t("logs.ai.failed")
-                        : t("logs.ai.doneTitle")}
+                        : s().state === "cancelled"
+                          ? t("logs.ai.cancelled")
+                          : t("logs.ai.doneTitle")}
                   </span>
-                  <span class="ai-panel-meta">
+                  <span class="ai-panel-meta" title={t("logs.ai.source", { source: s().source })}>
                     {t("logs.ai.sentNote", { lines: String(s().sentLines) })}
                   </span>
+                  <Show when={s().omittedLines > 0}>
+                    <span class="ai-panel-meta">
+                      {t("logs.ai.omitted", { lines: String(s().omittedLines) })}
+                    </span>
+                  </Show>
                   <div class="btn-row">
                     <RmButton
                       size="sm"

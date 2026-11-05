@@ -420,8 +420,8 @@ pub async fn background_catalog(
             videos.push(item);
         }
     }
-    images.sort_by(|left, right| left.name.to_lowercase().cmp(&right.name.to_lowercase()));
-    videos.sort_by(|left, right| left.name.to_lowercase().cmp(&right.name.to_lowercase()));
+    images.sort_by_key(|item| item.name.to_lowercase());
+    videos.sort_by_key(|item| item.name.to_lowercase());
     Ok(BackgroundCatalogView {
         dir: dir.display().to_string(),
         images,

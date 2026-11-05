@@ -54,14 +54,14 @@ RMCL/
 │   ├── audits/                    # 仍在跟踪的 4 份台账（AUDIT_2026-10-20 横切全景 / 10-23 增量 / PLUGIN_SECURITY_10-27 / AUDIT_11-01_WINDOWS）
 │   ├── guides/                    # 运维手册 / 插件编写指南
 │   ├── roadmap/                   # 细化执行计划（Phase 0–7 + 平台适配 + 批次执行提示词）
-│   ├── ui-design/                 # 前端重设计（00–14 共 15 份 + 验收清单，前端重构依据）
+│   ├── ui-design/                 # 前端重设计（00–17 共 18 份 + 验收清单 + README，前端重构依据）
 │   ├── design/                    # 物品图标原始素材（mc-icons-src/）
 │   └── archive/                   # 历史快照（仅问题溯源；含 10-25/10-26 审计与两份插件收缩分析——后者由 ADR-022 否证）
 ├── schemas/                # 公共协议 schema（manifest / dashboard-layout / plugin-ui-bridge / theme）
 ├── crates/                # Rust workspace crates（含 rmccc-platform / rmccc-plugin / rmccc-dashboard / rmccc-logic / rmccc-llm / rmccc-agent[ADR-013 瘦身]）
 ├── examples/plugins/      # 插件样例 4 个（server-dashboard 隔离 UI 卡片；theme-midnight / theme-aurora / theme-grass 主题）
 ├── plugin-sdk/            # 第三方插件 SDK（plugin-api / plugin-ui / 模板 / 校验打包工具）
-├── src-tauri/             # Tauri 应用层（IPC 命令：132 条，权威清单 handlers.rs，断言 ipc_tests.rs:168）
+├── src-tauri/             # Tauri 应用层（IPC 命令：135 条，权威清单 handlers.rs，断言 ipc_tests.rs:170）
 ├── src-logic-host/        # 逻辑插件 helper 进程（唯一链接 wasmi 的二进制，ADR-007）
 ├── poc/                   # 一次性 PoC（非 workspace 成员，如 ADR-007 的运行时测量）
 ├── src/                   # SolidJS 前端（src/assets/ 为前端静态资源；src-tauri/icons/ 为打包图标）

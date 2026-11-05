@@ -45,7 +45,6 @@ function readPrefs(): BackgroundVideoPrefs {
 const [prefs, setPrefsSignal] = createRoot(() => createSignal<BackgroundVideoPrefs>(readPrefs()));
 const [issue, setIssueSignal] = createRoot(() => createSignal(""));
 const [preparing, setPreparingSignal] = createRoot(() => createSignal(false));
-const [asset, setAssetSignal] = createRoot(() => createSignal<ResolvedBackgroundVideo | null>(null));
 
 let generation = 0;
 const completed = new Map<string, ResolvedBackgroundVideo>();
@@ -62,7 +61,6 @@ function persist(next: BackgroundVideoPrefs): void {
 
 function invalidatePreparation(): void {
   generation++;
-  setAssetSignal(null);
   setPreparingSignal(false);
 }
 
@@ -82,45 +80,11 @@ export function backgroundVideoPreparing(): boolean {
   return preparing();
 }
 
-export function backgroundVideoAsset(): ResolvedBackgroundVideo | null {
-  return asset();
-}
-
-export function setBackgroundVideoEnabled(enabled: boolean): void {
-  if (!enabled) invalidatePreparation();
-  persist({ ...prefs(), enabled });
-}
-
 /** Apply a file selected from the centralized Background catalog. */
 export function applyBackgroundVideo(path: string, enabled: boolean, dim: number): void {
   invalidatePreparation();
   setIssueSignal("");
   persist({ path, enabled, dim: clampDim(dim) });
-}
-
-export function setBackgroundVideoDim(dim: number): void {
-  persist({ ...prefs(), dim: clampDim(dim) });
-}
-
-export function clearBackgroundVideo(): void {
-  invalidatePreparation();
-  setIssueSignal("");
-  persist({ ...prefs(), path: "", enabled: false });
-}
-
-/** Open the native picker. Cancelling leaves the current choice untouched. */
-export async function pickBackgroundVideo(): Promise<{
-  ok: boolean;
-  message?: string;
-  selected?: boolean;
-}> {
-  const res = await backgroundMedia.pickVideo();
-  if (!res.ok) return { ok: false, message: res.error.message };
-  if (!res.data) return { ok: true, selected: false };
-  invalidatePreparation();
-  setIssueSignal("");
-  persist({ ...prefs(), path: res.data, enabled: true });
-  return { ok: true, selected: true };
 }
 
 /**
@@ -142,7 +106,6 @@ export function primeBackgroundVideo(): Promise<ResolvedBackgroundVideo | null> 
 
   const cached = completed.get(current.path);
   if (cached) {
-    setAssetSignal(cached);
     return Promise.resolve(cached);
   }
   const existing = pending.get(current.path);
@@ -162,7 +125,6 @@ export function primeBackgroundVideo(): Promise<ResolvedBackgroundVideo | null> 
       const resolved = { ...res.data, url: convertFileSrc(res.data.path) };
       completed.set(path, resolved);
       if (ticket === generation) {
-        setAssetSignal(resolved);
         setIssueSignal("");
       }
       return resolved;

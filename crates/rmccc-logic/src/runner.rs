@@ -148,7 +148,7 @@ impl LogicRunner {
         self.executable.clone().ok_or_else(|| {
             LogicError::new(
                 LogicErrorCode::Internal,
-                "logic helper not found (set RMCCC_LOGIC_HOST or install rmccc-logic-host)",
+                "logic helper not found (set RMCCC_LOGIC_HOST or install SNGL-logic-host)",
             )
         })
     }

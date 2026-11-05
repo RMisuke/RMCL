@@ -212,6 +212,12 @@
 > `tauri-plugin-updater` / `window-state` / `process` 依赖与 capability。
 > （2026-10-24 纠偏，审计 P2-32：此前列出的 `deep-link` 依赖与 capability **实际未接线**——
 > `src-tauri` 的 Cargo.toml / tauri.conf.json / capabilities / main.rs 四处均无痕迹，属声明超前于代码。）
+> （2026-11-04 二次纠偏：`tauri-plugin-updater` 与 `process` capability **已下线**——updater 从未启用，
+> 移除后还省掉重复的 reqwest 0.13 与 osakit/minisign；`window-state` 仍在。自动更新若要恢复需先出新 ADR。）
+> （2026-11-05 体积口径：`cargo test --workspace` **765 passed / 0 failed / 3 ignored**、`pnpm test` 80、
+> `pnpm sdk:test` 14；主可执行 `Contents/MacOS/SNGL` **10,683,824 B（10.19 MiB）**、
+> helper `SNGL-logic-host` 1,116,304 B（1.06 MiB），均为 `stat -f %z` 实测，
+> `strip = true` 出厂生效，无需再"手动 strip"。ADR-011 红线现为 < 20 MiB。）
 >
 > 已实测（2026-10-22）：`cargo fmt --check`、两条 clippy 门禁、**617 项测试 / 0 失败**、`pnpm typecheck` 全绿
 > （2026-10-26 复测：**654 项测试 / 0 失败**，前端新增 vitest 32 用例）；

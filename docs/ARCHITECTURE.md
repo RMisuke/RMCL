@@ -139,8 +139,8 @@ RMCL/
 │   ├── tauri.conf.json
 │   ├── capabilities/default.json
 │   └── src/
-│       ├── main.rs               # Entry + generate_handler! (132 commands)
-│       ├── bindings.rs           # ts-rs export of 19 types → src/ipc/types.ts
+│       ├── main.rs               # Entry + generate_handler! (135 commands)
+│       ├── bindings.rs           # ts-rs export of 172 types → src/ipc/types.ts
 │       ├── state.rs              # AppState (Tokio-backed)
 │       ├── events.rs             # Event constants + ThrottledEmitter
 │       └── commands/             # IPC command handlers
@@ -372,6 +372,7 @@ pub struct JavaRequirement {
 // 1.17        → Java 16
 // 1.18 – 1.20.4 → Java 17
 // 1.20.5+     → Java 21
+```
 
 #### 版本继承合并与规则求值的统一语义（2026-10-25 审计批次 3 定版）
 
@@ -411,6 +412,30 @@ pub struct JavaRequirement {
 - `compatibility::applies_to_environment`（清单可见性过滤）语义不同且保留：
   任一规则命中即视为当前平台可见（用于索引里隐藏不支持平台的快照）。
 
+**已折叠版本（HMCL / PCL / MultiMC 形态）与 natives 归类（2026-11-05 定版）**
+
+第三方启动器安装出来的整合包版本 JSON 常是**已折叠的独立版本**：没有 `inheritsFrom`，
+顶层 `mainClass` / `libraries` / `arguments` 已是合并结果，`patches` 只为编辑与回写保留。
+`DefaultGameRepository` 用 `is_folded_standalone(manifest)` 识别这种形态（无 `inheritsFrom`
+且 `main_class`、`libraries` 非空，且有 `arguments` 或 `minecraft_arguments`）：
+
+- 折叠版本的 `patches` **只进入 `standalone` 视图**（供 loader 检测/回写），
+  **不参与 `launch` 合并**。否则会二次追加参数：`--add-opens` 的去重只去重值、
+  不去重可重复 flag，结果是 JVM 收到没有模块名的孤立 `--add-opens` 直接以
+  `Error: --add-opens requires modules to be specified` 退出，game args 同时整体翻倍。
+- MCBBS 整合包的额外库补丁（`crates/rmccc-core/src/modpack.rs::append_extra_libraries`）
+  在写入 patch 的**同时折叠进顶层 `libraries`**（按 `name` 去重），保证跳过 patch 后不丢 classpath 条目。
+- `libraries::collect_classpath` **按解析后的 jar 路径去重**：MultiMC 形态会把同一个库写成
+  两条（纯 artifact + 带 `classifiers` 的 natives），重复条目会让 Forge 的
+  `BootstrapLauncher` / `UnionFileSystem` 以 `Duplicate key …` 崩溃。
+- natives 的 JAR 选择只有一个入口 `libraries::native_classifier_for(lib, platform, libs_dir)`，
+  classpath 组装与 `rmccc-launch::natives::decompress_natives` 共用：先按
+  `PlatformDescriptor::native_classifier_candidates()` 优先选取**已下载到本地的 arch 变体**
+  （如 `natives-macos-arm64`），否则退回清单声明的第一个本平台 classifier。
+  该 JAR 同时进 classpath——LWJGL 3 只从 classpath 用 `SharedLibraryLoader` 解出本地库，
+  不读 `java.library.path`；只解压到 natives 目录不足以让 arm64 JVM 加载成功。
+
+```rust
 /// Mod metadata
 pub struct ModInfo {
     pub id: String,
@@ -1412,12 +1437,13 @@ User clicks "Launch" on a profile
 
 ## 11. IPC Command Table
 
-132 commands, all defined in `src-tauri/src/commands/` and registered via
+135 commands, all defined in `src-tauri/src/commands/` and registered via
 `IPC_COMMANDS` + `generate_handler!` in `src-tauri/src/handlers.rs`
-（**2026-11-03 实测**：`#[tauri::command]` 132 = `IPC_COMMANDS` 132 = `generate_handler!` 132 =
-`src/ipc/api.ts` 的 132 处 `safeInvoke`；数量由 `src-tauri/src/ipc_tests.rs:168` 的计数断言守护。
+（**2026-11-05 实测**：`#[tauri::command]` 135 = `IPC_COMMANDS` 135 = `generate_handler!` 135 =
+`src/ipc/api.ts` 的 135 处 `safeInvoke`；数量由 `src-tauri/src/ipc_tests.rs:170` 的计数断言守护。
 ADR-013 迁移后 agent_* 9 条已由 ai_* 5 条 + mods 纯逻辑 2 条取代，S4/S5 再加 mcp_* 9 条；
-其后的实例管理 v2、整合包安装、统一任务中心、Background 壁纸库与 SNGL 数据根又净增到 132。
+其后的实例管理 v2、整合包安装、统一任务中心、Background 壁纸库与 SNGL 数据根又净增到 132，
+加 `auth_set_offline_uuid` 为 133，初次启动引导 `onboarding_probe` / `onboarding_complete` 为 135。
 下表按 2026-10-23 基线列出，新增命令的分组清单见 [`ui-design/11_IPC_COVERAGE.md`](ui-design/11_IPC_COVERAGE.md)）。
 
 | Command | Handler | Description |
@@ -1711,6 +1737,7 @@ strategy:
 ```
 `SNGL` is resolved before `settings.json` is read, so the portable switch cannot live in the settings file it is trying to locate. Legacy `config/launcher-settings.json`, `state/launcher-state.json` and `user-settings.json` are merged into `settings.json` and archived under `backup/pre-sngl/` on first launch. macOS keeps WKWebView's own cache in the OS location; Windows WebView2 is redirected into `cache/webview2`.
 
+```
 {game_dir}/                          # Any registered game root (managed or external)
 ├── versions/
 │   └── 1.20.4-fabric/
@@ -1851,20 +1878,22 @@ async fn test_install_pipeline_calls_download() {
 
 ### 17.1 Type Generation (ts-rs)
 
-All IPC-related Rust structs derive `TS`, build script auto-generates TypeScript types：
+All IPC-related Rust structs derive `TS`；类型由 `src-tauri/src/bindings.rs` 集中导出（不是 build.rs）：
 
 ```rust
 // Every IPC type derives TS
 #[derive(Debug, Serialize, Deserialize, TS)]
 #[ts(export)]
-pub struct Profile { ... }
+pub struct InstanceKey { ... }        // ADR-016：实例即版本目录，无 Profile UUID
 
 #[derive(Debug, Serialize, Deserialize, TS)]
 #[ts(export)]
 pub struct IpcError { ... }
 
-// build.rs in src-tauri triggers ts-rs export
-// Output: src/ipc/types.ts (auto-generated, gitignored)
+// bindings.rs::generate_types() 逐个调用 ts::<T>() 拼接（实测 172 处），
+// write_types_file()（debug 构建启动时由 main.rs:235 调用）写入
+// src/ipc/types.ts —— 该文件入库跟踪，不是 gitignored；
+// CI 用 `git diff --exit-code src/ipc/types.ts` 断言其与后端一致。
 ```
 
 ### 17.2 Event & Error Constants
@@ -2175,7 +2204,7 @@ plugin-sdk/
 
 决策与实测数据见 [ADR-007](adr/ADR-007-logic-runtime.md)。三条硬边界：
 
-1. **主程序不链接 WASM 引擎**。引擎只存在于 helper 进程 `rmccc-logic-host` 里，
+1. **主程序不链接 WASM 引擎**。引擎只存在于 helper 进程 `SNGL-logic-host` 里，
    因此 ADR-011 的主可执行文件体积不受影响（实测：嵌入式 wasmtime +5.89 MiB 会直接顶破红线）。
 2. **进程隔离**：helper 崩溃/死循环不会带走启动器；超时由宿主 `kill` 子进程强制实现，
    不依赖模块配合。
@@ -2186,7 +2215,7 @@ plugin-sdk/
 | 组件 | 位置 | 职责 |
 |------|------|------|
 | `rmccc-logic` | `crates/rmccc-logic` | ABI 常量、JSON-RPC 协议、`LogicLimits`、`LogicHost` 监管者（spawn/超时/重启） |
-| `rmccc-logic-host` | `src-logic-host` | 唯一链接 wasmi 的二进制：校验导入 → 实例化 → 执行 `rmccc_invoke` |
+| `SNGL-logic-host` | `src-logic-host` | 唯一链接 wasmi 的二进制：校验导入 → 实例化 → 执行 `rmccc_invoke` |
 | PoC | `poc/logic-runtime`（非 workspace 成员） | ADR-007 的体积/延迟/内存实测与复现脚本 |
 
 ### 24.2 协议

@@ -1,17 +1,20 @@
 # 11 · IPC 接口覆盖矩阵
 
 > 验收基准：后端全部命令 + 事件在新 UI 中的唯一归属。
-> 权威命令清单以 `src-tauri/src/handlers.rs` 为准。**状态（2026-11-03 校正）**：注册表实为
-> **132 条**（`ipc_tests.rs:168` 断言锁定），下表仍是 **2026-10-23 的 93 条基线**（`agent_*` 9 条移除；
+> 权威命令清单以 `src-tauri/src/handlers.rs` 为准。**状态（2026-11-05 校正）**：注册表实为
+> **135 条**（`src-tauri/src/ipc_tests.rs:170` 断言锁定；度量：`IPC_COMMANDS` 数组字符串项去重计数），
+> 下表仍是 **2026-10-23 的 93 条基线**（`agent_*` 9 条移除；
 > `ai_*` 5 + mods 2 + `mcp_*` 9 全部落地，见 §1.5）。
-> **未回填本矩阵的 36 条**（按来源分组，实施时须补行）：
+> **未在本矩阵单列的 39 条**（按来源分组，实施时须补行；度量：注册表项里未作为 §1 表首格出现的命令名，简写组按其全称计）：
 > Background 壁纸库 4（`background_catalog` / `_open_folder` / `_settings_get` / `_settings_set`）、
 > SNGL 数据根模式 2（`data_mode_get` / `_switch`）、图标缓存 4（`cache_icon_fetch` / `_stats` / `_set_config` / `_clear`）、
 > 游戏目录管理 9（`game_directory_list` / `_add` / `_update` / `_remove` / `_select` / `_selected` / `_overview` / `_scan` / `_reveal`）、
 > 实例管理 v2 8（`instance_get` / `_update_settings` / `_select` / `_import` / `_install` / `_global_settings` /
 > `_update_global_settings` / `instance_sizes`）、存储 2（`storage_overview` / `storage_clean_cache`）、
 > 整合包 3（`modpack_inspect` / `_pick_file` / `_install`）、
-> 单条 4（`auth_skin_url`、`server_status`、`settings_app_info`、`dashboard_get_theme_skin`）。
+> 单条 4（`auth_skin_url`、`server_status`、`settings_app_info`、`dashboard_get_theme_skin`）、
+> 初次启动引导 2（`onboarding_probe` / `onboarding_complete`，见 [`16_FIRST_RUN_ONBOARDING.md`](16_FIRST_RUN_ONBOARDING.md)）、
+> 离线 UUID 1（`auth_set_offline_uuid`，左 Dock 账户卡，见 [`17_HOME_DOCK.md`](17_HOME_DOCK.md)）。
 > 实施后端新增/变更命令时必须同步本表。
 > **前端落地（2026-10-23）**：`src/pages/` 七页已按本矩阵实现（路由级 lazy 分包）；
 > `mcp_*` 9 条 wrapper 已加（`BACKEND_ONLY` 白名单可随设置页接线移除）。
@@ -19,7 +22,7 @@
 图例：「页面」引用 docs/ui-design/ 对应文档；**加粗** = 该命令在新 UI 中首次获得入口
 （现状 UI 未用或无 wrapper）。
 
-## 1. 命令矩阵（86 条设计基线；现注册表 132 条，未回填的 36 条见文首）
+## 1. 命令矩阵（86 条设计基线；现注册表 135 条，未回填的 39 条见文首）
 
 ### 认证/账号（auth.rs · 8 条）
 

@@ -52,8 +52,8 @@
 采用 **A + D 的组合**：
 
 1. **硬红线**：`cargo build --release` 后经 strip 的**主可执行文件** < **10 MiB**（二进制兆字节，1 MiB = 1,048,576 B）。
-   - macOS：`target/release/rmccc`，strip 后。
-   - Windows：`rmccc.exe`，strip 后（或等价 `llvm-strip`）。
+   - macOS：`target/release/SNGL`，strip 后。
+   - Windows：`SNGL.exe`，strip 后（或等价 `llvm-strip`）。
    - Linux：`rmccc`，strip 后。
    - CLI `rmcli` 同口径（当前 4.28 MiB）。
 2. **软指标**：`.app` / DMG / NSIS / MSI 安装包体积**单列记录**（每 release 报告），不作硬红线；但当安装包显著增长时需在 PR 中说明。

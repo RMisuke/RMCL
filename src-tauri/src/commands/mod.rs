@@ -13,6 +13,7 @@ pub mod mcp;
 pub mod modloader;
 pub mod modpack;
 pub mod mods;
+pub mod onboarding;
 pub mod plugin;
 pub mod plugin_logic;
 pub mod plugin_ui;

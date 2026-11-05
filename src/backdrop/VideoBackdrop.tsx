@@ -1,20 +1,19 @@
 /**
- * One persistent native-resolution video wallpaper.
+ * Video wallpaper backdrop (ui-render-refactor S3 / `03_BACKGROUND_SUBSYSTEM.md` §3).
  *
- * The system WebView owns GPU decode and composition. Routing never touches this
- * element; there are no poster caches or forced decoder resets. Only source
- * changes and the loop boundary affect playback.
+ * Capability split instead of one expensive path for both platforms:
+ *  - Windows (WebView2/Chromium): the native `<video>` compositor is cheap and
+ *    reliable, so this renders the element directly — no canvas, no rAF loop.
+ *  - macOS (WKWebView): the native video surface can go transparent over a
+ *    transparent window, so decoded frames are painted into a DOM canvas. That
+ *    path is budgeted: reduced internal resolution, `alpha:false`, ~25 fps and
+ *    drawing paused whenever the window is hidden or unfocused.
  *
- * Window occlusion is deliberately not treated as a stop signal: WKWebView can
- * release the composited video surface when a window is hidden, and pausing in
- * `visibilitychange` made the wallpaper come back blank after switching apps.
- * The element keeps playing while hidden; if WebKit did pause it, the visible
- * handler resumes (or reloads the same source) once the compositor is attached.
- * When the still-image wallpaper is active this layer is unmounted, so a hidden
- * MP4 never decodes in the background.
+ * There is no resident watchdog in the native path; the composite path keeps a
+ * lightweight, visibility-gated liveness check.
  */
 import type { JSX } from "solid-js";
-import { Show, createEffect, createSignal, onCleanup, onMount } from "solid-js";
+import { Show, createEffect, createMemo, createSignal, onCleanup, onMount } from "solid-js";
 import {
   backgroundVideo,
   backgroundVideoPreparing,
@@ -25,9 +24,17 @@ import { settingsStore } from "../stores/settings";
 import { backgroundImage } from "../lib/backgroundImage";
 import { scheduleAdaptiveSample } from "../lib/adaptiveTheme";
 import { reportFrontendMessage } from "../ipc/api";
+import { platformKind } from "../render/tier";
 import { t } from "../i18n";
 
-export function BackgroundVideo(): JSX.Element {
+/** Composite frame budget: ~25 fps is plenty for a wallpaper and saves power. */
+const FRAME_INTERVAL_MS = 40;
+/** Cap the internal canvas long edge; upscaling by CSS is visually free. */
+const MAX_CANVAS_EDGE = 1600;
+
+export function VideoBackdrop(): JSX.Element {
+  const composite = createMemo(() => platformKind() !== "windows");
+
   const [src, setSrc] = createSignal<string | null>(null);
   let video: HTMLVideoElement | undefined;
   let generation = 0;
@@ -53,10 +60,10 @@ export function BackgroundVideo(): JSX.Element {
     !backgroundImage().enabled &&
     settingsStore.motionEnabled();
 
-  function logVideo(
-    event: string,
-    level: "info" | "warn" | "error" = "info"
-  ): void {
+  const canDraw = () =>
+    document.visibilityState !== "hidden" && document.hasFocus();
+
+  function logVideo(event: string, level: "info" | "warn" | "error" = "info"): void {
     const el = video;
     void reportFrontendMessage(
       `background video: ${event} wanted=${wanted()} enabled=${backgroundVideo().enabled} ` +
@@ -77,28 +84,34 @@ export function BackgroundVideo(): JSX.Element {
     });
   }
 
-  /**
-   * WKWebView can decode this 4K wallpaper and expose frames to canvas while
-   * leaving the native <video> compositor surface transparent. Paint the
-   * decoded frames into a DOM canvas so the wallpaper joins the normal page
-   * paint path used by every other surface.
-   */
   function sizeCanvas(): void {
     if (!canvas) return;
-    const dpr = Math.min(Math.max(window.devicePixelRatio || 1, 1), 1.5);
-    const width = Math.max(1, Math.round(window.innerWidth * dpr));
-    const height = Math.max(1, Math.round(window.innerHeight * dpr));
+    const dpr = Math.min(Math.max(window.devicePixelRatio || 1, 1), 1.25);
+    let width = Math.max(1, Math.round(window.innerWidth * dpr));
+    let height = Math.max(1, Math.round(window.innerHeight * dpr));
+    const longEdge = Math.max(width, height);
+    if (longEdge > MAX_CANVAS_EDGE) {
+      const scale = MAX_CANVAS_EDGE / longEdge;
+      width = Math.max(1, Math.round(width * scale));
+      height = Math.max(1, Math.round(height * scale));
+    }
     if (canvas.width !== width || canvas.height !== height) {
       canvas.width = width;
       canvas.height = height;
     }
-    canvasCtx = canvas.getContext("2d", { alpha: true });
-    if (canvasCtx) canvasCtx.clearRect(0, 0, width, height);
+    // Opaque context: the wallpaper covers the whole layer, so skipping alpha
+    // blending is cheaper on the compositor.
+    canvasCtx = canvas.getContext("2d", { alpha: false });
+    if (canvasCtx) {
+      canvasCtx.fillStyle = "#000";
+      canvasCtx.fillRect(0, 0, width, height);
+    }
   }
 
   function drawVideoFrame(force = false): void {
+    if (!composite()) return;
     const now = performance.now();
-    if (!force && now - lastDrawAt < 33) return;
+    if (!force && now - lastDrawAt < FRAME_INTERVAL_MS) return;
     lastDrawAt = now;
     const ctx = canvasCtx;
     const el = video;
@@ -116,19 +129,17 @@ export function BackgroundVideo(): JSX.Element {
     try {
       ctx.drawImage(el, sx, sy, sw, sh, 0, 0, cw, ch);
     } catch {
-      // A frame can be unavailable for one tick; the next rAF retries.
+      // A frame can be unavailable for one tick; the next callback retries.
     }
   }
 
-  /** Fallback for WebViews without requestVideoFrameCallback. This loop only
-   *  exists while a video is actually visible; idle pages schedule nothing. */
   function drawFallback(): void {
     drawRaf = window.requestAnimationFrame(() => {
       if (!drawingActive) {
         drawRaf = 0;
         return;
       }
-      if (document.visibilityState !== "hidden") drawVideoFrame();
+      if (canDraw()) drawVideoFrame();
       drawFallback();
     });
   }
@@ -145,7 +156,7 @@ export function BackgroundVideo(): JSX.Element {
   }
 
   function startDrawing(): void {
-    if (drawingActive || !wanted() || !src()) return;
+    if (!composite() || drawingActive || !wanted() || !src()) return;
     const el = video;
     if (!el) return;
     drawingActive = true;
@@ -157,16 +168,12 @@ export function BackgroundVideo(): JSX.Element {
   }
 
   function onResize(): void {
+    if (!composite()) return;
     sizeCanvas();
     if (drawingActive) drawVideoFrame(true);
   }
 
-  /**
-   * Track frames that were actually presented to the compositor. `currentTime`
-   * can keep advancing while WKWebView has dropped the video surface, so it is
-   * not a reliable liveness signal. `requestVideoFrameCallback` only fires when
-   * a frame is available for compositing.
-   */
+  /** Frames that reached the compositor are the only reliable liveness signal. */
   function watchFrames(): void {
     const el = video;
     if (!el || !wanted() || !drawingActive) return;
@@ -178,21 +185,18 @@ export function BackgroundVideo(): JSX.Element {
     frameCallback = el.requestVideoFrameCallback(() => {
       if (!drawingActive) return;
       lastPresentedAt = performance.now();
-      drawVideoFrame(true);
+      // Skip painting while hidden/unfocused; the video keeps playing so the
+      // compositor surface survives, but no GPU work is spent compositing.
+      if (canDraw()) drawVideoFrame(true);
       stableFrames += 1;
       if (stableFrames > 30) recoveryCount = 0;
       watchFrames();
     });
   }
 
-  /**
-   * Re-attach the media pipeline without tearing down the whole wallpaper.
-   * `load()` reopens the same asset and is enough for a dropped compositor
-   * surface; repeated failures fall back to remounting the <video> element.
-   */
   function recoverSurface(reason: string): void {
     const el = video;
-    if (!el || !wanted()) return;
+    if (!composite() || !el || !wanted()) return;
     const now = performance.now();
     if (now - lastRecoveryAt < 5000) return;
     lastRecoveryAt = now;
@@ -201,8 +205,6 @@ export function BackgroundVideo(): JSX.Element {
     logVideo(`surface recovery (${reason}) attempt=${recoveryCount}`, "warn");
 
     if (recoveryCount >= 3) {
-      // A hard remount creates a fresh WKWebView media layer. Keep the same
-      // prepared asset URL; do not re-run video palette sampling for it.
       const current = src();
       recoveryCount = 0;
       suppressSampleUntil = performance.now() + 4000;
@@ -227,15 +229,11 @@ export function BackgroundVideo(): JSX.Element {
       // Keep the play() retry below as the fallback.
     }
     lastPresentedAt = performance.now();
-    window.setTimeout(() => {
-      playVideo();
-    }, 180);
+    window.setTimeout(() => playVideo(), 180);
   }
 
   function checkPlayback(): void {
-    if (!wanted() || document.visibilityState === "hidden" || !document.hasFocus()) {
-      return;
-    }
+    if (!composite() || !wanted() || !canDraw()) return;
     const el = video;
     if (!el) return;
     if (el.paused) {
@@ -264,11 +262,6 @@ export function BackgroundVideo(): JSX.Element {
     playVideo();
   }
 
-  /**
-   * WKWebView may drop the last decoded frame while the window is occluded even
-   * though `src` is intact. Reload the same asset only when the element has no
-   * usable frame; otherwise a normal play() is enough.
-   */
   function recoverPlayback(): void {
     const el = video;
     if (!el || !wanted()) return;
@@ -285,16 +278,17 @@ export function BackgroundVideo(): JSX.Element {
     }
     lastPresentedAt = performance.now();
     playVideo();
-    watchFrames();
-    // One delayed retry covers the frame where the compositor is re-attached.
-    window.setTimeout(playVideo, 180);
+    if (composite()) {
+      startDrawing();
+      drawVideoFrame(true);
+    }
   }
 
   function onVisibilityChange(): void {
     if (document.visibilityState === "hidden") {
-      // Do not pause: keeping the media pipeline alive avoids the blank surface
-      // on macOS. Only record when it happened so recovery can distinguish a
-      // short focus switch from a long occlusion.
+      // Do not pause: WKWebView can blank the surface when the pipeline is
+      // stopped. Just record the time so recovery can tell a focus switch from
+      // a long occlusion.
       hiddenAt = performance.now();
     } else {
       lastPresentedAt = performance.now();
@@ -302,11 +296,6 @@ export function BackgroundVideo(): JSX.Element {
     }
   }
 
-  /**
-   * WKWebView can suspend media when the window loses key focus without firing
-   * `visibilitychange`. The app's own `focus` event is the reliable signal that
-   * the compositor is interactive again, so resume there as well.
-   */
   function onWindowFocus(): void {
     lastPresentedAt = performance.now();
     window.requestAnimationFrame(recoverPlayback);
@@ -324,7 +313,7 @@ export function BackgroundVideo(): JSX.Element {
       }
       return;
     }
-    // The dim slider replaces the prefs object; only a real source change
+    // Dim updates replace the whole prefs object; only a real source change
     // should tear down and reload the video element.
     if (renderedPath === path) return;
     renderedPath = path;
@@ -338,19 +327,14 @@ export function BackgroundVideo(): JSX.Element {
   });
 
   createEffect(() => {
-    const root = document.documentElement;
-    if (wanted() && src()) root.dataset.videoWallpaper = "on";
-    else delete root.dataset.videoWallpaper;
-
     if (wanted()) playVideo();
     else video?.pause();
   });
 
-  // Idle cost guard: the video pipeline (watchdog + frame callbacks) only
-  // exists while a video is actually wanted and attached. When the wallpaper is
-  // disabled there are no timers or animation frames left running.
+  // Idle cost guard: drawing + watchdog only exist while a composite video is
+  // actually wanted and attached. The native path runs nothing at rest.
   createEffect(() => {
-    const active = wanted() && Boolean(src());
+    const active = composite() && wanted() && Boolean(src());
     if (!active) {
       stopDrawing();
       if (watchdogTimer !== undefined) {
@@ -360,10 +344,8 @@ export function BackgroundVideo(): JSX.Element {
       return;
     }
     if (watchdogTimer === undefined) {
-      watchdogTimer = window.setInterval(checkPlayback, 1000);
+      watchdogTimer = window.setInterval(checkPlayback, 2000);
     }
-    // A source change creates a new <video>: drop callbacks bound to the old
-    // element before attaching the frame loop to the current one.
     stopDrawing();
     startDrawing();
   });
@@ -385,7 +367,6 @@ export function BackgroundVideo(): JSX.Element {
     window.removeEventListener("focus", onWindowFocus);
     window.removeEventListener("pageshow", onWindowFocus);
     window.removeEventListener("resize", onResize);
-    delete document.documentElement.dataset.videoWallpaper;
     video?.pause();
     video = undefined;
   });
@@ -400,7 +381,7 @@ export function BackgroundVideo(): JSX.Element {
       <Show when={src()}>
         {(url) => (
           <div
-            class="app-video-layer"
+            class={`app-video-layer ${composite() ? "is-composite" : "is-native"}`}
             aria-hidden="true"
             style={{ "--video-dim": String(backgroundVideo().dim / 100) }}
           >
@@ -422,8 +403,10 @@ export function BackgroundVideo(): JSX.Element {
                 setBackgroundVideoIssue("");
                 lastPresentedAt = performance.now();
                 stableFrames = 0;
-                startDrawing();
-                drawVideoFrame(true);
+                if (composite()) {
+                  startDrawing();
+                  drawVideoFrame(true);
+                }
                 if (!playingLogged) {
                   playingLogged = true;
                   logVideo("playing");
@@ -434,8 +417,10 @@ export function BackgroundVideo(): JSX.Element {
                 if (performance.now() >= suppressSampleUntil) {
                   scheduleAdaptiveSample(250);
                 }
-                startDrawing();
-                drawVideoFrame(true);
+                if (composite()) {
+                  startDrawing();
+                  drawVideoFrame(true);
+                }
                 playVideo();
               }}
               onEnded={restartPlayback}
@@ -444,15 +429,17 @@ export function BackgroundVideo(): JSX.Element {
                 logVideo("element error", "error");
               }}
             />
-            <canvas
-              class="app-video-canvas"
-              aria-hidden="true"
-              ref={(el) => {
-                canvas = el;
-                sizeCanvas();
-                drawVideoFrame(true);
-              }}
-            />
+            <Show when={composite()}>
+              <canvas
+                class="app-video-canvas"
+                aria-hidden="true"
+                ref={(el) => {
+                  canvas = el;
+                  sizeCanvas();
+                  drawVideoFrame(true);
+                }}
+              />
+            </Show>
           </div>
         )}
       </Show>

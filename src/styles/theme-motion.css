@@ -1,0 +1,209 @@
+/* ==========================================================================
+   Theme V4 motion backdrops (docs/ui-design/15_THEME_SYSTEM_V4.md §4).
+   Pure CSS: every animation is transform/opacity only (render-tier rule),
+   layered behind the wallpaper so a user image/video still wins.
+   ========================================================================== */
+
+.theme-motion {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  overflow: hidden;
+  pointer-events: none;
+}
+.theme-motion i {
+  position: absolute;
+  inset: -20%;
+  display: block;
+  will-change: transform, opacity;
+}
+
+/* Motion is a theme effect: the global motion switch and the static render
+   tier both freeze it into a single painted frame. */
+html[data-motion="off"] .theme-motion i,
+html[data-render-tier="static"] .theme-motion i {
+  animation: none !important;
+}
+
+/* ── stellar 星野：星点漂移 + 星云色相缓移 ─────────────────────────────── */
+.theme-motion[data-motion-theme="stellar"] .tm-a {
+  background-image:
+    radial-gradient(1.5px 1.5px at 20% 30%, rgba(255, 255, 255, .8) 50%, transparent 51%),
+    radial-gradient(1px 1px at 70% 20%, rgba(255, 255, 255, .6) 50%, transparent 51%),
+    radial-gradient(2px 2px at 40% 70%, rgba(255, 255, 255, .5) 50%, transparent 51%),
+    radial-gradient(1px 1px at 85% 60%, rgba(255, 255, 255, .7) 50%, transparent 51%),
+    radial-gradient(1.5px 1.5px at 55% 45%, rgba(255, 255, 255, .45) 50%, transparent 51%);
+  background-size: 420px 420px;
+  animation: tm-drift 90s linear infinite;
+}
+.theme-motion[data-motion-theme="stellar"] .tm-b {
+  background:
+    radial-gradient(46% 38% at 28% 34%, color-mix(in srgb, var(--rmccc-accent) 26%, transparent), transparent 70%),
+    radial-gradient(40% 34% at 72% 62%, color-mix(in srgb, var(--rmccc-accent-secondary, #6d79d8) 22%, transparent), transparent 72%);
+  animation: tm-breathe 26s ease-in-out infinite alternate;
+}
+.theme-motion[data-motion-theme="stellar"] .tm-c {
+  background-image: radial-gradient(1px 1px at 30% 60%, rgba(255, 255, 255, .9) 50%, transparent 51%);
+  background-size: 260px 260px;
+  animation: tm-twinkle 7s ease-in-out infinite;
+}
+
+/* ── verdant 林语：落叶 + 林间光柱 ──────────────────────────────────────── */
+.theme-motion[data-motion-theme="verdant"] .tm-a {
+  background: repeating-linear-gradient(
+    104deg,
+    transparent 0 90px,
+    color-mix(in srgb, var(--rmccc-accent) 10%, transparent) 90px 130px,
+    transparent 130px 240px
+  );
+  animation: tm-sway 34s ease-in-out infinite alternate;
+}
+.theme-motion[data-motion-theme="verdant"] .tm-b {
+  background-image:
+    radial-gradient(5px 7px at 25% 10%, color-mix(in srgb, var(--rmccc-accent) 55%, transparent) 60%, transparent 61%),
+    radial-gradient(4px 6px at 65% 4%, color-mix(in srgb, var(--rmccc-accent-secondary, #5d9e73) 48%, transparent) 60%, transparent 61%),
+    radial-gradient(6px 8px at 85% 16%, color-mix(in srgb, var(--rmccc-accent) 40%, transparent) 60%, transparent 61%);
+  background-size: 380px 520px;
+  animation: tm-fall 26s linear infinite;
+}
+.theme-motion[data-motion-theme="verdant"] .tm-c {
+  background: radial-gradient(70% 34% at 50% 108%, color-mix(in srgb, var(--rmccc-accent) 16%, transparent), transparent 70%);
+  animation: tm-breathe 20s ease-in-out infinite alternate;
+}
+
+/* ── abyss 深海：气泡上升 + 水波焦散 ────────────────────────────────────── */
+.theme-motion[data-motion-theme="abyss"] .tm-a {
+  background:
+    radial-gradient(60% 26% at 30% 20%, color-mix(in srgb, var(--rmccc-accent) 14%, transparent), transparent 70%),
+    radial-gradient(52% 22% at 70% 46%, color-mix(in srgb, var(--rmccc-accent-secondary, #3a8fbf) 12%, transparent), transparent 72%);
+  animation: tm-caustic 18s ease-in-out infinite alternate;
+}
+.theme-motion[data-motion-theme="abyss"] .tm-b {
+  background-image:
+    radial-gradient(4px 4px at 20% 90%, color-mix(in srgb, var(--rmccc-accent) 42%, transparent) 60%, transparent 61%),
+    radial-gradient(6px 6px at 55% 96%, color-mix(in srgb, var(--rmccc-accent) 30%, transparent) 60%, transparent 61%),
+    radial-gradient(3px 3px at 80% 88%, color-mix(in srgb, var(--rmccc-accent-secondary, #a7b8ff) 38%, transparent) 60%, transparent 61%);
+  background-size: 340px 460px;
+  animation: tm-rise 22s linear infinite;
+}
+.theme-motion[data-motion-theme="abyss"] .tm-c {
+  background: radial-gradient(80% 40% at 50% -6%, color-mix(in srgb, var(--rmccc-accent) 12%, transparent), transparent 72%);
+  animation: tm-breathe 24s ease-in-out infinite alternate;
+}
+
+/* ── ember 熔火：火星上升 + 热浪脉动 ────────────────────────────────────── */
+.theme-motion[data-motion-theme="ember"] .tm-a {
+  background: radial-gradient(58% 40% at 50% 104%, color-mix(in srgb, var(--rmccc-accent) 30%, transparent), transparent 72%);
+  animation: tm-pulse 9s ease-in-out infinite;
+}
+.theme-motion[data-motion-theme="ember"] .tm-b {
+  background-image:
+    radial-gradient(2px 2px at 30% 96%, color-mix(in srgb, var(--rmccc-accent) 70%, transparent) 60%, transparent 61%),
+    radial-gradient(3px 3px at 62% 92%, color-mix(in srgb, var(--rmccc-accent-secondary, #e0b15c) 60%, transparent) 60%, transparent 61%),
+    radial-gradient(2px 2px at 82% 98%, color-mix(in srgb, var(--rmccc-accent) 48%, transparent) 60%, transparent 61%);
+  background-size: 300px 420px;
+  animation: tm-rise 14s linear infinite;
+}
+.theme-motion[data-motion-theme="ember"] .tm-c {
+  background: repeating-linear-gradient(
+    92deg,
+    transparent 0 120px,
+    color-mix(in srgb, var(--rmccc-accent) 6%, transparent) 120px 150px,
+    transparent 150px 260px
+  );
+  animation: tm-sway 16s ease-in-out infinite alternate;
+}
+
+/* ── sakura 樱吹雪：花瓣飘落 + 粉色雾霭 ─────────────────────────────────── */
+.theme-motion[data-motion-theme="sakura"] .tm-a {
+  background:
+    radial-gradient(50% 40% at 22% 26%, color-mix(in srgb, var(--rmccc-accent) 16%, transparent), transparent 72%),
+    radial-gradient(44% 36% at 76% 58%, color-mix(in srgb, var(--rmccc-accent-secondary, #a06cc9) 14%, transparent), transparent 74%);
+  animation: tm-breathe 22s ease-in-out infinite alternate;
+}
+.theme-motion[data-motion-theme="sakura"] .tm-b {
+  background-image:
+    radial-gradient(6px 5px at 22% 6%, color-mix(in srgb, var(--rmccc-accent) 52%, transparent) 60%, transparent 61%),
+    radial-gradient(5px 4px at 58% 2%, color-mix(in srgb, var(--rmccc-accent) 40%, transparent) 60%, transparent 61%),
+    radial-gradient(7px 6px at 84% 10%, color-mix(in srgb, var(--rmccc-accent-secondary, #e3a85f) 34%, transparent) 60%, transparent 61%);
+  background-size: 360px 500px;
+  animation: tm-fall 20s linear infinite;
+}
+.theme-motion[data-motion-theme="sakura"] .tm-c {
+  background: radial-gradient(72% 30% at 50% 106%, color-mix(in srgb, var(--rmccc-accent) 12%, transparent), transparent 70%);
+  animation: tm-breathe 18s ease-in-out infinite alternate;
+}
+
+/* ── dawn 晨曦：日光扫掠 + 浮尘 ─────────────────────────────────────────── */
+.theme-motion[data-motion-theme="dawn"] .tm-a {
+  background: linear-gradient(
+    100deg,
+    transparent 30%,
+    color-mix(in srgb, var(--rmccc-accent) 16%, transparent) 46%,
+    color-mix(in srgb, var(--rmccc-accent) 26%, transparent) 50%,
+    color-mix(in srgb, var(--rmccc-accent) 16%, transparent) 54%,
+    transparent 70%
+  );
+  animation: tm-sweep 24s ease-in-out infinite;
+}
+.theme-motion[data-motion-theme="dawn"] .tm-b {
+  background-image:
+    radial-gradient(1.5px 1.5px at 26% 40%, color-mix(in srgb, var(--rmccc-accent) 40%, transparent) 50%, transparent 51%),
+    radial-gradient(1px 1px at 64% 62%, color-mix(in srgb, var(--rmccc-accent) 32%, transparent) 50%, transparent 51%);
+  background-size: 300px 300px;
+  animation: tm-drift 60s linear infinite;
+}
+.theme-motion[data-motion-theme="dawn"] .tm-c {
+  background: radial-gradient(64% 36% at 50% 104%, color-mix(in srgb, var(--rmccc-accent) 22%, transparent), transparent 72%);
+  animation: tm-pulse 14s ease-in-out infinite;
+}
+
+/* ── keyframes ─────────────────────────────────────────────────────────── */
+@keyframes tm-drift {
+  from { transform: translate3d(0, 0, 0); }
+  to { transform: translate3d(-420px, -210px, 0); }
+}
+@keyframes tm-fall {
+  from { transform: translate3d(0, -12%, 0) rotate(0deg); }
+  to { transform: translate3d(-6%, 112%, 0) rotate(24deg); }
+}
+@keyframes tm-rise {
+  from { transform: translate3d(0, 12%, 0); }
+  to { transform: translate3d(4%, -112%, 0); }
+}
+@keyframes tm-breathe {
+  from { transform: scale(1); opacity: .75; }
+  to { transform: scale(1.12); opacity: 1; }
+}
+@keyframes tm-pulse {
+  0%, 100% { transform: scale(1); opacity: .6; }
+  50% { transform: scale(1.08); opacity: 1; }
+}
+@keyframes tm-sway {
+  from { transform: translate3d(-3%, 0, 0) skewX(-2deg); }
+  to { transform: translate3d(3%, 0, 0) skewX(2deg); }
+}
+@keyframes tm-caustic {
+  from { transform: translate3d(-2%, -1%, 0) scale(1.02); }
+  to { transform: translate3d(2%, 1%, 0) scale(1.08); }
+}
+@keyframes tm-twinkle {
+  0%, 100% { opacity: .25; }
+  50% { opacity: .9; }
+}
+@keyframes tm-sweep {
+  0% { transform: translate3d(-30%, 0, 0); }
+  55% { transform: translate3d(30%, 0, 0); }
+  100% { transform: translate3d(-30%, 0, 0); }
+}
+
+/* Day phase softens every motion layer so light palettes stay calm. */
+html[data-daynight="day"] .theme-motion i { opacity: .72; }
+
+/* Simplified motion pass: two layers, softer tint — the third layer added too
+   many competing hues over the wallpaper. */
+.theme-motion .tm-c { display: none; }
+.theme-motion .tm-a { opacity: .68; }
+.theme-motion .tm-b { opacity: .5; }
+html[data-daynight="day"] .theme-motion .tm-a { opacity: .46; }
+html[data-daynight="day"] .theme-motion .tm-b { opacity: .34; }

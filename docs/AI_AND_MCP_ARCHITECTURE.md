@@ -133,9 +133,12 @@ Phase 6 按"受控编排层"思路在启动器内实现了 Agent 执行循环、
 | `ai_analyze_log` | `{profile_id?}` | `{analysis_id}`；事件 `ai://delta {analysis_id, text}` / `ai://done` / `ai://error`（流式） |
 | `ai_analyze_cancel` | `{analysis_id}` | `()` |
 
-- `ai_analyze_log` 是**内置参考消费方**：取该实例最近一次游戏会话日志尾部
-  （launchStore 缓冲 + 日志文件兜底）→ redact → 组装分析提示词（崩溃/异常退出优先截取
-  ERROR 附近窗口）→ `chat_stream` → 事件推送 GUI 流式面板（UX 详见 ui-design 07）。
+- `ai_analyze_log` 是**内置参考消费方**（S2 重构，2026-11-04）：经 `game_log::resolve_fresh_log`
+  绑定到**具体一次运行**（启动器 captured 输出优先，磁盘 `latest.log` 仅当 `mtime ≥ 本次启动`；
+  杜绝读到上一轮日志）→ 按用户选择的提交模式（标准＝完整日志／激进＝仅 ERROR/WARNING）筛选 →
+  `redact` → 组装随界面语言变化的强约束提示词（简略/适中/详细三档）→ `chat_stream` → 事件推送 GUI
+  流式面板。`ai://done` 携带 `reason`（`complete`/`cancelled`）保证取消也有终止事件；
+  详细设计见 [`AI_ANALYSIS_REFACTOR.md`](AI_ANALYSIS_REFACTOR.md)。
 - **数据外发提示**：每个 AI 消费功能首次使用时一次性确认
   「日志将发送至 {host}（你的 AI 服务）进行分析」，记忆偏好；端点域名来自用户配置。
 

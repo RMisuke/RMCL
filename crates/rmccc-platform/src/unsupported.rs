@@ -23,7 +23,7 @@ pub struct UnsupportedFs;
 
 impl PlatformFs for UnsupportedFs {
     fn restrict_owner_only(&self, _path: &Path) -> Result<()> {
-        // TODO(windows): `icacls <path> /inheritance:r /grant:r %USERNAME%:F`
+        // 参考（Windows 已实现，见 windows.rs）： `icacls <path> /inheritance:r /grant:r %USERNAME%:F`
         // TODO(linux): `set_permissions(0o600)` —— 与 macOS 同一实现，可直接复用。
         Err(unsupported("文件权限收紧"))
     }
@@ -33,12 +33,12 @@ impl PlatformFs for UnsupportedFs {
     }
 
     fn make_executable(&self, _path: &Path) -> Result<()> {
-        // TODO(windows): 无对应概念，应返回 Ok(())。
+        // 参考（Windows 已实现，见 windows.rs）： 无对应概念，应返回 Ok(())。
         Err(unsupported("设置可执行位"))
     }
 
     fn symlink(&self, _target: &Path, _link: &Path) -> Result<()> {
-        // TODO(windows): `std::os::windows::fs::symlink_dir/file`（需开发者模式）。
+        // 参考（Windows 已实现，见 windows.rs）： `std::os::windows::fs::symlink_dir/file`（需开发者模式）。
         Err(unsupported("符号链接"))
     }
 
@@ -47,13 +47,13 @@ impl PlatformFs for UnsupportedFs {
     }
 
     fn atomic_replace(&self, _from: &Path, _to: &Path) -> Result<()> {
-        // TODO(windows): ReplaceFileW / MoveFileExW(MOVEFILE_REPLACE_EXISTING)。
+        // 参考（Windows 已实现，见 windows.rs）： ReplaceFileW / MoveFileExW(MOVEFILE_REPLACE_EXISTING)。
         // TODO(linux): 与 macOS 相同的 rename(2)，可直接复用。
         Err(unsupported("原子替换文件"))
     }
 
     fn create_owner_only(&self, _path: &Path, _contents: &[u8]) -> Result<()> {
-        // TODO(windows): OpenOptions + ACL 收紧。
+        // 参考（Windows 已实现，见 windows.rs）： OpenOptions + ACL 收紧。
         // TODO(linux): OpenOptionsExt::mode(0o600)，与 macOS 同一实现。
         Err(unsupported("创建仅属主可读文件"))
     }
@@ -64,13 +64,13 @@ pub struct UnsupportedProcess;
 
 impl PlatformProcessControl for UnsupportedProcess {
     fn terminate_tree(&self, _pid: u32) -> Result<()> {
-        // TODO(windows): Job Object（CreateJobObject + AssignProcessToJobObject +
+        // 参考（Windows 已实现，见 windows.rs）： Job Object（CreateJobObject + AssignProcessToJobObject +
         // TerminateJobObject），或在拿到 pid 时记录并用 `taskkill /T /F`。
         Err(unsupported("终止进程树"))
     }
 
     fn set_priority(&self, _pid: u32, _priority: ProcessPriority) -> Result<()> {
-        // TODO(windows): SetPriorityClass(PROCESS_SET_INFORMATION)。
+        // 参考（Windows 已实现，见 windows.rs）： SetPriorityClass(PROCESS_SET_INFORMATION)。
         Err(unsupported("调整进程优先级"))
     }
 
@@ -80,7 +80,7 @@ impl PlatformProcessControl for UnsupportedProcess {
     }
 
     fn configure_child_process_group(&self, _cmd: &mut std::process::Command) -> Result<()> {
-        // TODO(windows): 创建 Job Object 并在 spawn 后 AssignProcessToJobObject。
+        // 参考（Windows 已实现，见 windows.rs）： 创建 Job Object 并在 spawn 后 AssignProcessToJobObject。
         // 当前 no-op：不加进程组不会破坏启动，只是无法一次性终止子进程树。
         Ok(())
     }
@@ -93,13 +93,13 @@ impl PlatformShell for UnsupportedShell {
     fn open_url(&self, url: &str) -> Result<()> {
         // 校验先行：即使后端未实现，非法 scheme 也必须被拒绝。
         validate_openable_url(url)?;
-        // TODO(windows): `cmd /c start "" <url>` 或 ShellExecuteW。
+        // 参考（Windows 已实现，见 windows.rs）： `cmd /c start "" <url>` 或 ShellExecuteW。
         // TODO(linux): `xdg-open <url>`。
         Err(unsupported("打开 URL"))
     }
 
     fn open_path(&self, _path: &Path) -> Result<()> {
-        // TODO(windows): `explorer <path>`。
+        // 参考（Windows 已实现，见 windows.rs）： `explorer <path>`。
         // TODO(linux): `xdg-open <path>`。
         Err(unsupported("打开路径"))
     }
@@ -110,7 +110,7 @@ pub struct UnsupportedJavaDetector;
 
 impl JavaDetector for UnsupportedJavaDetector {
     fn detect_all(&self) -> Result<Vec<JavaInstallation>> {
-        // TODO(windows): 注册表 `HKLM\SOFTWARE\JavaSoft\JDK` + `C:\Program Files\Java\*`。
+        // 参考（Windows 已实现，见 windows.rs）： 注册表 `HKLM\SOFTWARE\JavaSoft\JDK` + `C:\Program Files\Java\*`。
         // TODO(linux): `/usr/lib/jvm/*` + `/etc/alternatives/java`（实现与 macOS 基本同构）。
         Err(unsupported("Java 探测"))
     }
@@ -166,7 +166,7 @@ pub struct UnsupportedSystemMemory;
 
 impl crate::system::SystemMemory for UnsupportedSystemMemory {
     fn physical_memory(&self) -> Result<crate::system::PhysicalMemory> {
-        // TODO(windows): GlobalMemoryStatusEx。
+        // 参考（Windows 已实现，见 windows.rs）： GlobalMemoryStatusEx。
         // TODO(linux): 解析 /proc/meminfo 的 MemTotal / MemAvailable。
         Err(unsupported("物理内存探测"))
     }

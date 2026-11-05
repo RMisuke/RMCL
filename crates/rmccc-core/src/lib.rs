@@ -9,8 +9,11 @@ pub use rmccc_error::{ErrorCode, IpcError, Result, RmcccError};
 // Re-export sub-crate APIs
 pub use rmccc_auth;
 pub use rmccc_config;
-/// 内核版本（关于页展示；与启动器版本独立语义）。
-pub const CORE_VERSION: &str = env!("CARGO_PKG_VERSION");
+/// 内核展示版本（关于页展示）。
+///
+/// 与 crate semver 解耦：插件 `compatibility.core` 校验的是 `CARGO_PKG_VERSION`
+/// （0.1.x），不能因为关于页的 minor 递增而让已发布插件全部失效。
+pub const CORE_VERSION: &str = "0.3.0";
 
 pub use rmccc_dashboard;
 pub use rmccc_download;

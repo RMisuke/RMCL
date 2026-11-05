@@ -24,6 +24,26 @@ pub struct LogicSlot {
     pub pid: std::sync::Mutex<Option<u32>>,
 }
 
+/// 一次游戏运行的标识与时间戳。
+///
+/// 用于把"日志分析"绑定到具体运行：日志新鲜度以 `started_at_ms` 为界，
+/// 分析结果按 `run_id` 隔离。退出后保留到同实例下次启动被覆盖，
+/// 以便崩溃后仍可分析本次运行。
+#[derive(Debug, Clone)]
+pub struct RunRecord {
+    pub run_id: String,
+    pub pid: u32,
+    /// `SystemTime::now()` 的 unix 毫秒。
+    pub started_at_ms: u64,
+    pub exited: bool,
+}
+
+/// 一次在途 AI 日志分析的登记：取消令牌 + 归属（用于按实例取消）。
+pub struct AnalysisRecord {
+    pub cancel: rmccc_llm::CancelToken,
+    pub profile_id: Option<String>,
+}
+
 /// Backend context — wraps CoreContext + Tauri-specific handles.
 pub struct AppState {
     /// Core orchestrator (DI container with all providers and the account repo).
@@ -36,8 +56,12 @@ pub struct AppState {
     /// Tauri app handle for event emission.
     pub app_handle: tauri::AppHandle,
 
-    /// Running game processes (profile_id → pid).
+    /// 运行中游戏（profile_id → pid）。
     pub running_games: Arc<dashmap::DashMap<String, u32>>,
+
+    /// 最近一次运行记录（profile_id → RunRecord）。启动时铸造 `run_id`，
+    /// 退出后保留（`exited=true`）供事后日志分析，下次启动覆盖。
+    pub runs: Arc<dashmap::DashMap<String, RunRecord>>,
 
     /// 游戏进程输出环形缓冲（profile_id → 最近 GAME_OUTPUT_CAP 行 stdout/stderr）。
     /// 用途：latest.log 未生成（log4j 初始化前崩溃，如 Forge BootstrapLauncher
@@ -55,10 +79,9 @@ pub struct AppState {
     /// 统一任务注册表：所有下载 / 安装事务的唯一事实源。
     pub tasks: Arc<rmccc_tasks::TaskRegistry>,
 
-    /// 进行中的 AI 日志分析（analysis_id → 取消令牌，ADR-013 S2）。
-    /// 并发上限见 `commands/ai.rs`；任务结束自摘除。
-    pub ai_cancels:
-        Arc<std::sync::Mutex<std::collections::HashMap<String, rmccc_llm::CancelToken>>>,
+    /// 进行中的 AI 日志分析（analysis_id → 取消令牌 + 归属，ADR-013 S2）。
+    /// 并发上限见 `commands/ai.rs`；任务结束自摘除。归属用于"新运行取消旧运行分析"。
+    pub ai_analyses: Arc<std::sync::Mutex<std::collections::HashMap<String, AnalysisRecord>>>,
 
     /// MCP 服务器句柄（ADR-013 S4/S5）。默认关闭，`mcp_set_enabled` 启停。
     pub mcp: Arc<crate::mcp::McpHandle>,
@@ -69,6 +92,10 @@ pub struct AppState {
             std::collections::HashMap<String, std::collections::VecDeque<std::time::Instant>>,
         >,
     >,
+
+    /// 初次启动检测快照：必须在 core 写盘之前取样，否则 core 创建的
+    /// `.minecraft` / 目录注册表会把首次运行误判成已配置。
+    pub onboarding: crate::commands::onboarding::OnboardingSnapshot,
 }
 
 impl AppState {
@@ -76,6 +103,7 @@ impl AppState {
         data_dir: &std::path::Path,
         app_handle: tauri::AppHandle,
     ) -> rmccc_error::Result<Self> {
+        let onboarding = crate::commands::onboarding::OnboardingSnapshot::detect();
         let core = rmccc_core::CoreContext::new(data_dir)?;
         let http_client = core.http_client.clone();
         let mcp = Arc::new(crate::mcp::McpHandle::new(
@@ -116,13 +144,15 @@ impl AppState {
             http_client,
             app_handle,
             running_games: Arc::new(dashmap::DashMap::new()),
+            runs: Arc::new(dashmap::DashMap::new()),
             game_output: Arc::new(dashmap::DashMap::new()),
             logic: dashmap::DashMap::new(),
             platform,
             tasks,
-            ai_cancels: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
+            ai_analyses: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
             mcp,
             llm_rate: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
+            onboarding,
         })
     }
 }
