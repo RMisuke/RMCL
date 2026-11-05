@@ -57,6 +57,14 @@
 | W-14 | P2 | 长路径（>260）无 `longPathAware`，深目录整合包可能失败 | — | 解压/安装报 OS error 108 | ⏳ 待实机确认触发面 |
 | W-15 | 已知降级 | 插件隔离 UI 在 `platform_id` 以 `windows` 开头时禁用 | `crates/rmccc-plugin/src/manager.rs:278`、ADR-006 | 插件卡片/页面降级为声明式 | ⏳ release-blocked（非本轮范围） |
 
+> **两处后续变更（2026-11-05 登记，避免按本表字面执行）**：
+> 1. W-2 的判据仍然成立（Windows 必须带 `.exe`，并有裸名回退），但**交付文件名已随产品改名**：
+>    2026-11-04 起 helper 二进制为 `SNGL-logic-host[.exe]`（`HELPER_NAME`、`bundle.externalBin`、
+>    `scripts/prepare-logic-host.mjs` 同步；crate/包名仍是 `rmccc-logic-host`）。
+> 2. W-9 涉及的 updater 签名链路已随 **`tauri-plugin-updater` 于 2026-11-04 下线**而失去对象；
+>    `release.yml` 仍注入 `TAURI_SIGNING_PRIVATE_KEY`，属残留配置，待"是否恢复自动更新"决策后清理
+>    （见 [`../PROJECT_STATUS.md`](../PROJECT_STATUS.md) 2026-11-05 轮）。
+
 > 已确认**无需修改**的点：`classpath` 分隔符、`exe` 后缀、native classifier、`-Xdock:name`、
 > `needs_non_ascii_natives_workaround`、`taskkill /T /F`、`ShellExecuteW`、`GlobalMemoryStatusEx`、
 > `icacls` 多候选账户、embeddable Java 目录扫描、`hide_console_window`、图标协议的

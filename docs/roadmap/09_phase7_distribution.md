@@ -15,8 +15,8 @@
 | §13.7 三平台产物 | release.yml 齐备缺证书/Secret | 配真实证书 + Secret；原生 CI 触达后实跑 |
 | §13.7 体积审计 | 未做 | cargo bloat + 前端 bundle，对照 ADR-011 < 20 MiB |
 | §13.7 E2E | 配置未实跑 | tauri-driver 真实 E2E（含插件装/禁） |
-| §13.7 updater | endpoints 占位 + pubkey 示例 | 真实 endpoints + 签名密钥 |
-| §15.5 strip | 失效 | 修复（Phase 0 已尝试），此阶段确认 release 流水线 strip 生效 |
+| §13.7 updater | **`tauri-plugin-updater` 已于 2026-11-04 下线**（未启用；连带移除重复的 reqwest 0.13 与 osakit/minisign，主程序 −664,736 B），capabilities 亦移除 `updater:default` / `process:default` / `dialog:allow-open` | 若要自动更新需重新接入插件 + 真实 endpoints + 签名密钥（先出新 ADR 取代"下线"决定） |
+| §15.5 strip | **已生效**（2026-10-26 起，审计 P2-7 销账）：`cargo build --release` 直接产出剥离二进制 | 本阶段确认三平台 release 流水线沿用同一口径 |
 
 ## 3. 任务切片分解
 

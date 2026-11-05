@@ -133,7 +133,7 @@ Windows WebView2 实测（本机 macOS-only，见指南 §1.4）、插件页面�
 
 ## 跨平台验证方式
 
-- macOS（本机）：真实 `RMCCC.app` 中安装样例插件 → 卡片渲染 → 桥调用成功/被拒 → 禁用后 iframe 不再加载。
+- macOS（本机）：真实 `SNGL.app`（2026-11-04 前名为 `RMCCC.app`）中安装样例插件 → 卡片渲染 → 桥调用成功/被拒 → 禁用后 iframe 不再加载。
 - 单测：协议校验、路径白名单、CSP 文本、方法-权限映射、超时/取消/限额、错误码映射（Rust）。
 - 前端：容器对 `postMessage` 来源/大小/版本的三类拒绝路径（Vitest 或纯函数测试）。
 - Windows/Linux：**deferred**（release-blocked），在 `PLATFORM_ADAPTATION.md` 记入待验证清单。
